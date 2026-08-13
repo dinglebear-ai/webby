@@ -41,6 +41,15 @@ defmodule Webby.Application do
     :ok
   end
 
+  @impl true
+  def prep_stop(state) do
+    if Application.get_env(:webby, :runtime_discovery, true) do
+      Webby.RuntimeDiscovery.cleanup()
+    end
+
+    state
+  end
+
   defp skip_migrations? do
     # By default, sqlite migrations are run when using a release
     System.get_env("RELEASE_NAME") == nil

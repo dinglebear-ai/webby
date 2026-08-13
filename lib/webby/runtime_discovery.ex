@@ -10,6 +10,14 @@ defmodule Webby.RuntimeDiscovery do
 
   def snapshot(server \\ __MODULE__), do: GenServer.call(server, :snapshot)
 
+  def cleanup(path \\ Webby.Paths.runtime_file()) do
+    case File.rm(path) do
+      :ok -> :ok
+      {:error, :enoent} -> :ok
+      error -> error
+    end
+  end
+
   @impl true
   def init(opts) do
     path = Keyword.get(opts, :path, Webby.Paths.runtime_file())
@@ -26,7 +34,7 @@ defmodule Webby.RuntimeDiscovery do
 
   @impl true
   def terminate(_reason, state) do
-    File.rm(state.path)
+    cleanup(state.path)
     :ok
   end
 

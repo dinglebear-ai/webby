@@ -36,4 +36,18 @@ defmodule Webby.RuntimeDiscoveryTest do
 
     File.rm_rf!(root)
   end
+
+  test "cleanup is idempotent" do
+    root = Path.join(System.tmp_dir!(), "webby-cleanup-#{System.unique_integer([:positive])}")
+    runtime_path = Path.join(root, "runtime.json")
+
+    File.mkdir_p!(root)
+    File.write!(runtime_path, "{}")
+
+    assert :ok = Webby.RuntimeDiscovery.cleanup(runtime_path)
+    refute File.exists?(runtime_path)
+    assert :ok = Webby.RuntimeDiscovery.cleanup(runtime_path)
+
+    File.rm_rf!(root)
+  end
 end

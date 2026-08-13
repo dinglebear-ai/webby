@@ -1,0 +1,19 @@
+[Unit]
+Description=Webby local WebMCP bridge
+After=network.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h/.local/lib/webby
+ExecStart=%h/.local/lib/webby/bin/webby start
+ExecStop=%h/.local/lib/webby/bin/webby stop
+Restart=on-failure
+RestartSec=2s
+StartLimitIntervalSec=30s
+StartLimitBurst=5
+UMask=0077
+Environment=PHX_SERVER=true
+Environment=WEBBY_PORT=6477
+
+[Install]
+WantedBy=default.target

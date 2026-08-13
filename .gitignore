@@ -30,6 +30,10 @@ webby-*.tar
 
 # Ignore digested assets cache.
 /priv/static/cache_manifest.json
+/priv/static/**/*.gz
+/priv/static/favicon-*.ico
+/priv/static/images/logo-*.svg
+/priv/static/robots-*.txt
 
 # In case you use Node.js/npm, you want to ignore these.
 npm-debug.log
