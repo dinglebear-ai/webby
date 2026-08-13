@@ -79,8 +79,30 @@ defmodule Webby.RuntimeDiscovery do
   defp acquire_lock(lock_path) do
     case File.write(lock_path, System.pid(), [:exclusive]) do
       :ok -> File.chmod(lock_path, 0o600)
-      {:error, :eexist} -> {:stop, {:already_running, lock_path}}
+      {:error, :eexist} -> recover_stale_lock(lock_path)
       error -> error
+    end
+  end
+
+  defp recover_stale_lock(lock_path) do
+    with {:ok, owner_pid} <- File.read(lock_path),
+         false <- operating_system_pid_alive?(String.trim(owner_pid)),
+         :ok <- File.rm(lock_path) do
+      acquire_lock(lock_path)
+    else
+      true -> {:stop, {:already_running, lock_path}}
+      error -> error
+    end
+  end
+
+  defp operating_system_pid_alive?(pid) do
+    case :os.type() do
+      {:unix, _} ->
+        match?({_output, 0}, System.cmd("kill", ["-0", pid], stderr_to_stdout: true))
+
+      {:win32, _} ->
+        {output, 0} = System.cmd("tasklist", ["/FI", "PID eq #{pid}"], stderr_to_stdout: true)
+        String.contains?(output, pid)
     end
   end
 
