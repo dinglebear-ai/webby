@@ -4,10 +4,11 @@ Webby is a standalone local bridge from browser-native WebMCP tools to any
 standards-compatible MCP client. It is a Phoenix/Elixir application designed to
 run continuously as a per-user background service.
 
-The current foundation provides a loopback-only Phoenix service, SQLite WAL
-persistence, atomic runtime discovery metadata, a JSON health endpoint, and a
-local LiveView dashboard. Browser-extension pairing and MCP transport arrive in
-subsequent delivery slices.
+The current implementation provides a loopback-only Phoenix service, SQLite WAL
+persistence, atomic runtime discovery metadata, a JSON health endpoint, a local
+LiveView dashboard, and durable browser-extension pairing over a versioned
+Phoenix Channel protocol with single-use Ed25519 authentication challenges.
+Extension scanning and MCP transport arrive in subsequent delivery slices.
 
 Webby is independent software. It has no dependency on Labby or any other MCP
 gateway, and no particular MCP client receives privileged integration.
@@ -50,3 +51,4 @@ owner-only signing secret under its platform configuration directory;
 
 - [Architecture specification](docs/superpowers/specs/2026-08-13-webby-design.md)
 - [Foundation implementation plan](docs/superpowers/plans/2026-08-13-webby-foundation.md)
+- [Browser pairing implementation plan](.claude/plans/browser-pairing/plan.md)

@@ -6,14 +6,24 @@ defmodule WebbyWeb.DashboardLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket), do: Process.send_after(self(), :refresh_status, @refresh_interval)
-    {:ok, assign_status(socket)}
+    {:ok, socket |> assign_status() |> assign_browsers()}
   end
 
   @impl true
   def handle_info(:refresh_status, socket) do
     Process.send_after(self(), :refresh_status, @refresh_interval)
-    {:noreply, assign_status(socket)}
+    {:noreply, socket |> assign_status() |> assign_browsers()}
   end
+
+  @impl true
+  def handle_event("approve-pairing", %{"id" => id}, socket),
+    do: {:noreply, resolve(socket, Webby.Browsers.approve_pairing(id), "Browser paired")}
+
+  def handle_event("reject-pairing", %{"id" => id}, socket),
+    do: {:noreply, resolve(socket, Webby.Browsers.reject_pairing(id), "Pairing rejected")}
+
+  def handle_event("revoke-browser", %{"id" => id}, socket),
+    do: {:noreply, resolve(socket, Webby.Browsers.revoke_browser(id), "Browser revoked")}
 
   @impl true
   def render(assigns) do
@@ -44,8 +54,76 @@ defmodule WebbyWeb.DashboardLive do
         </div>
 
         <p class="rounded-xl bg-base-200 px-4 py-3 text-sm text-base-content/70">
-          MCP transport is not available in this foundation release.
+          Browser pairing is active. Extension scanning and MCP transport arrive in later slices.
         </p>
+
+        <section class="space-y-4" id="browser-pairing">
+          <h2 class="text-2xl font-semibold">Pairing requests</h2>
+          <p
+            :if={@pairings == []}
+            class="rounded-xl border border-dashed border-base-300 p-5 text-sm text-base-content/60"
+          >
+            No extension is waiting for approval.
+          </p>
+          <article
+            :for={pairing <- @pairings}
+            id={"pairing-#{pairing.id}"}
+            class="flex flex-col gap-4 rounded-2xl border border-amber-300 bg-amber-50 p-5 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <p class="font-medium text-amber-950">{pairing.display_name}</p><p class="font-mono text-xs text-amber-900/70">
+                {pairing.extension_id}
+              </p><p class="mt-1 text-xs text-amber-900/70">
+                Requested mode: {pairing.scanning_mode}
+              </p><p class="mt-1 font-mono text-xs text-amber-900/70">
+                Key: {public_key_fingerprint(pairing.public_key)}
+              </p>
+            </div>
+            <div class="flex gap-2">
+              <button
+                phx-click="reject-pairing"
+                phx-value-id={pairing.id}
+                class="rounded-lg border border-amber-700 px-3 py-2 text-sm font-medium text-amber-900"
+              >Reject</button><button
+                phx-click="approve-pairing"
+                phx-value-id={pairing.id}
+                class="rounded-lg bg-amber-900 px-3 py-2 text-sm font-medium text-white"
+              >Approve</button>
+            </div>
+          </article>
+        </section>
+        <section class="space-y-4" id="paired-browsers">
+          <h2 class="text-2xl font-semibold">Paired browsers</h2>
+          <aside
+            :if={Enum.any?(@browsers, &(&1.scanning_mode == "all_tabs" and is_nil(&1.revoked_at)))}
+            id="all-tabs-disclosure"
+            role="alert"
+            class="rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-950"
+          >
+            <strong>Broad tab scanning is enabled.</strong>
+            At least one paired browser can inspect every eligible permitted tab. Revoke that browser to disable this access.
+          </aside>
+          <p :if={@browsers == []} class="text-sm text-base-content/60">No browsers paired yet.</p>
+          <article
+            :for={browser <- @browsers}
+            id={"browser-#{browser.id}"}
+            class="flex items-center justify-between rounded-2xl border border-base-300 p-5"
+          >
+            <div>
+              <p class="font-medium">{browser.display_name}</p><p class="text-xs text-base-content/60">
+                {if browser.revoked_at, do: "Revoked", else: "Paired"} · {scanning_mode_label(
+                  browser.scanning_mode
+                )}
+              </p>
+            </div>
+            <button
+              :if={is_nil(browser.revoked_at)}
+              phx-click="revoke-browser"
+              phx-value-id={browser.id}
+              class="rounded-lg border border-rose-300 px-3 py-2 text-sm font-medium text-rose-700"
+            >Revoke</button>
+          </article>
+        </section>
       </section>
     </Layouts.app>
     """
@@ -55,5 +133,26 @@ defmodule WebbyWeb.DashboardLive do
     provider = Application.get_env(:webby, :runtime_status_module, Webby.RuntimeStatus)
     {_result, snapshot} = provider.snapshot()
     assign(socket, :snapshot, snapshot)
+  end
+
+  defp assign_browsers(socket),
+    do:
+      assign(socket,
+        browsers: Webby.Browsers.list_browsers(),
+        pairings: Webby.Browsers.list_pending_pairings()
+      )
+
+  defp resolve(socket, {:ok, _value}, message),
+    do: socket |> put_flash(:info, message) |> assign_browsers()
+
+  defp resolve(socket, {:error, _reason}, _message),
+    do: put_flash(socket, :error, "The request could not be completed")
+
+  defp scanning_mode_label("all_tabs"), do: "All eligible tabs"
+  defp scanning_mode_label("granted_sites"), do: "Granted sites only"
+
+  defp public_key_fingerprint(public_key) do
+    digest = :crypto.hash(:sha256, public_key) |> Base.encode16(case: :lower)
+    "SHA256:" <> String.slice(digest, 0, 16)
   end
 end
