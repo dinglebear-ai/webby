@@ -46,6 +46,12 @@ if config_env() == :dev do
 end
 
 if config_env() == :prod do
+  config_root =
+    System.get_env("XDG_CONFIG_HOME") ||
+      Path.join(System.user_home!(), ".config")
+
+  webby_config_dir = Path.join(config_root, "webby")
+
   database_path =
     System.get_env("WEBBY_DATABASE_PATH") || Path.join(Webby.Paths.data_dir(), "webby.db")
 
@@ -64,12 +70,27 @@ if config_env() == :prod do
   # want to use a different value for prod and you most likely don't want
   # to check this value into version control, so we use an environment
   # variable instead.
+  File.mkdir_p!(webby_config_dir)
+  File.chmod!(webby_config_dir, 0o700)
+  secret_path = Path.join(webby_config_dir, "secret-key-base")
+
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||
-      raise """
-      environment variable SECRET_KEY_BASE is missing.
-      You can generate one by calling: mix phx.gen.secret
-      """
+      case File.read(secret_path) do
+        {:ok, secret} ->
+          String.trim(secret)
+
+        {:error, :enoent} ->
+          secret = :crypto.strong_rand_bytes(64) |> Base.url_encode64(padding: false)
+          temporary = secret_path <> ".tmp.#{System.unique_integer([:positive])}"
+          File.write!(temporary, secret <> "\n", [:exclusive])
+          File.chmod!(temporary, 0o600)
+          File.rename!(temporary, secret_path)
+          secret
+
+        {:error, reason} ->
+          raise File.Error, reason: reason, action: "read", path: secret_path
+      end
 
   config :webby, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 

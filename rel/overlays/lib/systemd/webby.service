@@ -1,6 +1,8 @@
 [Unit]
 Description=Webby local WebMCP bridge
 After=network.target
+StartLimitIntervalSec=30s
+StartLimitBurst=5
 
 [Service]
 Type=exec
@@ -9,8 +11,6 @@ ExecStart=%h/.local/lib/webby/bin/webby start
 ExecStop=%h/.local/lib/webby/bin/webby stop
 Restart=on-failure
 RestartSec=2s
-StartLimitIntervalSec=30s
-StartLimitBurst=5
 UMask=0077
 Environment=PHX_SERVER=true
 Environment=WEBBY_PORT=6477

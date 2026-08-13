@@ -41,8 +41,10 @@ MIX_ENV=prod mise exec -- mix assets.deploy
 MIX_ENV=prod mise exec -- mix release
 ```
 
-Production startup requires `SECRET_KEY_BASE` and binds exclusively to
-`127.0.0.1:6477` unless `WEBBY_PORT` selects a different loopback port.
+Production startup binds exclusively to `127.0.0.1:6477` unless `WEBBY_PORT`
+selects a different loopback port. On first launch, Webby creates a stable,
+owner-only signing secret under its platform configuration directory;
+`SECRET_KEY_BASE` can override it for managed deployments.
 
 ## Design
 

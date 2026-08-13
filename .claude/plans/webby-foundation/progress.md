@@ -2,6 +2,8 @@
 
 Status: implementation complete; awaiting the required review gate.
 
+Post-review status: all findings addressed and live acceptance is green.
+
 ## Completed
 
 - Scaffolded the independent Phoenix application and pinned its local toolchain.
@@ -10,6 +12,7 @@ Status: implementation complete; awaiting the required review gate.
 - Added Linux systemd and macOS LaunchAgent templates plus development and release documentation.
 - Removed obsolete generated page-controller assets and unused colocated-asset imports.
 - Added application-level shutdown cleanup after release smoke testing exposed stale runtime metadata.
+- Added automatic stable owner-only production secret provisioning, corrected native service-manager templates, and made the dashboard header responsive.
 
 ## Verification
 
@@ -20,6 +23,7 @@ Status: implementation complete; awaiting the required review gate.
 - `mix assets.deploy`
 - `mix release --overwrite`
 - Real release smoke on `127.0.0.1:6478`, including health, WAL, discovery creation, graceful cleanup, and database persistence.
+- Chrome acceptance at desktop and 390px mobile widths: 5/5 PASS with LiveView connected and no console, page, or request failures.
 - Independence search across `lib`, `config`, `test`, `assets`, `rel`, and `mix.exs`.
 
 ## Notes
