@@ -158,5 +158,73 @@ defmodule WebbyWeb.BrowserChannelTest do
       "type" => "browser.welcome",
       "payload" => %{"resync_required" => true, "heartbeat_interval_ms" => 30_000}
     }
+
+    settings_ref =
+      push(socket, "message", %{
+        "protocol_version" => 1,
+        "type" => "browser.settings",
+        "request_id" => "settings-1",
+        "payload" => %{"scanning_mode" => "all_tabs", "scanning_paused" => false}
+      })
+
+    assert_reply settings_ref, :ok, %{"type" => "acknowledgement"}
+    assert %{scanning_mode: "all_tabs"} = Webby.Repo.get!(Webby.Browsers.Browser, browser.id)
+
+    discovery_ref =
+      push(socket, "message", %{
+        "protocol_version" => 1,
+        "type" => "browser.resync",
+        "request_id" => "resync-1",
+        "payload" => %{
+          "observations" => [
+            %{
+              "url" => "https://example.com/tools?token=secret",
+              "title" => "Tools",
+              "tools" => [
+                %{"name" => "search", "description" => "Search", "input_schema" => %{}}
+              ]
+            }
+          ]
+        }
+      })
+
+    assert_reply discovery_ref, :ok, %{
+      "type" => "acknowledgement",
+      "payload" => %{"received" => "browser.resync", "observation_count" => 1}
+    }
+
+    assert [%{origin: "https://example.com", sanitized_path: "/tools"}] =
+             Webby.Discovery.list_discoveries()
+  end
+
+  test "an unauthenticated browser cannot submit discoveries" do
+    extension_id = "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh"
+    assert {:ok, socket} = connect(WebbyWeb.BrowserSocket, %{"extension_id" => extension_id})
+
+    assert {:ok, _, socket} =
+             subscribe_and_join(
+               socket,
+               WebbyWeb.BrowserChannel,
+               "browser:pairing:#{extension_id}",
+               %{}
+             )
+
+    ref =
+      push(socket, "message", %{
+        "protocol_version" => 1,
+        "type" => "discovery.observed",
+        "payload" => %{
+          "observations" => [
+            %{
+              "url" => "https://example.com",
+              "title" => "Tools",
+              "tools" => [%{"name" => "search", "input_schema" => %{}}]
+            }
+          ]
+        }
+      })
+
+    assert_reply ref, :error, %{kind: "not_ready"}
+    assert Webby.Discovery.list_discoveries() == []
   end
 end

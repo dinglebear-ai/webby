@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Webby",
+  "version": "0.1.0",
+  "description": "Discover browser-native WebMCP tools for your local Webby service.",
+  "permissions": ["activeTab", "alarms", "storage", "scripting"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "src/service_worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Webby",
+    "default_popup": "src/popup.html"
+  }
+}

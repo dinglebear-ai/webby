@@ -4,7 +4,7 @@ defmodule Webby.SchemaMetadataTest do
   alias Ecto.Adapters.SQL
 
   test "startup records the current schema generation" do
-    assert {:ok, %{rows: [["2"]]}} =
+    assert {:ok, %{rows: [["3"]]}} =
              SQL.query(
                Webby.Repo,
                "SELECT value FROM webby_meta WHERE key = 'schema_generation'",
@@ -16,13 +16,13 @@ defmodule Webby.SchemaMetadataTest do
     assert {:ok, _result} =
              SQL.query(
                Webby.Repo,
-               "UPDATE webby_meta SET value = '3' WHERE key = 'schema_generation'",
+               "UPDATE webby_meta SET value = '4' WHERE key = 'schema_generation'",
                []
              )
 
-    assert {:stop, {:unsupported_schema_generation, "3"}} = Webby.SchemaMetadata.init(:ok)
+    assert {:stop, {:unsupported_schema_generation, "4"}} = Webby.SchemaMetadata.init(:ok)
 
-    assert {:ok, %{rows: [["3"]]}} =
+    assert {:ok, %{rows: [["4"]]}} =
              SQL.query(
                Webby.Repo,
                "SELECT value FROM webby_meta WHERE key = 'schema_generation'",
@@ -47,7 +47,7 @@ defmodule Webby.SchemaMetadataTest do
 
     assert {:ok, %{}} = Webby.SchemaMetadata.init(:ok)
 
-    assert {:ok, %{rows: [["2"]]}} =
+    assert {:ok, %{rows: [["3"]]}} =
              SQL.query(
                Webby.Repo,
                "SELECT value FROM webby_meta WHERE key = 'schema_generation'",

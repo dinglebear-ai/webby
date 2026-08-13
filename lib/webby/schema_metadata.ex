@@ -16,9 +16,9 @@ defmodule Webby.SchemaMetadata do
            Webby.Repo,
            """
            INSERT INTO webby_meta (key, value, inserted_at, updated_at)
-           VALUES ('schema_generation', '2', ?, ?)
-           ON CONFLICT(key) DO UPDATE SET value = '2', updated_at = excluded.updated_at
-           WHERE webby_meta.value = '1'
+           VALUES ('schema_generation', '3', ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = '3', updated_at = excluded.updated_at
+           WHERE webby_meta.value IN ('1', '2')
            """,
            [now, now]
          ) do
@@ -34,7 +34,7 @@ defmodule Webby.SchemaMetadata do
   @doc false
   def validate_generation do
     case SQL.query(Webby.Repo, "SELECT value FROM webby_meta WHERE key = 'schema_generation'", []) do
-      {:ok, %{rows: [["2"]]}} ->
+      {:ok, %{rows: [["3"]]}} ->
         {:ok, %{}}
 
       {:ok, %{rows: [[generation]]}} ->

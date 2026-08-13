@@ -106,6 +106,21 @@ defmodule Webby.Browsers do
     end
   end
 
+  def update_scanning(browser_id, mode, paused)
+      when mode in ["granted_sites", "all_tabs"] and is_boolean(paused) do
+    case Repo.get(Browser, browser_id) do
+      %Browser{revoked_at: nil} = browser ->
+        browser
+        |> Browser.changeset(%{scanning_mode: mode, scanning_paused: paused, last_seen_at: now()})
+        |> Repo.update()
+
+      _browser ->
+        {:error, :browser_unavailable}
+    end
+  end
+
+  def update_scanning(_browser_id, _mode, _paused), do: {:error, :invalid_scanning_settings}
+
   def issue_challenge(browser_id, extension_id) do
     case Repo.get(Browser, browser_id) do
       %Browser{revoked_at: nil, extension_id: ^extension_id} = browser ->

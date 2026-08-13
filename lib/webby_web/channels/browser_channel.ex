@@ -2,7 +2,8 @@ defmodule WebbyWeb.BrowserChannel do
   @moduledoc false
   use WebbyWeb, :channel
 
-  alias Webby.{BrowserProtocol, Browsers}
+  alias Webby.{BrowserProtocol, Browsers, Discovery}
+  require Logger
 
   @impl true
   def join("browser:pairing:" <> extension_id, _payload, socket) do
@@ -105,7 +106,11 @@ defmodule WebbyWeb.BrowserChannel do
     response =
       BrowserProtocol.envelope(
         "browser.welcome",
-        %{"resync_required" => true, "heartbeat_interval_ms" => 30_000},
+        %{
+          "resync_required" => true,
+          "heartbeat_interval_ms" => 30_000,
+          "ignored_origins" => Discovery.list_ignored_origins(socket.assigns.browser_id)
+        },
         request_id: request_id,
         browser_id: socket.assigns.browser_id
       )
@@ -126,6 +131,55 @@ defmodule WebbyWeb.BrowserChannel do
     {:reply, {:ok, response}, socket}
   end
 
+  defp dispatch(
+         %{type: "browser.settings", payload: payload, request_id: request_id},
+         %{assigns: %{authenticated: true, browser_id: browser_id}} = socket
+       ) do
+    case Browsers.update_scanning(
+           browser_id,
+           payload["scanning_mode"],
+           payload["scanning_paused"]
+         ) do
+      {:ok, _browser} ->
+        {:reply, {:ok, acknowledgement("browser.settings", request_id, browser_id)}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{kind: error_kind(reason)}}, socket}
+    end
+  end
+
+  defp dispatch(
+         %{type: type, payload: %{"observations" => observations}, request_id: request_id},
+         %{assigns: %{authenticated: true, browser_id: browser_id}} = socket
+       )
+       when type in ["discovery.observed", "browser.resync"] do
+    case Discovery.observe_many(browser_id, observations) do
+      {:ok, discoveries} ->
+        Logger.info("browser discovery observations accepted",
+          browser_id: browser_id,
+          observation_count: length(discoveries),
+          event: type
+        )
+
+        response =
+          BrowserProtocol.envelope(
+            "acknowledgement",
+            %{
+              "received" => type,
+              "observation_count" => length(discoveries),
+              "ignored_origins" => Discovery.list_ignored_origins(browser_id)
+            },
+            request_id: request_id,
+            browser_id: browser_id
+          )
+
+        {:reply, {:ok, response}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{kind: error_kind(reason)}}, socket}
+    end
+  end
+
   defp dispatch(%{type: type}, %{assigns: %{browser_id: browser_id}} = socket)
        when is_binary(browser_id),
        do: {:reply, {:error, %{kind: "authentication_required", type: type}}, socket}
@@ -136,4 +190,11 @@ defmodule WebbyWeb.BrowserChannel do
   defp error_kind(%Ecto.Changeset{}), do: "invalid_request"
   defp error_kind(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp error_kind(_reason), do: "request_failed"
+
+  defp acknowledgement(received, request_id, browser_id) do
+    BrowserProtocol.envelope("acknowledgement", %{"received" => received},
+      request_id: request_id,
+      browser_id: browser_id
+    )
+  end
 end
