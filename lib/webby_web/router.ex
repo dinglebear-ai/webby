@@ -17,7 +17,13 @@ defmodule WebbyWeb.Router do
   scope "/", WebbyWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", DashboardLive
+  end
+
+  scope "/", WebbyWeb do
+    pipe_through :api
+
+    get "/health", StatusController, :show
   end
 
   # Other scopes may use custom stacks.

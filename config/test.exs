@@ -13,7 +13,9 @@ config :webby, Webby.Repo,
   pool_size: 5,
   pool: Ecto.Adapters.SQL.Sandbox
 
-config :webby, runtime_discovery: false
+config :webby,
+  runtime_discovery: false,
+  runtime_status_module: Webby.TestHealthyRuntimeStatus
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
