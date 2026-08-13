@@ -1,0 +1,161 @@
+defmodule Webby.BrowsersTest do
+  use Webby.DataCase, async: false
+
+  alias Webby.Browsers
+  alias Webby.Browsers.{AuthChallenge, PairingRequest}
+
+  test "approval persists a browser and authentication challenges are single-use" do
+    {public_key, private_key} = :crypto.generate_key(:eddsa, :ed25519)
+    request = pairing_request(public_key)
+
+    assert {:ok, browser} = Browsers.approve_pairing(request.id)
+    assert browser.extension_id == "abcdefghijklmnopabcdefghijklmnop"
+    assert {:ok, challenge} = Browsers.issue_challenge(browser.id, browser.extension_id)
+
+    signature =
+      :crypto.sign(:eddsa, :none, challenge.signed_message, [private_key, :ed25519])
+      |> Base.url_encode64(padding: false)
+
+    assert {:ok, authenticated} =
+             Browsers.authenticate(browser.id, challenge.challenge_id, signature)
+
+    assert authenticated.id == browser.id
+
+    assert {:error, :authentication_failed} =
+             Browsers.authenticate(browser.id, challenge.challenge_id, signature)
+  end
+
+  test "revoked browsers cannot receive challenges" do
+    {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
+    request = pairing_request(public_key)
+    {:ok, browser} = Browsers.approve_pairing(request.id)
+    Phoenix.PubSub.subscribe(Webby.PubSub, "browser:#{browser.id}")
+    assert {:ok, _browser} = Browsers.revoke_browser(browser.id)
+    assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: "browser:" <> browser_id}
+    assert browser_id == browser.id
+
+    assert {:error, :browser_unavailable} =
+             Browsers.issue_challenge(browser.id, browser.extension_id)
+  end
+
+  test "invalid keys and all-tabs requests remain unapproved until local consent" do
+    assert {:error, :invalid_public_key} = Browsers.request_pairing(%{"public_key" => "bad"})
+    {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
+    request = pairing_request(public_key, "all_tabs")
+    assert request.status == "pending"
+    assert Browsers.list_browsers() == []
+  end
+
+  test "expired pairing requests cannot be approved" do
+    {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
+
+    request =
+      %PairingRequest{}
+      |> PairingRequest.changeset(%{
+        display_name: "Expired Chrome",
+        extension_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        public_key: public_key,
+        scanning_mode: "granted_sites",
+        status: "pending",
+        expires_at: DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.truncate(:second)
+      })
+      |> Repo.insert!()
+
+    assert {:error, :expired} = Browsers.approve_pairing(request.id)
+  end
+
+  test "an extension can replace its expired pairing request" do
+    {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
+
+    expired =
+      %PairingRequest{}
+      |> PairingRequest.changeset(%{
+        display_name: "Expired Chrome",
+        extension_id: "cccccccccccccccccccccccccccccccc",
+        public_key: public_key,
+        scanning_mode: "granted_sites",
+        status: "pending",
+        expires_at: DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.truncate(:second)
+      })
+      |> Repo.insert!()
+
+    assert {:ok, fresh} =
+             Browsers.request_pairing(%{
+               "display_name" => "Fresh Chrome",
+               "extension_id" => expired.extension_id,
+               "public_key" => Base.url_encode64(public_key, padding: false),
+               "scanning_mode" => "granted_sites"
+             })
+
+    assert fresh.id != expired.id
+    assert Repo.get!(PairingRequest, expired.id).status == "expired"
+  end
+
+  test "an active browser cannot open another pairing request" do
+    {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
+    request = pairing_request(public_key)
+    {:ok, browser} = Browsers.approve_pairing(request.id)
+
+    assert {:error, :already_paired} =
+             Browsers.request_pairing(%{
+               "display_name" => "Duplicate Chrome",
+               "extension_id" => browser.extension_id,
+               "public_key" => Base.url_encode64(public_key, padding: false),
+               "scanning_mode" => "granted_sites"
+             })
+  end
+
+  test "status lookup durably marks an expired request" do
+    {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
+
+    request =
+      %PairingRequest{}
+      |> PairingRequest.changeset(%{
+        display_name: "Expired Chrome",
+        extension_id: "ffffffffffffffffffffffffffffffff",
+        public_key: public_key,
+        scanning_mode: "granted_sites",
+        status: "pending",
+        expires_at: DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.truncate(:second)
+      })
+      |> Repo.insert!()
+
+    assert {:ok, %{status: "expired"}} = Browsers.pairing_status(request.id, request.extension_id)
+    assert Repo.get!(PairingRequest, request.id).status == "expired"
+  end
+
+  test "challenge issuance prunes expired rows and reuses one live challenge" do
+    {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
+    request = pairing_request(public_key)
+    {:ok, browser} = Browsers.approve_pairing(request.id)
+
+    expired =
+      %AuthChallenge{}
+      |> AuthChallenge.changeset(%{
+        browser_id: browser.id,
+        nonce: :crypto.strong_rand_bytes(32),
+        instance_id: "test-instance-id",
+        expires_at: DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.truncate(:second)
+      })
+      |> Repo.insert!()
+
+    assert {:ok, first} = Browsers.issue_challenge(browser.id, browser.extension_id)
+    refute Repo.get(AuthChallenge, expired.id)
+
+    assert {:ok, second} = Browsers.issue_challenge(browser.id, browser.extension_id)
+    assert second.challenge_id == first.challenge_id
+    assert Repo.aggregate(AuthChallenge, :count) == 1
+  end
+
+  defp pairing_request(public_key, mode \\ "granted_sites") do
+    {:ok, request} =
+      Browsers.request_pairing(%{
+        "display_name" => "Work Chrome",
+        "extension_id" => "abcdefghijklmnopabcdefghijklmnop",
+        "public_key" => Base.url_encode64(public_key, padding: false),
+        "scanning_mode" => mode
+      })
+
+    request
+  end
+end

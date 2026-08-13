@@ -1,6 +1,13 @@
 defmodule WebbyWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :webby
 
+  socket "/browser", WebbyWeb.BrowserSocket,
+    websocket: [
+      check_origin: {WebbyWeb.BrowserOrigin, :allowed?, []},
+      max_frame_size: 262_144
+    ],
+    longpoll: false
+
   # The session will be stored in the cookie and signed,
   # this means its contents can be read but not tampered with.
   # Set :encryption_salt if you would also like to encrypt it.

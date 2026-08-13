@@ -15,6 +15,7 @@ config :webby, Webby.Repo,
 
 config :webby,
   allowed_hosts: ["www.example.com", "127.0.0.1", "localhost", "[::1]"],
+  instance_id_provider: fn -> "test-instance-id" end,
   runtime_discovery: false,
   runtime_status_module: Webby.TestHealthyRuntimeStatus
 
