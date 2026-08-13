@@ -20,6 +20,13 @@ defmodule Webby.Application do
       WebbyWeb.Endpoint
     ]
 
+    children =
+      if Application.get_env(:webby, :runtime_discovery, true) do
+        List.insert_at(children, -1, {Webby.RuntimeDiscovery, []})
+      else
+        children
+      end
+
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Webby.Supervisor]

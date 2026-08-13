@@ -9,7 +9,10 @@ import Config
 
 config :webby,
   ecto_repos: [Webby.Repo],
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime],
+  listen_host: {127, 0, 0, 1},
+  listen_port: 6477,
+  runtime_discovery: true
 
 # Configure the endpoint
 config :webby, WebbyWeb.Endpoint,

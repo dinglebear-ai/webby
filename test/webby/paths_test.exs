@@ -1,0 +1,33 @@
+defmodule Webby.PathsTest do
+  use ExUnit.Case, async: false
+
+  test "Linux paths follow XDG overrides" do
+    with_env(
+      %{
+        "XDG_CONFIG_HOME" => "/tmp/webby-config",
+        "XDG_DATA_HOME" => "/tmp/webby-data",
+        "XDG_STATE_HOME" => "/tmp/webby-state"
+      },
+      fn ->
+        assert Webby.Paths.config_dir() == "/tmp/webby-config/webby"
+        assert Webby.Paths.data_dir() == "/tmp/webby-data/webby"
+        assert Webby.Paths.state_dir() == "/tmp/webby-state/webby"
+        assert Webby.Paths.runtime_file() == "/tmp/webby-config/webby/runtime.json"
+      end
+    )
+  end
+
+  defp with_env(values, fun) do
+    previous = Map.new(values, fn {name, _value} -> {name, System.get_env(name)} end)
+    Enum.each(values, fn {name, value} -> System.put_env(name, value) end)
+
+    try do
+      fun.()
+    after
+      Enum.each(previous, fn
+        {name, nil} -> System.delete_env(name)
+        {name, value} -> System.put_env(name, value)
+      end)
+    end
+  end
+end
