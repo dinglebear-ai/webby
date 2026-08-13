@@ -13,6 +13,7 @@ defmodule Webby.PathsTest do
         assert Webby.Paths.data_dir() == "/tmp/webby-data/webby"
         assert Webby.Paths.state_dir() == "/tmp/webby-state/webby"
         assert Webby.Paths.runtime_file() == "/tmp/webby-config/webby/runtime.json"
+        assert Webby.Paths.secret_file() == "/tmp/webby-config/webby/secret-key-base"
       end
     )
   end

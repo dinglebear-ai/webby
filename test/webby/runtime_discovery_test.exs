@@ -37,16 +37,16 @@ defmodule Webby.RuntimeDiscoveryTest do
     File.rm_rf!(root)
   end
 
-  test "cleanup is idempotent" do
+  test "shutdown preserves a replacement runtime file" do
     root = Path.join(System.tmp_dir!(), "webby-cleanup-#{System.unique_integer([:positive])}")
     runtime_path = Path.join(root, "runtime.json")
 
-    File.mkdir_p!(root)
-    File.write!(runtime_path, "{}")
+    metadata = fn -> %{instance_id: "old", base_url: "old", mcp_url: "old", pid: 1} end
+    pid = start_supervised!({Webby.RuntimeDiscovery, path: runtime_path, metadata: metadata})
+    File.write!(runtime_path, ~s({"instance_id":"new"}))
 
-    assert :ok = Webby.RuntimeDiscovery.cleanup(runtime_path)
-    refute File.exists?(runtime_path)
-    assert :ok = Webby.RuntimeDiscovery.cleanup(runtime_path)
+    GenServer.stop(pid)
+    assert File.read!(runtime_path) == ~s({"instance_id":"new"})
 
     File.rm_rf!(root)
   end

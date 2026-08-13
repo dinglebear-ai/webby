@@ -46,17 +46,18 @@ if config_env() == :dev do
 end
 
 if config_env() == :prod do
-  config_root =
-    System.get_env("XDG_CONFIG_HOME") ||
-      Path.join(System.user_home!(), ".config")
-
-  webby_config_dir = Path.join(config_root, "webby")
+  webby_config_dir = Webby.Paths.config_dir()
 
   database_path =
-    System.get_env("WEBBY_DATABASE_PATH") || Path.join(Webby.Paths.data_dir(), "webby.db")
+    case System.get_env("WEBBY_DATABASE_PATH") do
+      nil ->
+        File.mkdir_p!(Webby.Paths.data_dir())
+        File.chmod!(Webby.Paths.data_dir(), 0o700)
+        Path.join(Webby.Paths.data_dir(), "webby.db")
 
-  File.mkdir_p!(Path.dirname(database_path))
-  File.chmod!(Path.dirname(database_path), 0o700)
+      custom_path ->
+        custom_path
+    end
 
   config :webby, Webby.Repo,
     database: database_path,
@@ -72,7 +73,7 @@ if config_env() == :prod do
   # variable instead.
   File.mkdir_p!(webby_config_dir)
   File.chmod!(webby_config_dir, 0o700)
-  secret_path = Path.join(webby_config_dir, "secret-key-base")
+  secret_path = Webby.Paths.secret_file()
 
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||

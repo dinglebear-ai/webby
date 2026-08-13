@@ -6,6 +6,7 @@ defmodule Webby.Paths do
   def state_dir, do: Path.join(state_root(), app_dir())
   def runtime_file, do: Path.join(config_dir(), "runtime.json")
   def instance_file, do: Path.join(config_dir(), "instance-id")
+  def secret_file, do: Path.join(config_dir(), "secret-key-base")
 
   defp app_dir do
     case :os.type() do

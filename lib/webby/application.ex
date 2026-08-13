@@ -12,6 +12,8 @@ defmodule Webby.Application do
       Webby.Repo,
       {Ecto.Migrator,
        repos: Application.fetch_env!(:webby, :ecto_repos), skip: skip_migrations?()},
+      Webby.SchemaMetadata,
+      {Task.Supervisor, name: Webby.ProbeSupervisor},
       {DNSCluster, query: Application.get_env(:webby, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Webby.PubSub},
       # Start a worker by calling: Webby.Worker.start_link(arg)

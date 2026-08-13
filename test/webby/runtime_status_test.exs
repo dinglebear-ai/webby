@@ -30,4 +30,17 @@ defmodule Webby.RuntimeStatusTest do
     assert snapshot.status == "error"
     assert snapshot.database.kind == "database_unavailable"
   end
+
+  test "bounds a stalled database probe" do
+    started = System.monotonic_time(:millisecond)
+
+    assert {:error, snapshot} =
+             Webby.RuntimeStatus.snapshot(
+               repo_probe: fn -> Process.sleep(:infinity) end,
+               runtime_provider: fn -> %{mcp_url: "http://127.0.0.1:6477/mcp"} end
+             )
+
+    assert System.monotonic_time(:millisecond) - started < 1_500
+    assert snapshot.database.kind == "database_unavailable"
+  end
 end

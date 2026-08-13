@@ -37,9 +37,12 @@ defmodule Webby.RuntimeStatus do
   end
 
   defp safe_probe(probe) do
-    probe.()
-  catch
-    :exit, _reason -> {:error, :database_unavailable}
+    task = Task.Supervisor.async_nolink(Webby.ProbeSupervisor, probe)
+
+    case Task.yield(task, 1_000) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      _timeout_or_exit -> {:error, :database_unavailable}
+    end
   end
 
   defp normalize_error(:database_unavailable), do: "database_unavailable"

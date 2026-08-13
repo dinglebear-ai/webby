@@ -30,6 +30,8 @@ defmodule Webby.ServiceTemplatesTest do
     assert plist =~ "<string>/bin/sh</string>"
     assert plist =~ ~s(cd "$HOME/Library/Application Support/Webby")
     assert plist =~ "exec ./bin/webby start"
+    assert plist =~ "$HOME/Library/Logs/Webby/webby.log"
+    assert plist =~ "$HOME/Library/Logs/Webby/webby-error.log"
     refute plist =~ "<string>${HOME}"
     refute plist =~ "0.0.0.0"
     refute String.downcase(plist) =~ "labby"

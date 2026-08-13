@@ -10,13 +10,7 @@ defmodule Webby.RuntimeDiscovery do
 
   def snapshot(server \\ __MODULE__), do: GenServer.call(server, :snapshot)
 
-  def cleanup(path \\ Webby.Paths.runtime_file()) do
-    case File.rm(path) do
-      :ok -> :ok
-      {:error, :enoent} -> :ok
-      error -> error
-    end
-  end
+  def cleanup(server \\ __MODULE__), do: GenServer.call(server, :cleanup)
 
   @impl true
   def init(opts) do
@@ -25,16 +19,18 @@ defmodule Webby.RuntimeDiscovery do
 
     with :ok <- ensure_private_directory(Path.dirname(path)),
          :ok <- publish(path, metadata) do
-      {:ok, %{path: path, metadata: metadata}}
+      {:ok, %{path: path, metadata: metadata, bytes: Jason.encode!(metadata)}}
     end
   end
 
   @impl true
   def handle_call(:snapshot, _from, state), do: {:reply, state.metadata, state}
 
+  def handle_call(:cleanup, _from, state), do: {:reply, cleanup_owned(state), state}
+
   @impl true
   def terminate(_reason, state) do
-    cleanup(state.path)
+    cleanup_owned(state)
     :ok
   end
 
@@ -71,6 +67,15 @@ defmodule Webby.RuntimeDiscovery do
   end
 
   defp publish(path, metadata), do: publish_bytes(path, Jason.encode!(metadata))
+
+  defp cleanup_owned(%{path: path, bytes: bytes}) do
+    case File.read(path) do
+      {:ok, ^bytes} -> File.rm(path)
+      {:ok, _replacement} -> :ok
+      {:error, :enoent} -> :ok
+      error -> error
+    end
+  end
 
   defp publish_bytes(path, bytes) do
     temporary = path <> ".tmp.#{System.unique_integer([:positive, :monotonic])}"
