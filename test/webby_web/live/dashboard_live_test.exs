@@ -10,7 +10,7 @@ defmodule WebbyWeb.DashboardLiveTest do
     assert html =~ "Local service"
     assert html =~ "SQLite"
     assert html =~ "127.0.0.1:6477"
-    assert html =~ "MCP setup coming in a later delivery slice"
+    assert html =~ "MCP transport is not available in this foundation release"
     assert has_element?(view, "[data-status=ok]")
   end
 

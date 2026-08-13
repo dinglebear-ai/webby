@@ -11,7 +11,12 @@ defmodule Webby.TestDegradedRuntimeStatus do
          kind: "database_unavailable",
          message: "<script>alert(1)</script>"
        },
-       runtime: %{mcp_url: "http://127.0.0.1:6477/mcp"}
+       runtime: %{
+         schema_version: 1,
+         product_version: "0.1.0",
+         base_url: "http://127.0.0.1:6477",
+         capabilities: %{health: %{status: "available"}, mcp: %{status: "unavailable"}}
+       }
      }}
   end
 end

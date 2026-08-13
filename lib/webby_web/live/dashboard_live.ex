@@ -32,7 +32,7 @@ defmodule WebbyWeb.DashboardLive do
           <article class="rounded-2xl border border-base-300 bg-base-100 p-6 shadow-sm">
             <p class="text-sm text-base-content/60">Service</p>
             <p class="mt-2 text-xl font-medium">{@snapshot.status}</p>
-            <p class="mt-1 font-mono text-sm">{@snapshot.runtime.mcp_url}</p>
+            <p class="mt-1 font-mono text-sm">{@snapshot.runtime.base_url}</p>
           </article>
           <article class="rounded-2xl border border-base-300 bg-base-100 p-6 shadow-sm">
             <p class="text-sm text-base-content/60">SQLite</p>
@@ -44,7 +44,7 @@ defmodule WebbyWeb.DashboardLive do
         </div>
 
         <p class="rounded-xl bg-base-200 px-4 py-3 text-sm text-base-content/70">
-          MCP setup coming in a later delivery slice.
+          MCP transport is not available in this foundation release.
         </p>
       </section>
     </Layouts.app>

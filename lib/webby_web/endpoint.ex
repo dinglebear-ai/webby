@@ -51,5 +51,6 @@ defmodule WebbyWeb.Endpoint do
   plug Plug.MethodOverride
   plug Plug.Head
   plug Plug.Session, @session_options
+  plug WebbyWeb.Plugs.LoopbackHost
   plug WebbyWeb.Router
 end

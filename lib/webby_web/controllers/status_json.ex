@@ -17,6 +17,6 @@ defmodule WebbyWeb.StatusJSON do
   end
 
   defp public_runtime(runtime) do
-    Map.take(runtime, [:instance_id, :base_url, :mcp_url, :pid])
+    Map.take(runtime, [:schema_version, :product_version, :base_url, :capabilities])
   end
 end

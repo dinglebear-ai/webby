@@ -6,7 +6,7 @@ defmodule Webby.RuntimeStatusTest do
       %{
         instance_id: "instance-1",
         base_url: "http://127.0.0.1:6477",
-        mcp_url: "http://127.0.0.1:6477/mcp",
+        capabilities: %{health: %{status: "available"}, mcp: %{status: "unavailable"}},
         pid: 1234
       }
     end
@@ -16,7 +16,7 @@ defmodule Webby.RuntimeStatusTest do
     assert snapshot.status == "ok"
     assert snapshot.database.status == "ok"
     assert snapshot.database.journal_mode == "wal"
-    assert snapshot.runtime.mcp_url == "http://127.0.0.1:6477/mcp"
+    assert snapshot.runtime.capabilities.mcp.status == "unavailable"
     refute Map.has_key?(snapshot.runtime, :credential)
   end
 
@@ -24,7 +24,7 @@ defmodule Webby.RuntimeStatusTest do
     assert {:error, snapshot} =
              Webby.RuntimeStatus.snapshot(
                repo_probe: fn -> {:error, :database_unavailable} end,
-               runtime_provider: fn -> %{mcp_url: "http://127.0.0.1:6477/mcp"} end
+               runtime_provider: fn -> %{base_url: "http://127.0.0.1:6477"} end
              )
 
     assert snapshot.status == "error"
@@ -48,7 +48,7 @@ defmodule Webby.RuntimeStatusTest do
     assert {:error, snapshot} =
              Webby.RuntimeStatus.snapshot(
                repo_probe: fn -> Process.sleep(:infinity) end,
-               runtime_provider: fn -> %{mcp_url: "http://127.0.0.1:6477/mcp"} end
+               runtime_provider: fn -> %{base_url: "http://127.0.0.1:6477"} end
              )
 
     assert System.monotonic_time(:millisecond) - started < 500

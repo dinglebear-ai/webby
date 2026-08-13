@@ -25,14 +25,14 @@ defmodule Webby.Application do
 
     children =
       if Application.get_env(:webby, :runtime_discovery, true) do
-        List.insert_at(children, -1, {Webby.RuntimeDiscovery, []})
+        children ++ [{Webby.RuntimeDiscovery, []}, Webby.RuntimeStatusCache]
       else
-        children
+        children ++ [Webby.RuntimeStatusCache]
       end
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
-    opts = [strategy: :one_for_one, name: Webby.Supervisor]
+    opts = [strategy: :rest_for_one, name: Webby.Supervisor]
     Supervisor.start_link(children, opts)
   end
 

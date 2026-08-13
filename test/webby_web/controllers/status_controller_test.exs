@@ -7,6 +7,9 @@ defmodule WebbyWeb.StatusControllerTest do
     assert Map.keys(response) |> Enum.sort() == ~w(database runtime service status)
     assert response["service"] == "webby"
     assert response["database"]["journal_mode"] == "wal"
+    refute response["runtime"]["instance_id"]
+    refute response["runtime"]["pid"]
+    assert response["runtime"]["capabilities"]["mcp"]["status"] == "unavailable"
   end
 
   test "GET /health returns a redacted degraded status", %{conn: conn} do
@@ -23,5 +26,10 @@ defmodule WebbyWeb.StatusControllerTest do
 
     refute inspect(response) =~ "script"
     refute inspect(response) =~ System.user_home()
+  end
+
+  test "rejects a non-loopback Host header", %{conn: conn} do
+    conn = conn |> Map.put(:host, "attacker.example") |> get(~p"/health")
+    assert response(conn, 403) == "forbidden host"
   end
 end

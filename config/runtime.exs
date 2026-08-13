@@ -46,8 +46,6 @@ if config_env() == :dev do
 end
 
 if config_env() == :prod do
-  webby_config_dir = Webby.Paths.config_dir()
-
   database_path =
     case System.get_env("WEBBY_DATABASE_PATH") do
       nil ->
@@ -78,26 +76,18 @@ if config_env() == :prod do
   # want to use a different value for prod and you most likely don't want
   # to check this value into version control, so we use an environment
   # variable instead.
-  File.mkdir_p!(webby_config_dir)
-  File.chmod!(webby_config_dir, 0o700)
   secret_path = Webby.Paths.secret_file()
 
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||
-      case File.read(secret_path) do
+      case Webby.PrivateFile.read_or_create(secret_path, fn ->
+             :crypto.strong_rand_bytes(64) |> Base.url_encode64(padding: false)
+           end) do
         {:ok, secret} ->
-          String.trim(secret)
-
-        {:error, :enoent} ->
-          secret = :crypto.strong_rand_bytes(64) |> Base.url_encode64(padding: false)
-          temporary = secret_path <> ".tmp.#{System.unique_integer([:positive])}"
-          File.write!(temporary, secret <> "\n", [:exclusive])
-          File.chmod!(temporary, 0o600)
-          File.rename!(temporary, secret_path)
           secret
 
         {:error, reason} ->
-          raise File.Error, reason: reason, action: "read", path: secret_path
+          raise File.Error, reason: reason, action: "provision", path: secret_path
       end
 
   config :webby, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")

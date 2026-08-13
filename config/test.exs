@@ -14,6 +14,7 @@ config :webby, Webby.Repo,
   pool: Ecto.Adapters.SQL.Sandbox
 
 config :webby,
+  allowed_hosts: ["www.example.com", "127.0.0.1", "localhost", "[::1]"],
   runtime_discovery: false,
   runtime_status_module: Webby.TestHealthyRuntimeStatus
 

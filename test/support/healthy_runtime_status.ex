@@ -9,8 +9,10 @@ defmodule Webby.TestHealthyRuntimeStatus do
        database: %{status: "ok", journal_mode: "wal"},
        runtime: %{
          instance_id: "test-instance",
+         schema_version: 1,
+         product_version: "0.1.0",
          base_url: "http://127.0.0.1:6477",
-         mcp_url: "http://127.0.0.1:6477/mcp",
+         capabilities: %{health: %{status: "available"}, mcp: %{status: "unavailable"}},
          pid: 1234
        }
      }}

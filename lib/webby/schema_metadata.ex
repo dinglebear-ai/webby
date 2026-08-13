@@ -17,15 +17,31 @@ defmodule Webby.SchemaMetadata do
            """
            INSERT INTO webby_meta (key, value, inserted_at, updated_at)
            VALUES ('schema_generation', '1', ?, ?)
-           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+           ON CONFLICT(key) DO NOTHING
            """,
            [now, now]
          ) do
       {:ok, _result} ->
-        {:ok, %{}}
+        validate_generation()
 
       {:error, reason} ->
         Logger.error("schema generation upsert failed", reason: inspect(reason))
+        {:stop, {:schema_metadata_failed, reason}}
+    end
+  end
+
+  @doc false
+  def validate_generation do
+    case SQL.query(Webby.Repo, "SELECT value FROM webby_meta WHERE key = 'schema_generation'", []) do
+      {:ok, %{rows: [["1"]]}} ->
+        {:ok, %{}}
+
+      {:ok, %{rows: [[generation]]}} ->
+        Logger.error("unsupported schema generation", reason: generation)
+        {:stop, {:unsupported_schema_generation, generation}}
+
+      {:error, reason} ->
+        Logger.error("schema generation validation failed", reason: inspect(reason))
         {:stop, {:schema_metadata_failed, reason}}
     end
   end
