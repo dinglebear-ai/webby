@@ -4,6 +4,7 @@ defmodule Webby.Application do
   @moduledoc false
 
   use Application
+  require Logger
 
   @impl true
   def start(_type, _args) do
@@ -46,7 +47,10 @@ defmodule Webby.Application do
   @impl true
   def prep_stop(state) do
     if Application.get_env(:webby, :runtime_discovery, true) do
-      Webby.RuntimeDiscovery.cleanup()
+      case Webby.RuntimeDiscovery.cleanup() do
+        :ok -> :ok
+        error -> Logger.error("runtime discovery cleanup failed", reason: inspect(error))
+      end
     end
 
     state

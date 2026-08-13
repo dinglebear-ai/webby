@@ -26,6 +26,7 @@ defmodule Webby.RuntimeDiscoveryTest do
            }
 
     assert band(File.stat!(runtime_path).mode, 0o777) == 0o600
+    assert band(File.stat!(root).mode, 0o777) == 0o700
     assert Webby.RuntimeDiscovery.snapshot(pid).instance_id == "instance-1"
     assert Path.wildcard(runtime_path <> ".tmp.*") == []
 
@@ -37,16 +38,27 @@ defmodule Webby.RuntimeDiscoveryTest do
     File.rm_rf!(root)
   end
 
-  test "shutdown preserves a replacement runtime file" do
+  test "a second publisher cannot replace a live runtime file" do
     root = Path.join(System.tmp_dir!(), "webby-cleanup-#{System.unique_integer([:positive])}")
     runtime_path = Path.join(root, "runtime.json")
 
     metadata = fn -> %{instance_id: "old", base_url: "old", mcp_url: "old", pid: 1} end
     pid = start_supervised!({Webby.RuntimeDiscovery, path: runtime_path, metadata: metadata})
-    File.write!(runtime_path, ~s({"instance_id":"new"}))
+    original = File.read!(runtime_path)
+    previous_trap = Process.flag(:trap_exit, true)
+    on_exit(fn -> Process.flag(:trap_exit, previous_trap) end)
+
+    assert {:error, {:already_running, _lock_path}} =
+             Webby.RuntimeDiscovery.start_link(
+               path: runtime_path,
+               name: :replacement_discovery,
+               metadata: fn -> %{instance_id: "new"} end
+             )
 
     GenServer.stop(pid)
-    assert File.read!(runtime_path) == ~s({"instance_id":"new"})
+    refute File.exists?(runtime_path)
+    refute File.exists?(runtime_path <> ".lock")
+    assert original =~ "old"
 
     File.rm_rf!(root)
   end

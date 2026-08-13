@@ -17,6 +17,8 @@
     <key>WEBBY_PORT</key>
     <string>6477</string>
   </dict>
+  <key>Umask</key>
+  <integer>63</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>

@@ -2,6 +2,7 @@ defmodule Webby.RuntimeStatus do
   @moduledoc "Builds Webby's transport-neutral local health snapshot."
 
   alias Ecto.Adapters.SQL
+  require Logger
 
   def snapshot(opts \\ []) do
     repo_probe = Keyword.get(opts, :repo_probe, &probe_repo/0)
@@ -37,11 +38,20 @@ defmodule Webby.RuntimeStatus do
   end
 
   defp safe_probe(probe) do
+    timeout = Application.get_env(:webby, :database_probe_timeout) || 1_000
     task = Task.Supervisor.async_nolink(Webby.ProbeSupervisor, probe)
 
-    case Task.yield(task, 1_000) || Task.shutdown(task, :brutal_kill) do
-      {:ok, result} -> result
-      _timeout_or_exit -> {:error, :database_unavailable}
+    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} ->
+        result
+
+      nil ->
+        Logger.warning("database health probe timed out", timeout_ms: timeout)
+        {:error, :database_unavailable}
+
+      {:exit, reason} ->
+        Logger.error("database health probe exited", reason: inspect(reason))
+        {:error, :database_unavailable}
     end
   end
 

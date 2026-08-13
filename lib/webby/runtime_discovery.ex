@@ -2,6 +2,7 @@ defmodule Webby.RuntimeDiscovery do
   @moduledoc "Publishes non-secret metadata for the running local Webby instance."
 
   use GenServer
+  require Logger
 
   @listen_host "127.0.0.1"
 
@@ -15,11 +16,19 @@ defmodule Webby.RuntimeDiscovery do
   @impl true
   def init(opts) do
     path = Keyword.get(opts, :path, Webby.Paths.runtime_file())
+    lock_path = path <> ".lock"
     metadata = Keyword.get(opts, :metadata, &default_metadata/0).()
 
     with :ok <- ensure_private_directory(Path.dirname(path)),
-         :ok <- publish(path, metadata) do
-      {:ok, %{path: path, metadata: metadata, bytes: Jason.encode!(metadata)}}
+         :ok <- acquire_lock(lock_path) do
+      case publish(path, metadata) do
+        :ok ->
+          {:ok, %{path: path, lock_path: lock_path, metadata: metadata}}
+
+        error ->
+          File.rm(lock_path)
+          error
+      end
     end
   end
 
@@ -30,7 +39,7 @@ defmodule Webby.RuntimeDiscovery do
 
   @impl true
   def terminate(_reason, state) do
-    cleanup_owned(state)
+    cleanup_owned(state) |> log_cleanup_error(state.path)
     :ok
   end
 
@@ -68,13 +77,30 @@ defmodule Webby.RuntimeDiscovery do
 
   defp publish(path, metadata), do: publish_bytes(path, Jason.encode!(metadata))
 
-  defp cleanup_owned(%{path: path, bytes: bytes}) do
-    case File.read(path) do
-      {:ok, ^bytes} -> File.rm(path)
-      {:ok, _replacement} -> :ok
+  defp acquire_lock(lock_path) do
+    case File.write(lock_path, System.pid(), [:exclusive]) do
+      :ok -> File.chmod(lock_path, 0o600)
+      {:error, :eexist} -> {:stop, {:already_running, lock_path}}
+      error -> error
+    end
+  end
+
+  defp cleanup_owned(%{path: path, lock_path: lock_path}) do
+    with :ok <- remove_if_present(path), do: remove_if_present(lock_path)
+  end
+
+  defp remove_if_present(path) do
+    case File.rm(path) do
+      :ok -> :ok
       {:error, :enoent} -> :ok
       error -> error
     end
+  end
+
+  defp log_cleanup_error(:ok, _path), do: nil
+
+  defp log_cleanup_error(error, path) do
+    Logger.error("runtime discovery cleanup failed", path: path, reason: inspect(error))
   end
 
   defp publish_bytes(path, bytes) do

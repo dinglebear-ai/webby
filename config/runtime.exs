@@ -56,6 +56,13 @@ if config_env() == :prod do
         Path.join(Webby.Paths.data_dir(), "webby.db")
 
       custom_path ->
+        custom_parent = Path.dirname(custom_path)
+
+        unless File.dir?(custom_parent) do
+          File.mkdir_p!(custom_parent)
+          File.chmod!(custom_parent, 0o700)
+        end
+
         custom_path
     end
 
