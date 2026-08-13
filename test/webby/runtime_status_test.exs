@@ -1,0 +1,33 @@
+defmodule Webby.RuntimeStatusTest do
+  use Webby.DataCase, async: false
+
+  test "reports healthy SQLite WAL and non-secret runtime metadata" do
+    runtime = fn ->
+      %{
+        instance_id: "instance-1",
+        base_url: "http://127.0.0.1:6477",
+        mcp_url: "http://127.0.0.1:6477/mcp",
+        pid: 1234
+      }
+    end
+
+    assert {:ok, snapshot} = Webby.RuntimeStatus.snapshot(runtime_provider: runtime)
+    assert snapshot.service == "webby"
+    assert snapshot.status == "ok"
+    assert snapshot.database.status == "ok"
+    assert snapshot.database.journal_mode == "wal"
+    assert snapshot.runtime.mcp_url == "http://127.0.0.1:6477/mcp"
+    refute Map.has_key?(snapshot.runtime, :credential)
+  end
+
+  test "returns a stable degraded snapshot when the database is unavailable" do
+    assert {:error, snapshot} =
+             Webby.RuntimeStatus.snapshot(
+               repo_probe: fn -> {:error, :database_unavailable} end,
+               runtime_provider: fn -> %{mcp_url: "http://127.0.0.1:6477/mcp"} end
+             )
+
+    assert snapshot.status == "error"
+    assert snapshot.database.kind == "database_unavailable"
+  end
+end

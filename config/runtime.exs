@@ -20,7 +20,13 @@ if System.get_env("PHX_SERVER") do
   config :webby, WebbyWeb.Endpoint, server: true
 end
 
-config :webby, WebbyWeb.Endpoint, http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+port = String.to_integer(System.get_env("WEBBY_PORT", "6477"))
+
+config :webby,
+  listen_host: {127, 0, 0, 1},
+  listen_port: port
+
+config :webby, WebbyWeb.Endpoint, http: [ip: {127, 0, 0, 1}, port: port]
 
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
@@ -41,14 +47,16 @@ end
 
 if config_env() == :prod do
   database_path =
-    System.get_env("DATABASE_PATH") ||
-      raise """
-      environment variable DATABASE_PATH is missing.
-      For example: /etc/webby/webby.db
-      """
+    System.get_env("WEBBY_DATABASE_PATH") || Path.join(Webby.Paths.data_dir(), "webby.db")
+
+  File.mkdir_p!(Path.dirname(database_path))
+  File.chmod!(Path.dirname(database_path), 0o700)
 
   config :webby, Webby.Repo,
     database: database_path,
+    journal_mode: :wal,
+    foreign_keys: :on,
+    busy_timeout: 5_000,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
@@ -63,19 +71,11 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
-
   config :webby, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :webby, WebbyWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
-    http: [
-      # Enable IPv6 and bind on all interfaces.
-      # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
-      # See the documentation on https://bandit.hexdocs.pm/Bandit.html#t:options/0
-      # for details about using IPv6 vs IPv4 and loopback vs public addresses.
-      ip: {0, 0, 0, 0, 0, 0, 0, 0}
-    ],
+    url: [host: "127.0.0.1", port: port, scheme: "http"],
+    http: [ip: {127, 0, 0, 1}, port: port],
     secret_key_base: secret_key_base
 
   # ## SSL Support

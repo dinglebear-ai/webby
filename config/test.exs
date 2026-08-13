@@ -6,7 +6,10 @@ import Config
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
 config :webby, Webby.Repo,
-  database: Path.expand("../webby_test.db", __DIR__),
+  database: Path.expand("../webby_test#{System.get_env("MIX_TEST_PARTITION")}.db", __DIR__),
+  journal_mode: :wal,
+  foreign_keys: :on,
+  busy_timeout: 5_000,
   pool_size: 5,
   pool: Ecto.Adapters.SQL.Sandbox
 
