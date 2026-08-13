@@ -12,6 +12,7 @@ defmodule Webby.RuntimeDiscovery do
   def snapshot(server \\ __MODULE__), do: GenServer.call(server, :snapshot)
 
   def cleanup(server \\ __MODULE__), do: GenServer.call(server, :cleanup)
+  def instance_id(path \\ Webby.Paths.instance_file()), do: load_or_create_instance_id(path)
 
   @impl true
   def init(opts) do
@@ -47,16 +48,14 @@ defmodule Webby.RuntimeDiscovery do
     port = Application.fetch_env!(:webby, :listen_port)
 
     %{
-      instance_id: load_or_create_instance_id(),
+      instance_id: instance_id(),
       base_url: "http://#{@listen_host}:#{port}",
       mcp_url: "http://#{@listen_host}:#{port}/mcp",
       pid: System.pid()
     }
   end
 
-  defp load_or_create_instance_id do
-    path = Webby.Paths.instance_file()
-
+  defp load_or_create_instance_id(path) do
     case File.read(path) do
       {:ok, id} -> String.trim(id)
       {:error, :enoent} -> create_instance_id(path)

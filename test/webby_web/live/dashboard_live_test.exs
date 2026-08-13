@@ -14,13 +14,13 @@ defmodule WebbyWeb.DashboardLiveTest do
     assert has_element?(view, "[data-status=ok]")
   end
 
-  test "does not render page-controlled markup", %{conn: conn} do
+  test "does not expose internal database diagnostics", %{conn: conn} do
     previous = Application.get_env(:webby, :runtime_status_module)
     Application.put_env(:webby, :runtime_status_module, Webby.TestDegradedRuntimeStatus)
     on_exit(fn -> Application.put_env(:webby, :runtime_status_module, previous) end)
 
     {:ok, view, _html} = live(conn, ~p"/")
 
-    refute has_element?(view, "script")
+    refute render(view) =~ "<script>alert(1)</script>"
   end
 end

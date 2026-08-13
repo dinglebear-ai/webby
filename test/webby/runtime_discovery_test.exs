@@ -62,4 +62,18 @@ defmodule Webby.RuntimeDiscoveryTest do
 
     File.rm_rf!(root)
   end
+
+  test "instance identity is durable and owner-only" do
+    root = Path.join(System.tmp_dir!(), "webby-identity-#{System.unique_integer([:positive])}")
+    path = Path.join(root, "instance-id")
+
+    first = Webby.RuntimeDiscovery.instance_id(path)
+    second = Webby.RuntimeDiscovery.instance_id(path)
+
+    assert {:ok, _uuid} = Ecto.UUID.cast(first)
+    assert second == first
+    assert band(File.stat!(path).mode, 0o777) == 0o600
+
+    File.rm_rf!(root)
+  end
 end
