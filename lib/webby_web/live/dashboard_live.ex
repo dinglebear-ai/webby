@@ -252,6 +252,16 @@ defmodule WebbyWeb.DashboardLive do
               >
                 {tool["name"]}
                 <span
+                  :if={third_party_origin(tool, discovery.origin)}
+                  class="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-medium text-rose-700 dark:text-rose-400"
+                  title={"Registered by #{tool["origin"]}, which is not this page's origin."}
+                >
+                  <.icon name="hero-globe-alt" class="size-3" /> {third_party_origin(
+                    tool,
+                    discovery.origin
+                  )}
+                </span>
+                <span
                   :if={get_in(tool, ["annotations", "untrusted_content_hint"])}
                   class="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
                   title="This page declares that the tool returns content from sources it does not vouch for."
@@ -350,6 +360,15 @@ defmodule WebbyWeb.DashboardLive do
 
   defp resolve_page(socket, {:error, _reason}, _message),
     do: put_flash(socket, :error, "The page could not be registered")
+
+  # A tool's `origin` is the document that registered it. It matches the page
+  # for ordinary tools, so only a mismatch is worth showing: that is a frame
+  # from somewhere else exposing a tool into this page.
+  defp third_party_origin(%{"origin" => origin}, page_origin)
+       when is_binary(origin) and origin != "" and origin != page_origin,
+       do: origin
+
+  defp third_party_origin(_tool, _page_origin), do: nil
 
   defp scanning_mode_label("all_tabs"), do: "All eligible tabs"
   defp scanning_mode_label("granted_sites"), do: "Granted sites only"

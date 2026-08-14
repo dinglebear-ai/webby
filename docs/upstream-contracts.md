@@ -12,16 +12,23 @@ drift report says what to go re-read rather than just that a hash changed.
 
 | Contract | Source | Why it matters to Webby |
 |---|---|---|
-| `webmcp-spec` | `webmachinelearning/webmcp` → `index.bs` | Defines `Document.modelContext`, `getTools(options)`, and the `RegisteredTool` / `ToolAnnotations` dictionaries the extension probe reads |
+| `webmcp-spec` | `webmachinelearning/webmcp` → `index.bs` | Defines `Document.modelContext`, `getTools()`, `executeTool()`, and the `RegisteredTool` / `ToolAnnotations` dictionaries the extension probe reads |
 | `webmcp-implementation-status` | same repo → `implementation-status.md` | Per-browser rollout. Webby feature-detects, so what browsers ship bounds what it can reach |
 | `webmcp-declarative-explainer` | same repo → `declarative-api-explainer.md` | A proposed authoring surface Webby does not implement yet |
 | `webmcp-types` | npm `webmcp-types` | Published type definitions; the cheapest signal that the tool descriptor shape moved |
 | `mcp-spec` | `modelcontextprotocol/modelcontextprotocol` tags | Protocol revisions Webby advertises in `Webby.MCP.Protocol` |
+| `webmcp-execute-tool` | `index.bs`, symbol presence | A *capability watch*: asks "has this arrived yet" rather than "has this changed", for an API Webby calls |
+| `chrome-webmcp-status` | Chrome Status API | Chrome's shipping status for WebMCP |
 
 The WebMCP spec has no releases or tags — it is a living Bikeshed document — so
 it is tracked by content hash. The MCP spec publishes dated tags, so it is
 tracked by tag, which also lets the checker answer a sharper question than
 "did anything change".
+
+Most contracts ask whether something changed. `webmcp-execute-tool` inverts
+that: it records whether a symbol is *present* in the spec, so an API Webby
+depends on but which upstream had not yet defined is watched for directly. It
+fired on 2026-08-14, the day `executeTool()` was specified.
 
 Because a hash alone says only *that* something moved, file contracts also pin
 the commit they were reviewed at. When drift is found, the report enumerates
@@ -109,20 +116,56 @@ trial. That fallback reads through an explicitly loosened view so it cannot
 stand in for the specified field — rename `inputSchema` upstream and the check
 still fails.
 
-## Where the spec is ahead of Webby
+## Where Webby sits relative to the spec
 
-`executeTool()` — the API the invocation path depends on — **is not specified**.
-The upstream README still reads *"TODO: Spec and describe the
-`modelContext.getTools()` and `modelContext.executeTool()` APIs"*, and
-[webmachinelearning/webmcp#51](https://github.com/webmachinelearning/webmcp/issues/51),
-which defines how an agent invokes a site's declared tools, has been open since
-2025-11-03. `getTools()` was specced in #223; its sibling was not.
+`executeTool()` — the API the invocation path depends on — **was specified on
+2026-08-14** by [webmachinelearning/webmcp#226](https://github.com/webmachinelearning/webmcp/pull/226),
+as:
 
-Webby feature-detects it and reports `webmcp_unavailable` rather than
-simulating invocation, which is what §21 requires. When upstream specs it,
-`webmcp-types` will publish a signature and the contract check will report the
-version bump — that is the moment to replace the narrow escape hatch in
-`invokeWebMcp`.
+```webidl
+Promise<DOMString> executeTool(RegisteredTool tool, DOMString inputArguments,
+                               optional ModelContextExecuteToolOptions options = {});
+```
+
+That is the call `invokeWebMcp` already made, including the `{signal}` option
+used for cancellation. Before that day it was a TODO in the upstream README
+with [#51](https://github.com/webmachinelearning/webmcp/issues/51) open since
+2025-11-03; the `webmcp-execute-tool` watch above is what reported its arrival.
+
+Two things still gate the feature end to end:
+
+- **No browser implements it.** Feature detection stays, and Webby reports
+  `webmcp_unavailable` rather than simulating invocation, per §21.
+- **`webmcp-types` has not published a signature** (still 0.1.3, which predates
+  the change), so `probe.js` reaches `executeTool` through a narrow cast. When
+  the definitions catch up, that contract reports the version bump and the cast
+  can go.
+
+The same day, [#241](https://github.com/webmachinelearning/webmcp/pull/241)
+changed `RegisteredTool.inputSchema` from `DOMString` to `object`. Webby
+already accepted both, so nothing broke — origin-trial browsers still ship the
+string form, which is why both are still handled.
+
+## What Webby carries from a tool
+
+Everything on `RegisteredTool` that a consumer could need to judge a tool is
+carried through discovery and live sessions to `page.tools`, rather than
+reduced to name/description/schema:
+
+- **`annotations`** — `untrustedContentHint` is the page declaring its tool
+  returns content it does not vouch for; `readOnlyHint` that the tool only
+  reads. An MCP client cannot weigh either if the bridge strips them.
+- **`origin`** — the origin of the document that *registered* the tool. The
+  spec notes this "is only meaningful when the tool is cross-origin". A frame
+  can expose tools into a page via `exposedTo`, so without this a third party's
+  tool reaches an MCP client attributed to the page that merely embedded it.
+  The dashboard badges any tool whose origin differs from its page.
+- **`title`** — the display label, distinct from the identifier.
+
+All of it arrives from a web page and is treated as untrusted: hints that are
+not literally `true` become `false`, an `origin` that is not a well-formed
+http/https origin becomes `""`, strings are control-stripped and bounded, and
+the stored shapes are fixed so a page cannot smuggle extra keys into a catalog.
 
 ## A constraint worth knowing before editing the probe
 
@@ -140,8 +183,13 @@ same answer. Do not "clean up" that duplication by extracting a helper.
 
 ## Known gaps
 
-- The probe still drops `RegisteredTool.title` and `origin`, and calls
-  `getTools()` without `fromOrigins`. None carries a safety signal, unlike
-  `annotations`, which is now carried through.
-- Chrome and Edge origin-trial expiry is only visible through
-  `implementation-status.md`; there is no direct Chrome Status check.
+- **Chrome Status does not publish origin-trial expiry**, and its WebMCP entry
+  disagrees with the spec repo: `implementation-status.md` cites a live origin
+  trial in Chrome 149, while the Chrome Status API reports `status: Proposed`
+  with `origintrial: false` and no milestones. The `chrome-webmcp-status`
+  contract therefore tracks the shipping status — the signal that matters — and
+  not expiry dates, which are not available there.
+- `getTools()` is called without `fromOrigins` deliberately. Restricting to
+  same-origin would silently drop tools a page intentionally exposed from a
+  frame; instead each tool's `origin` is carried and surfaced, so a
+  cross-origin tool is visible rather than either hidden or silently trusted.

@@ -7,6 +7,7 @@ defmodule Webby.Discovery do
 
   @max_tools 64
   @max_description_bytes 1_000
+  @max_title_bytes 200
   @max_schema_bytes 32_768
   @max_schema_depth 16
   @max_schema_nodes 2_048
@@ -217,9 +218,11 @@ defmodule Webby.Discovery do
       {:ok,
        %{
          "name" => sanitize_string(name, 128),
+         "title" => sanitize_string(Map.get(tool, "title", ""), @max_title_bytes),
          "description" =>
            sanitize_string(Map.get(tool, "description", ""), @max_description_bytes),
          "input_schema" => schema,
+         "origin" => sanitize_origin(Map.get(tool, "origin")),
          "annotations" => sanitize_annotations(Map.get(tool, "annotations"))
        }}
     else
@@ -228,6 +231,29 @@ defmodule Webby.Discovery do
   end
 
   defp sanitize_tool(_tool), do: {:error, :invalid_catalog}
+
+  # `RegisteredTool.origin` is the origin of the document that *registered* the
+  # tool. The specification notes it is only meaningful when the tool is
+  # cross-origin -- a frame can expose tools into a page via `exposedTo`, and
+  # without this a third party's tool reaches an MCP client attributed to the
+  # page that merely embedded it.
+  #
+  # Only a well-formed http/https origin is stored. Anything else becomes "",
+  # which reads as "same origin as the page" rather than as a claim Webby
+  # cannot substantiate.
+  defp sanitize_origin(origin) when is_binary(origin) and byte_size(origin) in 1..256 do
+    case URI.new(origin) do
+      {:ok, %URI{scheme: scheme, host: host, path: path, query: nil, fragment: nil}}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" and
+             path in [nil, "", "/"] ->
+        origin
+
+      _other ->
+        ""
+    end
+  end
+
+  defp sanitize_origin(_origin), do: ""
 
   # WebMCP `ToolAnnotations`, carried through so an MCP client can weigh them.
   # `untrustedContentHint` is the page declaring that a tool returns content it

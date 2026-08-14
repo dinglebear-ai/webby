@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {cancelWebMcp, invokeWebMcp, probeWebMcp} from "../src/probe.js";
 import {normalizeTools, stableStringify} from "../src/scanning.js";
+import {expectedTool} from "./support.js";
 
 /**
  * `chrome.scripting.executeScript({func})` serializes the function and
@@ -32,7 +33,7 @@ test("the injected probe reads a catalog without its module scope", async () => 
   await withModelContext({getTools: async () => [tool({})]}, async () => {
     assert.deepEqual(await injected(), {
       supported: true,
-      tools: [{name: "search", description: "Search", input_schema: {}, annotations: {read_only_hint: false, untrusted_content_hint: false}}]
+      tools: [expectedTool()]
     });
   });
 });
@@ -70,7 +71,12 @@ const catalogs = {
     tool({name: "beta", annotations: {untrustedContentHint: true}}),
     tool({name: "gamma", annotations: {readOnlyHint: true, untrustedContentHint: true}})
   ],
-  "unannotated tools": [tool({name: "alpha", annotations: undefined})]
+  "unannotated tools": [tool({name: "alpha", annotations: undefined})],
+  "cross-origin tools": [
+    tool({name: "alpha", origin: "https://embedded.example.net"}),
+    tool({name: "beta", origin: "https://example.com"})
+  ],
+  "titled tools": [tool({name: "alpha", title: "Alpha Search"})]
 };
 
 for (const [label, raw] of Object.entries(catalogs)) {

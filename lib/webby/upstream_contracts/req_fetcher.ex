@@ -86,6 +86,38 @@ defmodule Webby.UpstreamContracts.ReqFetcher do
   end
 
   @impl true
+  def github_file_symbol(repo, path, symbol) do
+    case get("#{@github}/repos/#{repo}/contents/#{path}", headers("application/vnd.github.raw")) do
+      {:ok, body} when is_binary(body) -> {:ok, %{"present" => String.contains?(body, symbol)}}
+      {:ok, _body} -> {:error, "unexpected contents payload for #{repo}/#{path}"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
+  def chrome_status(feature_id) do
+    # The API serves `application/json` whose body begins with the anti-hijacking
+    # guard `)]}'`, so Req's automatic decoding fails on the first byte. Take the
+    # raw body and strip the guard before decoding.
+    case get("https://chromestatus.com/api/v0/features/#{feature_id}", [], decode_body: false) do
+      {:ok, body} when is_binary(body) ->
+        case body |> String.replace_prefix(")]}'", "") |> Jason.decode() do
+          {:ok, decoded} ->
+            {:ok, %{"chrome_status" => get_in(decoded, ["browsers", "chrome", "status", "text"])}}
+
+          {:error, _reason} ->
+            {:error, "unexpected chromestatus payload for #{feature_id}"}
+        end
+
+      {:ok, _body} ->
+        {:error, "unexpected chromestatus payload for #{feature_id}"}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl true
   def npm_package(package) do
     case get("#{@npm}/#{package}/latest", []) do
       {:ok, %{"version" => version}} -> {:ok, %{"version" => version}}
@@ -94,8 +126,11 @@ defmodule Webby.UpstreamContracts.ReqFetcher do
     end
   end
 
-  defp get(url, headers) do
-    case Req.get(url, headers: headers, receive_timeout: @receive_timeout, retry: :transient) do
+  defp get(url, headers, opts \\ []) do
+    options =
+      [headers: headers, receive_timeout: @receive_timeout, retry: :transient] ++ opts
+
+    case Req.get(url, options) do
       {:ok, %Req.Response{status: 200, body: body}} ->
         {:ok, body}
 
@@ -107,8 +142,13 @@ defmodule Webby.UpstreamContracts.ReqFetcher do
     end
   end
 
-  defp headers do
-    base = [{"accept", "application/vnd.github+json"}]
+  # `application/vnd.github.raw` asks GitHub for the file body rather than the
+  # JSON metadata envelope. Accept is a parameter rather than something a caller
+  # splices in afterwards: an earlier version rebuilt the list positionally and
+  # dropped the authorization header along with the accept it meant to replace,
+  # which only showed up as a 403 once a token was actually present.
+  defp headers(accept \\ "application/vnd.github+json") do
+    base = [{"accept", accept}]
 
     case System.get_env("GITHUB_TOKEN") do
       token when is_binary(token) and token != "" -> [{"authorization", "Bearer #{token}"} | base]

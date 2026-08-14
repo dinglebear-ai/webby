@@ -16,4 +16,17 @@ defmodule Webby.UpstreamContracts.Fetcher do
   """
   @callback github_commits(repo :: String.t(), path :: String.t(), since_sha :: String.t() | nil) ::
               {:ok, [map()]} | {:error, String.t()}
+
+  @doc """
+  Whether `symbol` appears in a file's current contents.
+
+  Inverts the usual question. Most contracts ask "has this changed"; this one
+  asks "has this arrived yet", so that an API Webby depends on but which
+  upstream has not specified is watched for directly.
+  """
+  @callback github_file_symbol(repo :: String.t(), path :: String.t(), symbol :: String.t()) ::
+              {:ok, observed()} | {:error, String.t()}
+
+  @doc "Chrome's shipping status for a Chrome Status feature id."
+  @callback chrome_status(feature_id :: integer()) :: {:ok, observed()} | {:error, String.t()}
 end
