@@ -23,6 +23,12 @@ it is tracked by content hash. The MCP spec publishes dated tags, so it is
 tracked by tag, which also lets the checker answer a sharper question than
 "did anything change".
 
+Because a hash alone says only *that* something moved, file contracts also pin
+the commit they were reviewed at. When drift is found, the report enumerates
+the upstream commits since that pin and links the compare view, so the finding
+names the actual changes. The commit walk is bounded at 30; a longer gap is
+reported as truncated rather than silently cut.
+
 ## Two kinds of finding
 
 **Drift** is informational. An upstream document changed; someone should read
@@ -67,12 +73,40 @@ demand. Drift is collected into a single rolling issue labelled
 The schedule only fails when an upstream is unreachable, because a red build
 should mean something is wrong with Webby.
 
+## Type-checking the probe
+
+Tracking tells you a specification moved. It does not tell you whether Webby
+still matches it — for that, `extension/tsconfig.json` type-checks
+`extension/src/probe.js` against the published `webmcp-types` definitions:
+
+```bash
+cd extension && npm ci && npm run typecheck
+```
+
+This is a contract check, not a build step: nothing is emitted, and only the
+files touching the WebMCP surface are included. If upstream renames a field the
+probe reads, CI fails with the exact property — rather than the probe silently
+reporting an empty catalog on every page, which is how this class of breakage
+would otherwise surface.
+
+Both directions are verified: renaming `getTools` or `RegisteredTool.inputSchema`
+in the definitions fails the check.
+
+One deliberate exception is documented in the probe itself. The spec has only
+ever spelled the field `inputSchema`, but the probe also tolerates a
+`input_schema` at runtime in case a browser ships otherwise during origin
+trial. That fallback reads through an explicitly loosened view so it cannot
+stand in for the specified field — rename `inputSchema` upstream and the check
+still fails.
+
 ## Known gaps
 
-- Content hashing detects *that* the WebMCP spec moved, not *what* moved.
-  Reading the linked commit range is a manual step.
-- `webmcp-types` is tracked but not yet consumed. Type-checking
-  `extension/src/probe.js` against it would turn a descriptor-shape change from
-  a notification into a test failure — the obvious next step.
+- The probe drops `RegisteredTool.annotations`, including
+  `untrustedContentHint`, which is security-relevant for a bridge handing
+  page-authored tools to MCP clients. Capturing it needs a server-side schema
+  change, so it is tracked as work rather than fixed here. It also drops
+  `title` and `origin`, and calls `getTools()` without `fromOrigins`.
+- Only `probe.js` is type-checked. `service_worker.js` uses `chrome.*` APIs and
+  would need `@types/chrome` to join.
 - Chrome and Edge origin-trial expiry is only visible through
   `implementation-status.md`; there is no direct Chrome Status check.

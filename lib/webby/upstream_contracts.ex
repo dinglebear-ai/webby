@@ -105,6 +105,29 @@ defmodule Webby.UpstreamContracts do
   end
 
   @doc """
+  Enriches drift entries with the upstream commits that caused them.
+
+  A content hash says only that a document moved. For contracts tracked by
+  file, the commits between the pinned revision and the live one say what
+  moved, which is the part a reviewer actually needs. Entries that cannot be
+  explained keep their `:commits` empty rather than failing the report.
+  """
+  def explain(drift, fetcher \\ Webby.UpstreamContracts.ReqFetcher) do
+    Enum.map(drift, fn entry ->
+      Map.put(entry, :commits, commits_for(entry, fetcher))
+    end)
+  end
+
+  defp commits_for(%{contract: %{"kind" => "github_file"} = contract}, fetcher) do
+    case fetcher.github_commits(contract["repo"], contract["path"], contract["last_commit"]) do
+      {:ok, commits} -> commits
+      {:error, _reason} -> []
+    end
+  end
+
+  defp commits_for(_entry, _fetcher), do: []
+
+  @doc """
   Checks that Webby's advertised MCP protocol versions still line up with the
   upstream specification's published revisions.
 
@@ -195,11 +218,53 @@ defmodule Webby.UpstreamContracts do
         - Live `#{entry.key}`: `#{entry.live}`
         - Source: #{source_url(entry.contract)}
         - Webby surfaces to re-check: #{surfaces(entry.contract)}
+        #{render_commits(entry)}
         """
       end)
 
     "## Upstream contract drift\n\n" <> rows
   end
+
+  @shown_commits 15
+
+  defp render_commits(%{commits: [_ | _] = commits, contract: contract}) do
+    lines =
+      commits
+      |> Enum.take(@shown_commits)
+      |> Enum.map_join("\n", fn commit ->
+        "  - #{date_only(commit["date"])} #{commit["subject"]} " <>
+          "(#{short(commit["sha"])})"
+      end)
+
+    omitted =
+      case length(commits) - @shown_commits do
+        n when n > 0 -> "\n  - ...and #{n} more; see the compare link below."
+        _ -> ""
+      end
+
+    "\nUpstream changes since the pinned revision:\n\n" <>
+      lines <> omitted <> "\n\n" <> compare_link(contract, commits)
+  end
+
+  defp render_commits(%{commits: []}),
+    do: "\nUpstream changes could not be enumerated; compare manually at the source link above."
+
+  defp render_commits(_entry), do: ""
+
+  defp compare_link(contract, commits) do
+    newest = commits |> List.first() |> Map.get("sha")
+
+    case contract["last_commit"] do
+      nil -> ""
+      pinned -> "Compare: https://github.com/#{contract["repo"]}/compare/#{pinned}...#{newest}"
+    end
+  end
+
+  defp date_only(nil), do: "(undated)"
+  defp date_only(date), do: String.slice(date, 0, 10)
+
+  defp short(nil), do: "unknown"
+  defp short(sha), do: String.slice(sha, 0, 8)
 
   defp render_errors([]), do: ""
 

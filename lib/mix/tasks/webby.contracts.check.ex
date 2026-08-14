@@ -45,7 +45,7 @@ defmodule Mix.Tasks.Webby.Contracts.Check do
 
   defp check(lock, opts) do
     {observed, errors} = UpstreamContracts.observe(lock)
-    drift = UpstreamContracts.diff(lock, observed)
+    drift = lock |> UpstreamContracts.diff(observed) |> UpstreamContracts.explain()
     alignment = alignment(lock, observed)
 
     if opts[:update], do: update_lock(lock, observed, errors)

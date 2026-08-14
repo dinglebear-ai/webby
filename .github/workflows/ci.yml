@@ -73,5 +73,14 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
 
-      - run: node --test
+      - run: npm ci
+
+      # Checks the WebMCP probe against the published upstream type
+      # definitions, so a renamed field in the spec fails here rather than
+      # silently returning an empty catalog in the browser.
+      - run: npm run typecheck
+
+      - run: npm test
