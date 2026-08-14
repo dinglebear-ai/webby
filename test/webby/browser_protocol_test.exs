@@ -48,4 +48,27 @@ defmodule Webby.BrowserProtocolTest do
     assert {:error, %{"kind" => "invalid_envelope"}} =
              BrowserProtocol.validate(%{"type" => "heartbeat", "payload" => %{}})
   end
+
+  test "requires complete document identities and validates session closure" do
+    observation = %{
+      "url" => "https://example.com/tools",
+      "title" => "Tools",
+      "tools" => [%{"name" => "search"}],
+      "tab_id" => 7
+    }
+
+    assert {:error, %{"kind" => "invalid_payload"}} =
+             BrowserProtocol.validate(%{
+               "protocol_version" => 1,
+               "type" => "discovery.observed",
+               "payload" => %{"observations" => [observation]}
+             })
+
+    assert {:ok, %{type: "session.closed"}} =
+             BrowserProtocol.validate(%{
+               "protocol_version" => 1,
+               "type" => "session.closed",
+               "payload" => %{"tab_id" => 7, "document_id" => "document-1"}
+             })
+  end
 end

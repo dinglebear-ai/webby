@@ -2,7 +2,7 @@ defmodule Webby.BrowserProtocol do
   @moduledoc "Transport-neutral validation for Webby Browser Protocol version 1."
 
   @version 1
-  @types ~w(pairing.request pairing.status auth.respond browser.hello browser.resync browser.settings discovery.observed heartbeat)
+  @types ~w(pairing.request pairing.status auth.respond browser.hello browser.resync browser.settings discovery.observed session.closed heartbeat)
 
   def version, do: @version
 
@@ -101,16 +101,35 @@ defmodule Webby.BrowserProtocol do
   defp validate_payload("browser.resync", _payload),
     do: {:error, error("invalid_payload", %{"type" => "browser.resync"})}
 
+  defp validate_payload("session.closed", %{"tab_id" => tab_id, "document_id" => document_id})
+       when is_integer(tab_id) and tab_id >= 0 and is_binary(document_id) and
+              byte_size(document_id) in 1..128,
+       do: :ok
+
+  defp validate_payload("session.closed", _payload),
+    do: {:error, error("invalid_payload", %{"type" => "session.closed"})}
+
   defp validate_payload(_type, _payload), do: :ok
 
   defp valid_observation?(%{"url" => url, "tools" => tools} = observation)
        when is_binary(url) and byte_size(url) in 1..8_192 and is_list(tools) and
               length(tools) in 1..64 do
     title = Map.get(observation, "title", "")
-    is_binary(title) and byte_size(title) <= 1_000
+    tab_id = Map.get(observation, "tab_id")
+    document_id = Map.get(observation, "document_id")
+
+    is_binary(title) and byte_size(title) <= 1_000 and
+      valid_document_identity?(tab_id, document_id)
   end
 
   defp valid_observation?(_observation), do: false
+
+  defp valid_document_identity?(nil, nil), do: true
+
+  defp valid_document_identity?(tab_id, document_id),
+    do:
+      is_integer(tab_id) and tab_id >= 0 and is_binary(document_id) and
+        byte_size(document_id) in 1..128
 
   defp required_string(payload, key, max_length) do
     case payload[key] do

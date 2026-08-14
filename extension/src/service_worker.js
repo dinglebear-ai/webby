@@ -1,5 +1,5 @@
 import {WebbyChannel} from "./channel.js";
-import {canScanTab, normalizeTools, sanitizePage} from "./scanning.js";
+import {buildObservation, canScanTab} from "./scanning.js";
 import {probeWebMcp} from "./probe.js";
 import {reconcileModeAfterRemoval} from "./permissions.js";
 
@@ -13,7 +13,9 @@ chrome.tabs.onUpdated.addListener((_tabId, change, tab) => {
   if (change.status === "complete") scanTab(tab);
 });
 chrome.tabs.onActivated.addListener(async ({tabId}) => scanTab(await chrome.tabs.get(tabId)));
-chrome.tabs.onRemoved.addListener((tabId) => observations.delete(tabId));
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await closeObservation(tabId);
+});
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "webby-periodic-scan") scanAll();
 });
@@ -110,15 +112,27 @@ async function scanTab(tab, allowActiveTab = false) {
   if (ignoredOrigins.includes(new URL(tab.url).origin)) return;
   try {
     const [result] = await chrome.scripting.executeScript({target: {tabId: tab.id}, world: "MAIN", func: probeWebMcp});
-    const tools = normalizeTools(result?.result?.tools);
-    if (!result?.result?.supported || tools.length === 0) return;
-    const observation = {...sanitizePage(tab.url, tab.title), tools};
+    const observation = buildObservation(tab, result);
+    if (!observation) {
+      if (result?.documentId) await closeObservation(tab.id);
+      return;
+    }
     observations.set(tab.id, observation);
     const reply = await channel?.message("discovery.observed", {observations: [observation]});
     await persistIgnoredOrigins(reply);
   } catch {
     // Restricted, navigated, or closed tabs are expected and are not discoveries.
   }
+}
+
+async function closeObservation(tabId) {
+  const observation = observations.get(tabId);
+  observations.delete(tabId);
+  if (!observation?.document_id) return;
+  await channel?.message("session.closed", {
+    tab_id: tabId,
+    document_id: observation.document_id
+  }).catch(() => {});
 }
 
 async function resync() {

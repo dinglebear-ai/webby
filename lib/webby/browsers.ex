@@ -4,7 +4,7 @@ defmodule Webby.Browsers do
   import Ecto.Query
   alias Ecto.Multi
   alias Webby.Browsers.{AuthChallenge, Browser, PairingRequest}
-  alias Webby.Repo
+  alias Webby.{Pages, Repo}
 
   @pairing_ttl 300
   @challenge_ttl 60
@@ -95,7 +95,7 @@ defmodule Webby.Browsers do
         {:error, :not_found}
 
       browser ->
-        case browser |> Browser.changeset(%{revoked_at: now()}) |> Repo.update() do
+        case revoke_and_close(browser) do
           {:ok, revoked} ->
             WebbyWeb.Endpoint.broadcast("browser:#{browser.id}", "disconnect", %{})
             {:ok, revoked}
@@ -110,9 +110,7 @@ defmodule Webby.Browsers do
       when mode in ["granted_sites", "all_tabs"] and is_boolean(paused) do
     case Repo.get(Browser, browser_id) do
       %Browser{revoked_at: nil} = browser ->
-        browser
-        |> Browser.changeset(%{scanning_mode: mode, scanning_paused: paused, last_seen_at: now()})
-        |> Repo.update()
+        update_scanning_and_sessions(browser, mode, paused)
 
       _browser ->
         {:error, :browser_unavailable}
@@ -168,6 +166,37 @@ defmodule Webby.Browsers do
     ])
   rescue
     _ -> false
+  end
+
+  defp revoke_and_close(browser) do
+    Repo.transaction(fn ->
+      revoked = browser |> Browser.changeset(%{revoked_at: now()}) |> Repo.update!()
+      {:ok, _count} = Pages.close_browser_sessions(browser.id, "page.session.browser_revoked")
+      revoked
+    end)
+  end
+
+  defp update_scanning_and_sessions(browser, mode, paused) do
+    Repo.transaction(fn ->
+      updated =
+        browser
+        |> Browser.changeset(%{
+          scanning_mode: mode,
+          scanning_paused: paused,
+          last_seen_at: now()
+        })
+        |> Repo.update!()
+
+      close_sessions_when_paused(browser.id, paused)
+      updated
+    end)
+  end
+
+  defp close_sessions_when_paused(_browser_id, false), do: :ok
+
+  defp close_sessions_when_paused(browser_id, true) do
+    {:ok, _count} = Pages.close_browser_sessions(browser_id, "page.session.scanning_paused")
+    :ok
   end
 
   defp signed_message(challenge) do

@@ -6,13 +6,17 @@ defmodule WebbyWeb.DashboardLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket), do: Process.send_after(self(), :refresh_status, @refresh_interval)
-    {:ok, socket |> assign_status() |> assign_browsers() |> assign_discoveries()}
+
+    {:ok,
+     socket |> assign_status() |> assign_browsers() |> assign_discoveries() |> assign_pages()}
   end
 
   @impl true
   def handle_info(:refresh_status, socket) do
     Process.send_after(self(), :refresh_status, @refresh_interval)
-    {:noreply, socket |> assign_status() |> assign_browsers() |> assign_discoveries()}
+
+    {:noreply,
+     socket |> assign_status() |> assign_browsers() |> assign_discoveries() |> assign_pages()}
   end
 
   @impl true
@@ -27,6 +31,11 @@ defmodule WebbyWeb.DashboardLive do
 
   def handle_event("ignore-discovery", %{"id" => id}, socket),
     do: {:noreply, resolve_discovery(socket, Webby.Discovery.ignore(id), "Discovery ignored")}
+
+  def handle_event("register-discovery", %{"id" => id}, socket),
+    do:
+      {:noreply,
+       resolve_page(socket, Webby.Pages.register_discovery(id), "Page registration created")}
 
   @impl true
   def render(assigns) do
@@ -57,7 +66,7 @@ defmodule WebbyWeb.DashboardLive do
         </div>
 
         <p class="rounded-xl bg-base-200 px-4 py-3 text-sm text-base-content/70">
-          Extension discovery is active. Discovered tools are informational and cannot be invoked until explicitly registered in a later slice.
+          Extension discovery and explicit page registration are active. Only registered pages can create live tool sessions.
         </p>
 
         <section class="space-y-4" id="browser-pairing">
@@ -164,11 +173,42 @@ defmodule WebbyWeb.DashboardLive do
                 {tool["name"]}
               </li>
             </ul>
-            <button
-              phx-click="ignore-discovery"
-              phx-value-id={discovery.id}
-              class="mt-4 rounded-lg border border-base-300 px-3 py-2 text-sm font-medium"
-            >Ignore</button>
+            <div class="mt-4 flex gap-2">
+              <button
+                phx-click="register-discovery"
+                phx-value-id={discovery.id}
+                class="rounded-lg bg-cyan-700 px-3 py-2 text-sm font-medium text-white"
+              >Register page</button>
+              <button
+                phx-click="ignore-discovery"
+                phx-value-id={discovery.id}
+                class="rounded-lg border border-base-300 px-3 py-2 text-sm font-medium"
+              >Ignore</button>
+            </div>
+          </article>
+        </section>
+        <section class="space-y-4" id="page-registrations">
+          <div>
+            <h2 class="text-2xl font-semibold">Registered pages</h2>
+            <p class="mt-1 text-sm text-base-content/60">
+              User-approved pages eligible for the future MCP broker surface.
+            </p>
+          </div>
+          <p :if={@registrations == []} class="text-sm text-base-content/60">
+            No pages registered yet.
+          </p>
+          <article
+            :for={registration <- @registrations}
+            id={"registration-#{registration.id}"}
+            class="rounded-2xl border border-cyan-200 bg-cyan-50/40 p-5"
+          >
+            <p class="font-medium">{registration.display_name}</p>
+            <p class="font-mono text-xs text-base-content/60">
+              {registration.origin}{registration.url_pattern}
+            </p>
+            <p class="mt-2 text-xs text-base-content/60">
+              {Enum.count(@sessions, &(&1.registration_id == registration.id))} active sessions · {registration.exposure_mode} mode
+            </p>
           </article>
         </section>
       </section>
@@ -192,6 +232,13 @@ defmodule WebbyWeb.DashboardLive do
   defp assign_discoveries(socket),
     do: assign(socket, :discoveries, Webby.Discovery.list_discoveries())
 
+  defp assign_pages(socket),
+    do:
+      assign(socket,
+        registrations: Webby.Pages.list_registrations(),
+        sessions: Webby.Pages.list_active_sessions()
+      )
+
   defp resolve(socket, {:ok, _value}, message),
     do: socket |> put_flash(:info, message) |> assign_browsers()
 
@@ -203,6 +250,12 @@ defmodule WebbyWeb.DashboardLive do
 
   defp resolve_discovery(socket, {:error, _reason}, _message),
     do: put_flash(socket, :error, "The discovery could not be updated")
+
+  defp resolve_page(socket, {:ok, _value}, message),
+    do: socket |> put_flash(:info, message) |> assign_discoveries() |> assign_pages()
+
+  defp resolve_page(socket, {:error, _reason}, _message),
+    do: put_flash(socket, :error, "The page could not be registered")
 
   defp scanning_mode_label("all_tabs"), do: "All eligible tabs"
   defp scanning_mode_label("granted_sites"), do: "Granted sites only"
