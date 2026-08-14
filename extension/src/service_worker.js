@@ -1,5 +1,5 @@
 import {WebbyChannel} from "./channel.js";
-import {buildObservation, canScanTab} from "./scanning.js";
+import {buildObservation, canScanTab, stableStringify} from "./scanning.js";
 import {cancelWebMcp, invokeWebMcp, probeWebMcp} from "./probe.js";
 import {reconcileModeAfterRemoval} from "./permissions.js";
 
@@ -136,12 +136,6 @@ async function cancelToolCall(payload) {
 
 function sendToolError(callId, kind, message) {
   return channel.message("tool.error", {call_id: callId, error: {kind, message}}).catch(() => {});
-}
-
-function stableStringify(value) {
-  const stable = (item) => Array.isArray(item) ? item.map(stable) :
-    item && typeof item === "object" ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, stable(item[key])])) : item;
-  return JSON.stringify(stable(value));
 }
 
 function encodedSize(value) {

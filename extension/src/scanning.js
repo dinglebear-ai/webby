@@ -48,3 +48,14 @@ export function buildObservation(tab, injectionResult) {
     document_id: injectionResult.documentId
   };
 }
+
+/**
+ * Canonical JSON for a catalog: object keys are sorted so that a comparison is
+ * about content, not key order. Shared with the injected `invokeWebMcp`, which
+ * must reproduce it inline -- see src/probe.js.
+ */
+export function stableStringify(value) {
+  const stable = (item) => Array.isArray(item) ? item.map(stable) :
+    item && typeof item === "object" ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, stable(item[key])])) : item;
+  return JSON.stringify(stable(value));
+}
