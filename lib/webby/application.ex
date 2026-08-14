@@ -17,6 +17,7 @@ defmodule Webby.Application do
       {Task.Supervisor, name: Webby.ProbeSupervisor},
       {DNSCluster, query: Application.get_env(:webby, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Webby.PubSub},
+      Webby.BrowserConnections,
       # Start a worker by calling: Webby.Worker.start_link(arg)
       # {Webby.Worker, arg},
       # Start to serve requests, typically the last entry

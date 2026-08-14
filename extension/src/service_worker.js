@@ -1,6 +1,6 @@
 import {WebbyChannel} from "./channel.js";
 import {buildObservation, canScanTab} from "./scanning.js";
-import {probeWebMcp} from "./probe.js";
+import {cancelWebMcp, invokeWebMcp, probeWebMcp} from "./probe.js";
 import {reconcileModeAfterRemoval} from "./permissions.js";
 
 const DEFAULTS = {baseUrl: "http://127.0.0.1:6477", scanningMode: "granted_sites", scanningPaused: false};
@@ -93,9 +93,69 @@ async function resumeAndScan() {
 }
 
 async function handleServerEvent(envelope) {
-  if (envelope?.type !== "pairing.approved" || !envelope.payload?.browser_id) return;
-  if (channel?.browserId === envelope.payload.browser_id) return;
-  await chrome.storage.local.set({browserId: envelope.payload.browser_id});
+  if (envelope?.type === "pairing.approved" && envelope.payload?.browser_id) {
+    if (channel?.browserId !== envelope.payload.browser_id) {
+      await chrome.storage.local.set({browserId: envelope.payload.browser_id});
+    }
+    return;
+  }
+  if (envelope?.type === "tool.call") return executeToolCall(envelope.payload);
+  if (envelope?.type === "tool.cancel") return cancelToolCall(envelope.payload);
+}
+
+async function executeToolCall(payload) {
+  const observation = observations.get(payload.tab_id);
+  if (!observation || observation.document_id !== payload.document_id) {
+    return sendToolError(payload.call_id, "stale_document", "The requested document is no longer active");
+  }
+  const expectedCatalog = stableStringify(observation.tools);
+  try {
+    const [execution] = await chrome.scripting.executeScript({
+      target: {tabId: payload.tab_id, documentIds: [payload.document_id]},
+      world: "MAIN",
+      func: invokeWebMcp,
+      args: [payload.tool_name, payload.arguments ?? {}, payload.call_id, expectedCatalog]
+    });
+    const result = execution?.result;
+    if (encodedSize(result) > 131_072 || jsonDepth(result) > 32) throw new Error("result_too_large");
+    await channel.message("tool.result", {call_id: payload.call_id, result});
+  } catch (error) {
+    const kind = knownToolError(error?.message) ? error.message : "tool_failed";
+    await sendToolError(payload.call_id, kind, "The page tool could not be completed");
+  }
+}
+
+async function cancelToolCall(payload) {
+  const observation = [...observations.values()].find((entry) => entry.document_id === payload.document_id);
+  if (!observation) return;
+  await chrome.scripting.executeScript({
+    target: {tabId: observation.tab_id, documentIds: [observation.document_id]},
+    world: "MAIN", func: cancelWebMcp, args: [payload.call_id]
+  }).catch(() => {});
+}
+
+function sendToolError(callId, kind, message) {
+  return channel.message("tool.error", {call_id: callId, error: {kind, message}}).catch(() => {});
+}
+
+function stableStringify(value) {
+  const stable = (item) => Array.isArray(item) ? item.map(stable) :
+    item && typeof item === "object" ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, stable(item[key])])) : item;
+  return JSON.stringify(stable(value));
+}
+
+function encodedSize(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function jsonDepth(value, depth = 0) {
+  if (!value || typeof value !== "object") return depth;
+  const values = Array.isArray(value) ? value : Object.values(value);
+  return values.reduce((maximum, item) => Math.max(maximum, jsonDepth(item, depth + 1)), depth);
+}
+
+function knownToolError(kind) {
+  return ["webmcp_unavailable", "stale_catalog", "tool_not_found", "AbortError"].includes(kind);
 }
 
 async function scanAll() {

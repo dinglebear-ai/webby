@@ -3,6 +3,7 @@ defmodule Webby.PagesTest do
 
   alias Webby.Browsers.Browser
   alias Webby.{Discovery, Pages}
+  alias Webby.MCP.Broker
 
   setup do
     {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
@@ -143,5 +144,54 @@ defmodule Webby.PagesTest do
              Webby.Browsers.update_scanning(context.browser.id, "granted_sites", true)
 
     assert Pages.list_active_sessions() == []
+  end
+
+  test "page.call binds the exact document and records a metadata-only audit", context do
+    assert {:ok, discovery} = Discovery.observe(context.browser.id, context.observation)
+    assert {:ok, registration} = Pages.register_discovery(discovery.id)
+
+    observed =
+      Map.merge(context.observation, %{"tab_id" => 42, "document_id" => "document-one"})
+
+    assert {:ok, session} = Discovery.observe(context.browser.id, observed)
+    assert :ok = Webby.BrowserConnections.register(context.browser.id, self())
+
+    task =
+      Task.async(fn ->
+        Broker.call(%{
+          "action" => "page.call",
+          "params" => %{
+            "page" => registration.slug,
+            "session" => session.id,
+            "catalog_revision" => session.catalog_revision,
+            "tool" => "find",
+            "arguments" => %{"query" => "private input is not audited"}
+          }
+        })
+      end)
+
+    assert_receive {:tool_call,
+                    %{
+                      "call_id" => call_id,
+                      "document_id" => "document-one",
+                      "catalog_revision" => 1,
+                      "tool_name" => "find"
+                    }}
+
+    Webby.BrowserConnections.complete(context.browser.id, %{
+      "type" => "tool.result",
+      "call_id" => call_id,
+      "result" => %{"secret" => "not audited"}
+    })
+
+    assert Task.await(task) == {:ok, %{"secret" => "not audited"}}
+
+    assert [audit] = Repo.all(Webby.InvocationAudit)
+    assert audit.registration_id == registration.id
+    assert audit.session_id == session.id
+    assert audit.tool_name == "find"
+    assert audit.outcome == "succeeded"
+    refute Map.has_key?(Map.from_struct(audit), :arguments)
+    refute Map.has_key?(Map.from_struct(audit), :result)
   end
 end

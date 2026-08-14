@@ -2,7 +2,7 @@ defmodule WebbyWeb.BrowserChannel do
   @moduledoc false
   use WebbyWeb, :channel
 
-  alias Webby.{BrowserProtocol, Browsers, Discovery, Pages}
+  alias Webby.{BrowserConnections, BrowserProtocol, Browsers, Discovery, Pages}
   alias Webby.Discovery.Discovery, as: DiscoveryRecord
   alias Webby.Pages.DocumentSession
   require Logger
@@ -50,6 +50,26 @@ defmodule WebbyWeb.BrowserChannel do
     {:noreply, socket}
   end
 
+  def handle_info({:tool_call, payload}, socket) do
+    push(
+      socket,
+      "message",
+      BrowserProtocol.envelope("tool.call", payload, browser_id: socket.assigns.browser_id)
+    )
+
+    {:noreply, socket}
+  end
+
+  def handle_info({:tool_cancel, payload}, socket) do
+    push(
+      socket,
+      "message",
+      BrowserProtocol.envelope("tool.cancel", payload, browser_id: socket.assigns.browser_id)
+    )
+
+    {:noreply, socket}
+  end
+
   defp dispatch(%{type: "pairing.request", payload: payload, request_id: request_id}, socket) do
     attrs = Map.put(payload, "extension_id", socket.assigns.extension_id)
 
@@ -78,6 +98,8 @@ defmodule WebbyWeb.BrowserChannel do
        ) do
     case Browsers.authenticate(browser_id, payload["challenge_id"], payload["signature"]) do
       {:ok, browser} ->
+        :ok = BrowserConnections.register(browser.id)
+
         response =
           BrowserProtocol.envelope("auth.accepted", %{"browser_id" => browser.id},
             browser_id: browser.id
@@ -88,6 +110,15 @@ defmodule WebbyWeb.BrowserChannel do
       {:error, reason} ->
         {:reply, {:error, %{kind: error_kind(reason)}}, socket}
     end
+  end
+
+  defp dispatch(
+         %{type: type, payload: payload},
+         %{assigns: %{authenticated: true, browser_id: browser_id}} = socket
+       )
+       when type in ["tool.result", "tool.error"] do
+    BrowserConnections.complete(browser_id, Map.put(payload, "type", type))
+    {:reply, {:ok, acknowledgement(type, nil, browser_id)}, socket}
   end
 
   defp dispatch(

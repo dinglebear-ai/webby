@@ -8,7 +8,9 @@ defmodule Webby.MCP.Protocol do
 
   def supported_versions, do: @supported
 
-  def handle(%{"jsonrpc" => "2.0", "method" => "initialize", "id" => id} = request) do
+  def handle(request, context \\ %{})
+
+  def handle(%{"jsonrpc" => "2.0", "method" => "initialize", "id" => id} = request, _context) do
     requested = get_in(request, ["params", "protocolVersion"])
     version = if requested in @supported, do: requested, else: @latest
 
@@ -21,19 +23,22 @@ defmodule Webby.MCP.Protocol do
     })
   end
 
-  def handle(%{"jsonrpc" => "2.0", "method" => "ping", "id" => id}),
+  def handle(%{"jsonrpc" => "2.0", "method" => "ping", "id" => id}, _context),
     do: response(id, %{})
 
-  def handle(%{"jsonrpc" => "2.0", "method" => "tools/list", "id" => id}),
+  def handle(%{"jsonrpc" => "2.0", "method" => "tools/list", "id" => id}, _context),
     do: response(id, %{"resultType" => "complete", "tools" => [Broker.tool()]})
 
-  def handle(%{
-        "jsonrpc" => "2.0",
-        "method" => "tools/call",
-        "id" => id,
-        "params" => %{"name" => "webby", "arguments" => arguments}
-      }) do
-    case Broker.call(arguments) do
+  def handle(
+        %{
+          "jsonrpc" => "2.0",
+          "method" => "tools/call",
+          "id" => id,
+          "params" => %{"name" => "webby", "arguments" => arguments}
+        },
+        context
+      ) do
+    case Broker.call(arguments, Map.put(context, :request_id, id)) do
       {:ok, value} ->
         response(id, tool_result(value, false))
 
@@ -42,14 +47,27 @@ defmodule Webby.MCP.Protocol do
     end
   end
 
-  def handle(%{"jsonrpc" => "2.0", "method" => "notifications/initialized"}),
+  def handle(%{"jsonrpc" => "2.0", "method" => "notifications/initialized"}, _context),
     do: :accepted
 
-  def handle(%{"jsonrpc" => "2.0", "method" => method, "id" => id}) when is_binary(method),
-    do: error(id, -32_601, "Method not found")
+  def handle(
+        %{
+          "jsonrpc" => "2.0",
+          "method" => "notifications/cancelled",
+          "params" => %{"requestId" => id}
+        },
+        context
+      ) do
+    Webby.BrowserConnections.cancel({context[:credential_id], id})
+    :accepted
+  end
 
-  def handle(%{"jsonrpc" => "2.0", "method" => _method}), do: :accepted
-  def handle(_request), do: error(nil, -32_600, "Invalid Request")
+  def handle(%{"jsonrpc" => "2.0", "method" => method, "id" => id}, _context)
+      when is_binary(method),
+      do: error(id, -32_601, "Method not found")
+
+  def handle(%{"jsonrpc" => "2.0", "method" => _method}, _context), do: :accepted
+  def handle(_request, _context), do: error(nil, -32_600, "Invalid Request")
 
   defp tool_result(value, error?) do
     %{

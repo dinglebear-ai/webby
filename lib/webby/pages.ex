@@ -36,6 +36,37 @@ defmodule Webby.Pages do
     )
   end
 
+  def select_session(registration, params) do
+    sessions = sessions_for(registration.id)
+
+    cond do
+      is_binary(params["session"]) ->
+        case Enum.find(sessions, &(&1.id == params["session"])) do
+          nil -> {:error, "page_offline", "The requested document session is not active"}
+          session -> {:ok, session}
+        end
+
+      registration.preferred_browser_id ->
+        select_recent(
+          Enum.filter(sessions, &(&1.browser_id == registration.preferred_browser_id))
+        )
+
+      sessions == [] ->
+        {:error, "page_offline", "No active document session is available"}
+
+      sessions |> Enum.map(& &1.browser_id) |> Enum.uniq() |> length() > 1 ->
+        {:error, "ambiguous_page_session", "Select a session to avoid crossing browser profiles"}
+
+      true ->
+        {:ok, hd(sessions)}
+    end
+  end
+
+  defp select_recent([]),
+    do: {:error, "page_offline", "The preferred browser has no active session"}
+
+  defp select_recent([session | _]), do: {:ok, session}
+
   def register_discovery(id) do
     case Repo.get(Discovery, id) do
       %Discovery{state: "discovered"} = discovery ->

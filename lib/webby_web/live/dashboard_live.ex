@@ -45,8 +45,12 @@ defmodule WebbyWeb.DashboardLive do
       {:noreply,
        resolve_page(socket, Webby.Pages.register_discovery(id), "Page registration created")}
 
-  def handle_event("create-mcp-credential", _params, socket) do
-    case Credentials.create("Local MCP client") do
+  def handle_event("create-mcp-credential", params, socket) do
+    call? = params["scope"] == "call"
+    scopes = if call?, do: ["read", "call"], else: ["read"]
+    name = if call?, do: "Local MCP call client", else: "Local MCP read client"
+
+    case Credentials.create(name, scopes) do
       {:ok, _credential, token} ->
         {:noreply, socket |> assign(:credential_token, token) |> assign_credentials()}
 
@@ -110,6 +114,11 @@ defmodule WebbyWeb.DashboardLive do
             phx-click="create-mcp-credential"
             class="rounded-lg bg-cyan-700 px-3 py-2 text-sm font-medium text-white"
           >Create read credential</button>
+          <button
+            phx-click="create-mcp-credential"
+            phx-value-scope="call"
+            class="ml-2 rounded-lg bg-rose-700 px-3 py-2 text-sm font-medium text-white"
+          >Create call credential</button>
           <div
             :if={@credential_token}
             id="mcp-credential-token"
@@ -126,7 +135,9 @@ defmodule WebbyWeb.DashboardLive do
             <div>
               <p class="text-sm font-medium">{credential.display_name}</p>
               <p class="text-xs text-base-content/60">
-                {if credential.revoked_at, do: "Revoked", else: "Read access"}
+                {if credential.revoked_at,
+                  do: "Revoked",
+                  else: Enum.join(credential.scopes["values"], " + ") <> " access"}
               </p>
             </div>
             <button

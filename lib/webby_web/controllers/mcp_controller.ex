@@ -7,9 +7,9 @@ defmodule WebbyWeb.MCPController do
     with :ok <- valid_origin(conn),
          :ok <- valid_accept(conn),
          {:ok, credential} <- authenticate(conn),
-         true <- Credentials.scope?(credential, "read"),
+         true <- Credentials.scope?(credential, required_scope(request)),
          :ok <- valid_version(conn, request) do
-      dispatch(conn, Protocol.handle(request))
+      dispatch(conn, Protocol.handle(request, %{credential_id: credential.id}))
     else
       {:error, :invalid_origin} ->
         json_error(conn, 403, "invalid_origin")
@@ -108,4 +108,17 @@ defmodule WebbyWeb.MCPController do
     body = %{"jsonrpc" => "2.0", "id" => nil, "error" => %{"code" => -32_000, "message" => kind}}
     conn |> put_status(status) |> json(body)
   end
+
+  defp required_scope(%{
+         "method" => "tools/call",
+         "params" => %{
+           "name" => "webby",
+           "arguments" => %{"action" => "page.call"}
+         }
+       }),
+       do: "call"
+
+  defp required_scope(%{"method" => "notifications/cancelled"}), do: "call"
+
+  defp required_scope(_request), do: "read"
 end

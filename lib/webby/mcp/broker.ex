@@ -1,9 +1,9 @@
 defmodule Webby.MCP.Broker do
-  @moduledoc "Read-only actions exposed through Webby's stable broker tool."
+  @moduledoc "Actions exposed through Webby's stable broker tool."
 
   alias Webby.{Browsers, Discovery, Pages}
 
-  @actions ~w(status browser.list discovery.list discovery.get page.list page.get page.tools)
+  @actions ~w(status browser.list discovery.list discovery.get page.list page.get page.tools page.call)
 
   def tool do
     %{
@@ -23,44 +23,69 @@ defmodule Webby.MCP.Broker do
     }
   end
 
-  def call(%{"action" => action} = arguments) when action in @actions do
-    dispatch(action, Map.get(arguments, "params", %{}))
+  def call(arguments, context \\ %{})
+
+  def call(%{"action" => action} = arguments, context) when action in @actions do
+    dispatch(action, Map.get(arguments, "params", %{}), context)
   end
 
-  def call(_arguments), do: {:error, "invalid_arguments", "A supported read action is required"}
+  def call(_arguments, _context),
+    do: {:error, "invalid_arguments", "A supported action is required"}
 
-  defp dispatch("status", _params) do
+  defp dispatch("status", _params, _context) do
     {_result, snapshot} = Webby.RuntimeStatus.snapshot()
     {:ok, snapshot}
   end
 
-  defp dispatch("browser.list", _params) do
+  defp dispatch("browser.list", _params, _context) do
     {:ok, Enum.map(Browsers.list_browsers(), &browser_view/1)}
   end
 
-  defp dispatch("discovery.list", _params) do
+  defp dispatch("discovery.list", _params, _context) do
     {:ok, Enum.map(Discovery.list_discoveries(), &discovery_view/1)}
   end
 
-  defp dispatch("discovery.get", %{"id" => id}) do
+  defp dispatch("discovery.get", %{"id" => id}, _context) do
     case Discovery.get_discovery(id) do
       nil -> {:error, "not_found", "Discovery not found"}
       discovery -> {:ok, discovery_view(discovery)}
     end
   end
 
-  defp dispatch("page.list", _params) do
+  defp dispatch("page.list", _params, _context) do
     {:ok, Enum.map(Pages.list_registrations(), &registration_view/1)}
   end
 
-  defp dispatch(action, %{"page" => identifier}) when action in ["page.get", "page.tools"] do
+  defp dispatch(action, %{"page" => identifier}, _context)
+       when action in ["page.get", "page.tools"] do
     case Pages.get_registration(identifier) do
       nil -> {:error, "not_found", "Page registration not found"}
       registration -> page_result(action, registration)
     end
   end
 
-  defp dispatch(_action, _params),
+  defp dispatch(
+         "page.call",
+         %{"page" => identifier, "tool" => tool_name, "catalog_revision" => revision} = params,
+         context
+       )
+       when is_binary(identifier) and is_binary(tool_name) and is_integer(revision) do
+    arguments = Map.get(params, "arguments", %{})
+
+    with :ok <- validate_arguments(arguments),
+         registration when not is_nil(registration) <- Pages.get_registration(identifier),
+         :ok <- validate_enabled(registration),
+         {:ok, session} <- Pages.select_session(registration, params),
+         :ok <- validate_revision(session, revision),
+         :ok <- validate_tool(session, tool_name) do
+      Webby.Invocations.call(registration, session, tool_name, arguments, context)
+    else
+      nil -> {:error, "not_found", "Page registration not found"}
+      {:error, _kind, _message} = error -> error
+    end
+  end
+
+  defp dispatch(_action, _params, _context),
     do: {:error, "invalid_arguments", "Required parameters are missing"}
 
   defp page_result("page.get", registration) do
@@ -133,4 +158,29 @@ defmodule Webby.MCP.Broker do
 
   defp iso8601(nil), do: nil
   defp iso8601(value), do: DateTime.to_iso8601(value)
+
+  defp encoded_size(value), do: value |> Jason.encode!() |> byte_size()
+
+  defp validate_arguments(arguments) do
+    if is_map(arguments) and encoded_size(arguments) <= 65_536,
+      do: :ok,
+      else:
+        {:error, "invalid_arguments", "Tool arguments must be an object no larger than 64 KiB"}
+  end
+
+  defp validate_enabled(%{enabled: true}), do: :ok
+
+  defp validate_enabled(_registration),
+    do: {:error, "page_disabled", "The page registration is disabled"}
+
+  defp validate_revision(%{catalog_revision: revision}, revision), do: :ok
+
+  defp validate_revision(_session, _revision),
+    do: {:error, "stale_catalog", "Refresh page.tools before invoking this tool"}
+
+  defp validate_tool(session, tool_name) do
+    if Enum.any?(session.catalog_summary["tools"] || [], &(&1["name"] == tool_name)),
+      do: :ok,
+      else: {:error, "tool_not_found", "The tool is absent from the selected catalog"}
+  end
 end
