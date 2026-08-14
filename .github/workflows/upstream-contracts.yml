@@ -1,0 +1,118 @@
+name: Upstream contracts
+
+# Webby implements against specifications that move independently of this repo:
+# the WebMCP spec, its per-browser rollout status, and the MCP protocol
+# revisions. This job notices when they move.
+#
+# Drift is not a build failure -- upstream changing is expected and is not
+# caused by any commit here. Findings are collected into a single rolling
+# issue so the signal stays in one place instead of turning the schedule red.
+
+on:
+  schedule:
+    # Mondays, 13:00 UTC.
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: upstream-contracts
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  ELIXIR_VERSION: "1.20.3"
+  OTP_VERSION: "29.0.5"
+  ISSUE_LABEL: upstream-drift
+  ISSUE_TITLE: "Upstream contract drift"
+
+jobs:
+  check:
+    name: Check pinned specifications
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+
+      - run: mix deps.get
+
+      - name: Check upstream contracts
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          status=0
+          mix webby.contracts.check --format markdown | tee report.md || status=$?
+
+          # Exit 2 means an upstream could not be reached. That is an unknown,
+          # not a clean result, so fail loudly rather than reporting "no drift".
+          if [ "$status" -eq 2 ]; then
+            echo "::error::One or more upstream contracts could not be reached."
+            exit 1
+          fi
+
+          if grep -q '^## ' report.md; then
+            echo "drift=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ensure drift label exists
+        if: steps.check.outputs.drift == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "$ISSUE_LABEL" \
+            --description "An upstream specification Webby pins has moved" \
+            --color FBCA04 2>/dev/null || true
+
+      - name: Open or update the tracking issue
+        if: steps.check.outputs.drift == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "One or more upstream specifications have moved since \`priv/contracts/upstream.lock.json\` was last reviewed."
+            echo
+            cat report.md
+            echo
+            echo "---"
+            echo
+            echo "**To resolve:** review each change above against the listed Webby surfaces, then run \`mix webby.contracts.check --update\` and commit the refreshed lock file in the same PR as any code change it prompts. Re-pinning without reviewing defeats the check."
+            echo
+            echo "_Detected by [\`upstream-contracts\`]($RUN_URL) on $(date -u +%Y-%m-%d)._"
+          } > issue.md
+
+          existing=$(gh issue list --label "$ISSUE_LABEL" --state open \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file issue.md
+            echo "Commented on existing issue #$existing"
+          else
+            gh issue create --title "$ISSUE_TITLE" --label "$ISSUE_LABEL" \
+              --body-file issue.md
+          fi
+
+      - name: Report clean run
+        if: steps.check.outputs.drift == 'false'
+        run: echo "All upstream contracts match their pinned state."

@@ -1,0 +1,52 @@
+{
+  "$comment": "Pinned state of the external contracts Webby implements against (design spec section 21). Reviewed and updated via `mix webby.contracts.check --update`; never hand-edit the observed fields.",
+  "updated_at": "2026-08-14",
+  "contracts": {
+    "webmcp-spec": {
+      "kind": "github_file",
+      "repo": "webmachinelearning/webmcp",
+      "path": "index.bs",
+      "blob_sha": "4274a31c854246f6a9d3b6bf2f87c7bacbe132d0",
+      "why": "Normative WebMCP spec. Defines `Document.modelContext`, `getTools(options)`, and the `RegisteredTool` / `ToolAnnotations` dictionaries that the extension probe reads. There are no upstream releases or tags, so the spec source is tracked by content.",
+      "webby_surfaces": [
+        "extension/src/probe.js",
+        "extension/src/service_worker.js",
+        "lib/webby/schema_metadata.ex"
+      ]
+    },
+    "webmcp-implementation-status": {
+      "kind": "github_file",
+      "repo": "webmachinelearning/webmcp",
+      "path": "implementation-status.md",
+      "blob_sha": "652e1403c010d99ee798602cb9fd1e8d8b2b6a6d",
+      "why": "Per-browser rollout status. Webby feature-detects rather than emulating, so a browser moving from origin trial to stable (or changing its API shape) changes what Webby can actually reach.",
+      "webby_surfaces": ["extension/src/probe.js", "extension/README.md"]
+    },
+    "webmcp-declarative-explainer": {
+      "kind": "github_file",
+      "repo": "webmachinelearning/webmcp",
+      "path": "declarative-api-explainer.md",
+      "blob_sha": "edefb1cd424dcd50e71d90d29716133b16d7f201",
+      "why": "Proposed declarative authoring surface. Not implemented by Webby today; tracked so that a page-authoring path landing upstream is noticed rather than missed.",
+      "webby_surfaces": []
+    },
+    "webmcp-types": {
+      "kind": "npm_package",
+      "package": "webmcp-types",
+      "version": "0.1.3",
+      "why": "Published TypeScript definitions for the WebMCP surface. The cheapest signal that the tool descriptor shape changed, and a candidate to type-check the extension probe against.",
+      "webby_surfaces": ["extension/src/probe.js"]
+    },
+    "mcp-spec": {
+      "kind": "github_tags",
+      "repo": "modelcontextprotocol/modelcontextprotocol",
+      "latest_tag": "2026-07-28",
+      "why": "MCP protocol revisions, released as date tags. Webby advertises a supported set in `Webby.MCP.Protocol`; a new tag upstream means a revision Webby has not yet considered.",
+      "webby_surfaces": [
+        "lib/webby/mcp/protocol.ex",
+        "lib/webby/runtime_discovery.ex",
+        "lib/webby_web/controllers/mcp_controller.ex"
+      ]
+    }
+  }
+}
