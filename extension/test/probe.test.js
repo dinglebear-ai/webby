@@ -29,7 +29,7 @@ test("parses the stringified inputSchema the specification returns", async () =>
   await withModelContext({getTools: async () => [tool({inputSchema: "{\"type\":\"object\"}"})]}, async () => {
     assert.deepEqual(await probeWebMcp(), {
       supported: true,
-      tools: [{name: "search", description: "Search", input_schema: {type: "object"}}]
+      tools: [{name: "search", description: "Search", input_schema: {type: "object"}, annotations: {read_only_hint: false, untrusted_content_hint: false}}]
     });
   });
 });
@@ -44,7 +44,7 @@ test("defaults a missing schema and description instead of forwarding undefined"
   await withModelContext({getTools: async () => [tool({description: 42})]}, async () => {
     assert.deepEqual(await probeWebMcp(), {
       supported: true,
-      tools: [{name: "search", description: "", input_schema: {}}]
+      tools: [{name: "search", description: "", input_schema: {}, annotations: {read_only_hint: false, untrusted_content_hint: false}}]
     });
   });
 });
@@ -84,7 +84,32 @@ test("tolerates a browser shipping the snake_case schema field", async () => {
   await withModelContext({getTools: async () => [tool({input_schema: {type: "object"}})]}, async () => {
     assert.deepEqual(await probeWebMcp(), {
       supported: true,
-      tools: [{name: "search", description: "Search", input_schema: {type: "object"}}]
+      tools: [{name: "search", description: "Search", input_schema: {type: "object"}, annotations: {read_only_hint: false, untrusted_content_hint: false}}]
     });
+  });
+});
+
+test("carries tool annotations rather than dropping the safety hints", async () => {
+  const annotated = tool({annotations: {readOnlyHint: true, untrustedContentHint: true}});
+
+  await withModelContext({getTools: async () => [annotated]}, async () => {
+    const {tools: [observed]} = await probeWebMcp();
+    assert.deepEqual(observed.annotations, {read_only_hint: true, untrusted_content_hint: true});
+  });
+});
+
+test("defaults both hints to false, per the specification", async () => {
+  await withModelContext({getTools: async () => [tool({})]}, async () => {
+    const {tools: [observed]} = await probeWebMcp();
+    assert.deepEqual(observed.annotations, {read_only_hint: false, untrusted_content_hint: false});
+  });
+});
+
+test("treats a non-boolean hint as unset rather than truthy", async () => {
+  const shady = tool({annotations: {readOnlyHint: "yes", untrustedContentHint: 0}});
+
+  await withModelContext({getTools: async () => [shady]}, async () => {
+    const {tools: [observed]} = await probeWebMcp();
+    assert.deepEqual(observed.annotations, {read_only_hint: false, untrusted_content_hint: false});
   });
 });

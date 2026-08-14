@@ -13,7 +13,7 @@ test("sanitizes query, fragment, credentials, and controls before transport", ()
 });
 
 test("normalizes the draft getTools catalog without executable callbacks", () => {
-  assert.deepEqual(normalizeTools([{name: "search", description: "Search", inputSchema: "{\"type\":\"object\"}", execute() {}}]), [{name: "search", description: "Search", input_schema: {type: "object"}}]);
+  assert.deepEqual(normalizeTools([{name: "search", description: "Search", inputSchema: "{\"type\":\"object\"}", execute() {}}]), [{name: "search", description: "Search", input_schema: {type: "object"}, annotations: {read_only_hint: false, untrusted_content_hint: false}}]);
 });
 
 test("binds observations to Chrome's document identity", () => {
@@ -25,7 +25,7 @@ test("binds observations to Chrome's document identity", () => {
     {
       url: "https://example.com/tools",
       title: "Tools",
-      tools: [{name: "lookup", description: "", input_schema: {}}],
+      tools: [{name: "lookup", description: "", input_schema: {}, annotations: {read_only_hint: false, untrusted_content_hint: false}}],
       tab_id: 12,
       document_id: "document-12"
     }

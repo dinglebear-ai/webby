@@ -38,10 +38,20 @@ export async function probeWebMcp() {
       if (typeof inputSchema === "string") {
         try { inputSchema = JSON.parse(inputSchema); } catch { return []; }
       }
+      // Annotations are carried, not interpreted. `untrustedContentHint` in
+      // particular is the page telling us its tool returns content from
+      // sources it does not vouch for -- an MCP client cannot weigh that if
+      // the bridge silently drops it. Both spellings are accepted so this
+      // stays idempotent under scanning.js normalizeTools.
+      const annotations = tool.annotations ?? {};
       return [{
         name: tool.name,
         description: typeof tool.description === "string" ? tool.description : "",
-        input_schema: inputSchema
+        input_schema: inputSchema,
+        annotations: {
+          read_only_hint: (annotations.readOnlyHint ?? /** @type {Record<string, unknown>} */ (annotations).read_only_hint) === true,
+          untrusted_content_hint: (annotations.untrustedContentHint ?? /** @type {Record<string, unknown>} */ (annotations).untrusted_content_hint) === true
+        }
       }];
     });
     return {supported: true, tools: summary};
@@ -95,10 +105,15 @@ export async function invokeWebMcp(toolName, input, callId, expectedCatalog) {
     if (typeof schema === "string") {
       try { schema = JSON.parse(schema); } catch { return []; }
     }
+    const annotations = tool.annotations ?? {};
     return [{
       name: tool.name,
       description: typeof tool.description === "string" ? tool.description.slice(0, 1000) : "",
-      input_schema: schema
+      input_schema: schema,
+      annotations: {
+        read_only_hint: (annotations.readOnlyHint ?? /** @type {Record<string, unknown>} */ (annotations).read_only_hint) === true,
+        untrusted_content_hint: (annotations.untrustedContentHint ?? /** @type {Record<string, unknown>} */ (annotations).untrusted_content_hint) === true
+      }
     }];
   }).sort((left, right) => left.name.localeCompare(right.name));
 

@@ -85,4 +85,113 @@ defmodule Webby.DiscoveryTest do
     assert {:error, :catalog_too_large} =
              Discovery.observe(browser.id, Map.put(base, "tools", node_tools))
   end
+
+  describe "tool annotations" do
+    defp observation_with(tools) do
+      %{
+        "url" => "https://example.com/tools",
+        "title" => "Tools",
+        "tools" => tools
+      }
+    end
+
+    test "carries the safety hints through to the stored catalog", %{browser: browser} do
+      tools = [
+        %{
+          "name" => "read_page",
+          "description" => "Read",
+          "input_schema" => %{},
+          "annotations" => %{"read_only_hint" => true, "untrusted_content_hint" => true}
+        }
+      ]
+
+      assert {:ok, discovery} = Discovery.observe(browser.id, observation_with(tools))
+
+      assert [%{"annotations" => annotations}] = discovery.catalog_summary["tools"]
+
+      assert annotations == %{
+               "read_only_hint" => true,
+               "untrusted_content_hint" => true
+             }
+    end
+
+    test "accepts the specification's camelCase spelling", %{browser: browser} do
+      tools = [
+        %{
+          "name" => "read_page",
+          "description" => "Read",
+          "input_schema" => %{},
+          "annotations" => %{"untrustedContentHint" => true}
+        }
+      ]
+
+      assert {:ok, discovery} = Discovery.observe(browser.id, observation_with(tools))
+      assert [%{"annotations" => annotations}] = discovery.catalog_summary["tools"]
+      assert annotations["untrusted_content_hint"] == true
+      assert annotations["read_only_hint"] == false
+    end
+
+    test "defaults both hints to false when a page omits them", %{browser: browser} do
+      tools = [%{"name" => "read_page", "description" => "Read", "input_schema" => %{}}]
+
+      assert {:ok, discovery} = Discovery.observe(browser.id, observation_with(tools))
+
+      assert [%{"annotations" => annotations}] = discovery.catalog_summary["tools"]
+
+      assert annotations == %{
+               "read_only_hint" => false,
+               "untrusted_content_hint" => false
+             }
+    end
+
+    test "records a non-boolean hint as false rather than truthy", %{browser: browser} do
+      tools = [
+        %{
+          "name" => "read_page",
+          "description" => "Read",
+          "input_schema" => %{},
+          "annotations" => %{"read_only_hint" => "yes", "untrusted_content_hint" => 1}
+        }
+      ]
+
+      assert {:ok, discovery} = Discovery.observe(browser.id, observation_with(tools))
+
+      assert [%{"annotations" => annotations}] = discovery.catalog_summary["tools"]
+
+      assert annotations == %{
+               "read_only_hint" => false,
+               "untrusted_content_hint" => false
+             }
+    end
+
+    test "refuses extra keys a page tries to smuggle into the catalog", %{browser: browser} do
+      tools = [
+        %{
+          "name" => "read_page",
+          "description" => "Read",
+          "input_schema" => %{},
+          "annotations" => %{"read_only_hint" => true, "evil" => "payload"}
+        }
+      ]
+
+      assert {:ok, discovery} = Discovery.observe(browser.id, observation_with(tools))
+      assert [%{"annotations" => annotations}] = discovery.catalog_summary["tools"]
+      assert Map.keys(annotations) |> Enum.sort() == ["read_only_hint", "untrusted_content_hint"]
+    end
+
+    test "ignores an annotations value that is not a map", %{browser: browser} do
+      tools = [
+        %{
+          "name" => "read_page",
+          "description" => "Read",
+          "input_schema" => %{},
+          "annotations" => "read_only"
+        }
+      ]
+
+      assert {:ok, discovery} = Discovery.observe(browser.id, observation_with(tools))
+      assert [%{"annotations" => annotations}] = discovery.catalog_summary["tools"]
+      assert annotations["read_only_hint"] == false
+    end
+  end
 end

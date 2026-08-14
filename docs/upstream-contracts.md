@@ -99,14 +99,43 @@ trial. That fallback reads through an explicitly loosened view so it cannot
 stand in for the specified field — rename `inputSchema` upstream and the check
 still fails.
 
+## Where the spec is ahead of Webby
+
+`executeTool()` — the API the invocation path depends on — **is not specified**.
+The upstream README still reads *"TODO: Spec and describe the
+`modelContext.getTools()` and `modelContext.executeTool()` APIs"*, and
+[webmachinelearning/webmcp#51](https://github.com/webmachinelearning/webmcp/issues/51),
+which defines how an agent invokes a site's declared tools, has been open since
+2025-11-03. `getTools()` was specced in #223; its sibling was not.
+
+Webby feature-detects it and reports `webmcp_unavailable` rather than
+simulating invocation, which is what §21 requires. When upstream specs it,
+`webmcp-types` will publish a signature and the contract check will report the
+version bump — that is the moment to replace the narrow escape hatch in
+`invokeWebMcp`.
+
+## A constraint worth knowing before editing the probe
+
+Every exported function in `extension/src/probe.js` is passed as `func:` to
+`chrome.scripting.executeScript`, which **serializes the function and loses its
+execution context**. A module-scope helper is not defined in the page, so
+calling one throws `ReferenceError` — and inside `probeWebMcp`'s `try/catch`
+that becomes `supported: false` on every page, i.e. silent total failure of
+discovery with a green test suite.
+
+So those functions must be self-contained, and the duplication between them is
+forced rather than accidental. `extension/test/injection.test.js` rebuilds each
+one from source the way Chrome does and pins the two normalization paths to the
+same answer. Do not "clean up" that duplication by extracting a helper.
+
 ## Known gaps
 
-- The probe drops `RegisteredTool.annotations`, including
-  `untrustedContentHint`, which is security-relevant for a bridge handing
-  page-authored tools to MCP clients. Capturing it needs a server-side schema
-  change, so it is tracked as work rather than fixed here. It also drops
-  `title` and `origin`, and calls `getTools()` without `fromOrigins`.
-- Only `probe.js` is type-checked. `service_worker.js` uses `chrome.*` APIs and
-  would need `@types/chrome` to join.
+- Only `probe.js` is type-checked. Extending the check to the rest of the
+  extension needs `@types/chrome` and annotations across `channel.js`,
+  `scanning.js`, `permissions.js`, and `service_worker.js` — 112 errors under
+  `strict` at last count, so it is a project rather than a follow-up.
+- The probe still drops `RegisteredTool.title` and `origin`, and calls
+  `getTools()` without `fromOrigins`. None carries a safety signal, unlike
+  `annotations`, which is now carried through.
 - Chrome and Edge origin-trial expiry is only visible through
   `implementation-status.md`; there is no direct Chrome Status check.
