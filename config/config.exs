@@ -72,12 +72,15 @@ config :logger, :default_formatter,
     :session_id,
     :session_count,
     :catalog_revision,
+    :call_id,
     :replaced_count,
     :observation_count,
     :publication_id,
     :path,
     :reason,
-    :timeout_ms
+    :timeout_ms,
+    :outcome,
+    :duration_ms
   ]
 
 # Use Jason for JSON parsing in Phoenix

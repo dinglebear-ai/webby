@@ -2,7 +2,7 @@ defmodule Webby.BrowserProtocol do
   @moduledoc "Transport-neutral validation for Webby Browser Protocol version 1."
 
   @version 1
-  @types ~w(pairing.request pairing.status auth.respond browser.hello browser.resync browser.settings discovery.observed session.closed heartbeat)
+  @types ~w(pairing.request pairing.status auth.respond browser.hello browser.resync browser.settings discovery.observed session.closed heartbeat tool.result tool.error)
 
   def version, do: @version
 
@@ -109,6 +109,23 @@ defmodule Webby.BrowserProtocol do
   defp validate_payload("session.closed", _payload),
     do: {:error, error("invalid_payload", %{"type" => "session.closed"})}
 
+  defp validate_payload("tool.result", %{"call_id" => call_id, "result" => result}) do
+    if valid_call_id?(call_id) and encoded_size(result) <= 131_072 and bounded_json?(result),
+      do: :ok,
+      else: {:error, error("invalid_payload", %{"type" => "tool.result"})}
+  end
+
+  defp validate_payload("tool.error", %{"call_id" => call_id, "error" => error})
+       when is_map(error) do
+    if valid_call_id?(call_id) and match?(:ok, required_string(error, "kind", 80)) and
+         encoded_size(error) <= 4_096,
+       do: :ok,
+       else: {:error, error("invalid_payload", %{"type" => "tool.error"})}
+  end
+
+  defp validate_payload(type, _payload) when type in ["tool.result", "tool.error"],
+    do: {:error, error("invalid_payload", %{"type" => type})}
+
   defp validate_payload(_type, _payload), do: :ok
 
   defp valid_observation?(%{"url" => url, "tools" => tools} = observation)
@@ -149,4 +166,21 @@ defmodule Webby.BrowserProtocol do
 
   defp validate_optional_string(_value, _max_length),
     do: {:error, error("invalid_envelope")}
+
+  defp valid_call_id?(value), do: is_binary(value) and byte_size(value) in 1..128
+  defp encoded_size(value), do: value |> Jason.encode!() |> byte_size()
+
+  defp bounded_json?(value), do: bounded_json?(value, 0)
+  defp bounded_json?(_value, depth) when depth > 32, do: false
+
+  defp bounded_json?(value, _depth)
+       when is_binary(value) or is_number(value) or is_boolean(value) or is_nil(value), do: true
+
+  defp bounded_json?(value, depth) when is_list(value),
+    do: Enum.all?(value, &bounded_json?(&1, depth + 1))
+
+  defp bounded_json?(value, depth) when is_map(value),
+    do: Enum.all?(value, fn {key, item} -> is_binary(key) and bounded_json?(item, depth + 1) end)
+
+  defp bounded_json?(_value, _depth), do: false
 end

@@ -71,4 +71,27 @@ defmodule Webby.BrowserProtocolTest do
                "payload" => %{"tab_id" => 7, "document_id" => "document-1"}
              })
   end
+
+  test "bounds browser tool results and requires stable error kinds" do
+    assert {:ok, %{type: "tool.result"}} =
+             BrowserProtocol.validate(%{
+               "protocol_version" => 1,
+               "type" => "tool.result",
+               "payload" => %{"call_id" => "call-1", "result" => %{"answer" => 42}}
+             })
+
+    assert {:error, %{"kind" => "invalid_payload"}} =
+             BrowserProtocol.validate(%{
+               "protocol_version" => 1,
+               "type" => "tool.result",
+               "payload" => %{"call_id" => "call-1", "result" => String.duplicate("x", 131_073)}
+             })
+
+    assert {:error, %{"kind" => "invalid_payload"}} =
+             BrowserProtocol.validate(%{
+               "protocol_version" => 1,
+               "type" => "tool.error",
+               "payload" => %{"call_id" => "call-1", "error" => %{}}
+             })
+  end
 end

@@ -35,7 +35,7 @@ defmodule WebbyWeb.MCPControllerTest do
     assert [%{"name" => "webby", "inputSchema" => schema}] = tools["result"]["tools"]
     assert tools["result"]["resultType"] == "complete"
     assert "page.tools" in schema["properties"]["action"]["enum"]
-    refute "page.call" in schema["properties"]["action"]["enum"]
+    assert "page.call" in schema["properties"]["action"]["enum"]
   end
 
   test "calls a read-only broker action with structured content", %{conn: conn, token: token} do
@@ -52,6 +52,34 @@ defmodule WebbyWeb.MCPControllerTest do
 
     assert response["result"]["isError"] == false
     assert response["result"]["structuredContent"] == []
+  end
+
+  test "requires an explicit call scope for page invocation", %{conn: conn, token: token} do
+    request = %{
+      "jsonrpc" => "2.0",
+      "id" => 9,
+      "method" => "tools/call",
+      "params" => %{
+        "name" => "webby",
+        "arguments" => %{
+          "action" => "page.call",
+          "params" => %{"page" => "example", "tool" => "find", "catalog_revision" => 1}
+        }
+      }
+    }
+
+    assert conn |> mcp_headers(token, "2025-06-18") |> post("/mcp", request) |> response(403)
+
+    {:ok, _credential, call_token} = Credentials.create("Call client", ["read", "call"])
+
+    response =
+      build_conn()
+      |> mcp_headers(call_token, "2025-06-18")
+      |> post("/mcp", request)
+      |> json_response(200)
+
+    assert response["result"]["isError"]
+    assert response["result"]["structuredContent"]["kind"] == "not_found"
   end
 
   test "accepts current stateless metadata when body and header versions agree", %{
