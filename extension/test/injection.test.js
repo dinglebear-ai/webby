@@ -32,7 +32,7 @@ test("the injected probe reads a catalog without its module scope", async () => 
   await withModelContext({getTools: async () => [tool({})]}, async () => {
     assert.deepEqual(await injected(), {
       supported: true,
-      tools: [{name: "search", description: "Search", input_schema: {}}]
+      tools: [{name: "search", description: "Search", input_schema: {}, annotations: {read_only_hint: false, untrusted_content_hint: false}}]
     });
   });
 });
@@ -64,7 +64,13 @@ const catalogs = {
   "over-long name": [tool({name: "a".repeat(200)}), tool({name: "ok"})],
   "more than the cap": Array.from({length: 80}, (_v, i) => tool({name: `tool-${String(i).padStart(3, "0")}`})),
   "object schema": [tool({name: "alpha", inputSchema: {type: "object"}})],
-  "snake_case schema": [{name: "alpha", description: "d", input_schema: {type: "object"}}]
+  "snake_case schema": [{name: "alpha", description: "d", input_schema: {type: "object"}}],
+  "annotated tools": [
+    tool({name: "alpha", annotations: {readOnlyHint: true}}),
+    tool({name: "beta", annotations: {untrustedContentHint: true}}),
+    tool({name: "gamma", annotations: {readOnlyHint: true, untrustedContentHint: true}})
+  ],
+  "unannotated tools": [tool({name: "alpha", annotations: undefined})]
 };
 
 for (const [label, raw] of Object.entries(catalogs)) {

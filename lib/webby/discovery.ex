@@ -219,7 +219,8 @@ defmodule Webby.Discovery do
          "name" => sanitize_string(name, 128),
          "description" =>
            sanitize_string(Map.get(tool, "description", ""), @max_description_bytes),
-         "input_schema" => schema
+         "input_schema" => schema,
+         "annotations" => sanitize_annotations(Map.get(tool, "annotations"))
        }}
     else
       {:error, :catalog_too_large}
@@ -227,6 +228,28 @@ defmodule Webby.Discovery do
   end
 
   defp sanitize_tool(_tool), do: {:error, :invalid_catalog}
+
+  # WebMCP `ToolAnnotations`, carried through so an MCP client can weigh them.
+  # `untrustedContentHint` is the page declaring that a tool returns content it
+  # does not vouch for; dropping it would quietly strip a safety signal.
+  #
+  # These arrive from a web page and are never trusted: anything that is not
+  # literally `true` is recorded as `false`, and the shape is fixed so that a
+  # page cannot smuggle extra keys into a stored catalog.
+  defp sanitize_annotations(annotations) when is_map(annotations) do
+    %{
+      "read_only_hint" => hint(annotations, "read_only_hint", "readOnlyHint"),
+      "untrusted_content_hint" =>
+        hint(annotations, "untrusted_content_hint", "untrustedContentHint")
+    }
+  end
+
+  defp sanitize_annotations(_annotations),
+    do: %{"read_only_hint" => false, "untrusted_content_hint" => false}
+
+  defp hint(annotations, key, spec_key) do
+    Map.get(annotations, key, Map.get(annotations, spec_key)) == true
+  end
 
   defp json_size(value) do
     case Jason.encode(value) do

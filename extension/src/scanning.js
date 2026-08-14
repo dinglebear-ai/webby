@@ -30,10 +30,15 @@ export function normalizeTools(tools) {
     if (typeof inputSchema === "string") {
       try { inputSchema = JSON.parse(inputSchema); } catch { return []; }
     }
+    const annotations = tool.annotations ?? {};
     return [{
       name: tool.name,
       description: typeof tool.description === "string" ? tool.description.slice(0, 1000) : "",
-      input_schema: inputSchema
+      input_schema: inputSchema,
+      annotations: {
+        read_only_hint: (annotations.readOnlyHint ?? annotations.read_only_hint) === true,
+        untrusted_content_hint: (annotations.untrustedContentHint ?? annotations.untrusted_content_hint) === true
+      }
     }];
   }).sort((left, right) => left.name.localeCompare(right.name));
 }

@@ -248,9 +248,21 @@ defmodule WebbyWeb.DashboardLive do
             <ul class="mt-3 flex flex-wrap gap-2" aria-label="Discovered tools">
               <li
                 :for={tool <- discovery.catalog_summary["tools"]}
-                class="rounded-full bg-base-200 px-3 py-1 font-mono text-xs"
+                class="flex items-center gap-1.5 rounded-full bg-base-200 px-3 py-1 font-mono text-xs"
               >
                 {tool["name"]}
+                <span
+                  :if={get_in(tool, ["annotations", "untrusted_content_hint"])}
+                  class="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
+                  title="This page declares that the tool returns content from sources it does not vouch for."
+                >
+                  <.icon name="hero-exclamation-triangle" class="size-3" /> untrusted output
+                </span>
+                <span
+                  :if={get_in(tool, ["annotations", "read_only_hint"])}
+                  class="rounded-full bg-base-300 px-1.5 py-0.5 text-[10px] font-medium text-base-content/70"
+                  title="This page declares that the tool only reads data."
+                >read-only</span>
               </li>
             </ul>
             <div class="mt-4 flex gap-2">
