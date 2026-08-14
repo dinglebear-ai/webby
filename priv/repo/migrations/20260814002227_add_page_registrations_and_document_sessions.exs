@@ -21,6 +21,11 @@ defmodule Webby.Repo.Migrations.AddPageRegistrationsAndDocumentSessions do
     end
 
     create unique_index(:page_registrations, [:slug])
+
+    create unique_index(:page_registrations, [:origin, :url_pattern],
+             name: :page_registrations_match_identity
+           )
+
     create index(:page_registrations, [:origin, :enabled])
 
     create table(:document_sessions, primary_key: false) do

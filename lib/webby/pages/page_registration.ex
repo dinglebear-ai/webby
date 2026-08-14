@@ -43,5 +43,6 @@ defmodule Webby.Pages.PageRegistration do
     |> validate_length(:url_pattern, max: 2_048)
     |> validate_inclusion(:exposure_mode, ["broker", "direct"])
     |> unique_constraint(:slug)
+    |> unique_constraint([:origin, :url_pattern], name: :page_registrations_match_identity)
   end
 end

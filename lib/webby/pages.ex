@@ -123,6 +123,21 @@ defmodule Webby.Pages do
     end
   end
 
+  def close_browser_sessions(browser_id, event \\ "page.session.browser_unavailable") do
+    ids =
+      Repo.all(
+        from s in DocumentSession,
+          where: s.browser_id == ^browser_id and s.status == "active",
+          select: s.id
+      )
+
+    case close_sessions(ids) do
+      {:ok, count} = result ->
+        log_closed(browser_id, count, event)
+        result
+    end
+  end
+
   defp path_matches?(pattern, path) do
     if String.ends_with?(pattern, "*") do
       String.starts_with?(path, String.trim_trailing(pattern, "*"))

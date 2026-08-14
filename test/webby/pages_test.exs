@@ -115,4 +115,33 @@ defmodule Webby.PagesTest do
     assert Pages.list_active_sessions() == []
     assert [%{state: "discovered"}] = Discovery.list_discoveries()
   end
+
+  test "revoking a browser closes all of its live sessions", context do
+    assert {:ok, discovery} = Discovery.observe(context.browser.id, context.observation)
+    assert {:ok, _registration} = Pages.register_discovery(discovery.id)
+
+    observed =
+      Map.merge(context.observation, %{"tab_id" => 42, "document_id" => "document-one"})
+
+    assert {:ok, _session} = Discovery.observe(context.browser.id, observed)
+    assert [_active] = Pages.list_active_sessions()
+
+    assert {:ok, _browser} = Webby.Browsers.revoke_browser(context.browser.id)
+    assert Pages.list_active_sessions() == []
+  end
+
+  test "pausing scanning closes all live sessions", context do
+    assert {:ok, discovery} = Discovery.observe(context.browser.id, context.observation)
+    assert {:ok, _registration} = Pages.register_discovery(discovery.id)
+
+    observed =
+      Map.merge(context.observation, %{"tab_id" => 42, "document_id" => "document-one"})
+
+    assert {:ok, _session} = Discovery.observe(context.browser.id, observed)
+
+    assert {:ok, %{scanning_paused: true}} =
+             Webby.Browsers.update_scanning(context.browser.id, "granted_sites", true)
+
+    assert Pages.list_active_sessions() == []
+  end
 end
