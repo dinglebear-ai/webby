@@ -10,7 +10,7 @@ defmodule WebbyWeb.DashboardLiveTest do
     assert html =~ "Local service"
     assert html =~ "SQLite"
     assert html =~ "127.0.0.1:6477"
-    assert html =~ "Extension discovery is active"
+    assert html =~ "Extension discovery and explicit page registration are active"
     assert html =~ "Pairing requests"
     assert html =~ "Paired browsers"
     assert has_element?(view, "[data-status=ok]")
@@ -97,5 +97,34 @@ defmodule WebbyWeb.DashboardLiveTest do
 
     view |> element("#discovery-inbox button", "Ignore") |> render_click()
     refute has_element?(view, "#discovery-inbox", "Search page")
+  end
+
+  test "promotes a discovery from the local UI", %{conn: conn} do
+    {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
+
+    {:ok, pairing} =
+      Webby.Browsers.request_pairing(%{
+        "display_name" => "Registration Chrome",
+        "extension_id" => "gggggggggggggggggggggggggggggggg",
+        "public_key" => Base.url_encode64(public_key, padding: false),
+        "scanning_mode" => "granted_sites"
+      })
+
+    {:ok, browser} = Webby.Browsers.approve_pairing(pairing.id)
+
+    assert {:ok, _discovery} =
+             Webby.Discovery.observe(browser.id, %{
+               "url" => "https://example.com/tools?private=yes",
+               "title" => "Tool page",
+               "tools" => [%{"name" => "lookup", "input_schema" => %{}}]
+             })
+
+    {:ok, view, _html} = live(conn, ~p"/")
+    view |> element("#discovery-inbox button", "Register page") |> render_click()
+
+    refute has_element?(view, "#discovery-inbox", "Tool page")
+    assert has_element?(view, "#page-registrations", "Tool page")
+    assert render(view) =~ "https://example.com/tools"
+    refute render(view) =~ "private=yes"
   end
 end

@@ -2,8 +2,9 @@ defmodule WebbyWeb.BrowserChannel do
   @moduledoc false
   use WebbyWeb, :channel
 
-  alias Webby.{BrowserProtocol, Browsers, Discovery}
+  alias Webby.{BrowserProtocol, Browsers, Discovery, Pages}
   alias Webby.Discovery.Discovery, as: DiscoveryRecord
+  alias Webby.Pages.DocumentSession
   require Logger
 
   @impl true
@@ -89,6 +90,14 @@ defmodule WebbyWeb.BrowserChannel do
     end
   end
 
+  defp dispatch(
+         %{type: "session.closed", payload: payload, request_id: request_id},
+         %{assigns: %{authenticated: true, browser_id: browser_id}} = socket
+       ) do
+    {:ok, _count} = Pages.close(browser_id, payload["tab_id"], payload["document_id"])
+    {:reply, {:ok, acknowledgement("session.closed", request_id, browser_id)}, socket}
+  end
+
   defp dispatch(%{type: "pairing.status", payload: payload, request_id: request_id}, socket) do
     case Browsers.pairing_status(payload["pairing_id"], socket.assigns.extension_id) do
       {:ok, status} ->
@@ -154,7 +163,12 @@ defmodule WebbyWeb.BrowserChannel do
          %{assigns: %{authenticated: true, browser_id: browser_id}} = socket
        )
        when type in ["discovery.observed", "browser.resync"] do
-    case Discovery.observe_many(browser_id, observations) do
+    result =
+      if type == "browser.resync",
+        do: Discovery.resync(browser_id, observations),
+        else: Discovery.observe_many(browser_id, observations)
+
+    case result do
       {:ok, discoveries} ->
         Logger.info("browser discovery observations accepted",
           browser_id: browser_id,
@@ -199,5 +213,11 @@ defmodule WebbyWeb.BrowserChannel do
     )
   end
 
-  defp accepted_count(discoveries), do: Enum.count(discoveries, &match?(%DiscoveryRecord{}, &1))
+  defp accepted_count(observations) do
+    Enum.count(observations, fn
+      %DiscoveryRecord{} -> true
+      %DocumentSession{} -> true
+      _ignored -> false
+    end)
+  end
 end

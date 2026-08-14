@@ -37,3 +37,14 @@ export function normalizeTools(tools) {
     }];
   }).sort((left, right) => left.name.localeCompare(right.name));
 }
+
+export function buildObservation(tab, injectionResult) {
+  const tools = normalizeTools(injectionResult?.result?.tools);
+  if (!injectionResult?.result?.supported || tools.length === 0 || !injectionResult?.documentId) return null;
+  return {
+    ...sanitizePage(tab.url, tab.title),
+    tools,
+    tab_id: tab.id,
+    document_id: injectionResult.documentId
+  };
+}

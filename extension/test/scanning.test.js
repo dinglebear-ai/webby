@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {canScanTab, eligibleUrl, normalizeTools, sanitizePage} from "../src/scanning.js";
+import {buildObservation, canScanTab, eligibleUrl, normalizeTools, sanitizePage} from "../src/scanning.js";
 
 test("excludes internal and incognito tabs and scans only granted origins", async () => {
   assert.equal(eligibleUrl("chrome://settings"), false);
@@ -14,4 +14,36 @@ test("sanitizes query, fragment, credentials, and controls before transport", ()
 
 test("normalizes the draft getTools catalog without executable callbacks", () => {
   assert.deepEqual(normalizeTools([{name: "search", description: "Search", inputSchema: "{\"type\":\"object\"}", execute() {}}]), [{name: "search", description: "Search", input_schema: {type: "object"}}]);
+});
+
+test("binds observations to Chrome's document identity", () => {
+  assert.deepEqual(
+    buildObservation(
+      {id: 12, url: "https://example.com/tools?secret=yes", title: "Tools"},
+      {documentId: "document-12", result: {supported: true, tools: [{name: "lookup"}]}}
+    ),
+    {
+      url: "https://example.com/tools",
+      title: "Tools",
+      tools: [{name: "lookup", description: "", input_schema: {}}],
+      tab_id: 12,
+      document_id: "document-12"
+    }
+  );
+
+  assert.equal(
+    buildObservation(
+      {id: 12, url: "https://example.com/tools", title: "Tools"},
+      {result: {supported: true, tools: [{name: "lookup"}]}}
+    ),
+    null
+  );
+
+  assert.equal(
+    buildObservation(
+      {id: 12, url: "https://example.com/tools", title: "Tools"},
+      {documentId: "document-12", result: {supported: false, tools: []}}
+    ),
+    null
+  );
 });

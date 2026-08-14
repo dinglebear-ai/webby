@@ -3,7 +3,7 @@ defmodule Webby.Discovery do
 
   import Ecto.Query
   alias Webby.Discovery.Discovery
-  alias Webby.Repo
+  alias Webby.{Pages, Repo}
 
   @max_tools 64
   @max_description_bytes 1_000
@@ -53,35 +53,9 @@ defmodule Webby.Discovery do
 
   def observe(browser_id, attrs) do
     with {:ok, page} <- sanitize_page(attrs),
-         false <- ignored_origin?(browser_id, page.origin),
          {:ok, catalog} <- sanitize_catalog(attrs["tools"]),
          {:ok, fingerprint} <- fingerprint(catalog) do
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-      values =
-        Map.merge(page, %{
-          browser_id: browser_id,
-          tool_count: length(catalog),
-          catalog_fingerprint: fingerprint,
-          catalog_summary: %{"tools" => catalog},
-          first_seen_at: now,
-          last_seen_at: now,
-          detection_count: 1
-        })
-
-      %Discovery{}
-      |> Discovery.changeset(values)
-      |> Repo.insert(
-        on_conflict: [
-          set: [page_title: page.page_title, last_seen_at: now, updated_at: now],
-          inc: [detection_count: 1]
-        ],
-        conflict_target: [:browser_id, :origin, :sanitized_path, :catalog_fingerprint],
-        returning: true
-      )
-    else
-      true -> {:ok, :ignored}
-      error -> error
+      route_observation(browser_id, attrs, page, catalog, fingerprint)
     end
   end
 
@@ -93,6 +67,19 @@ defmodule Webby.Discovery do
   end
 
   def observe_many(_browser_id, _observations), do: {:error, :invalid_observations}
+
+  def resync(browser_id, observations) when is_list(observations) do
+    Repo.transaction(fn ->
+      with {:ok, observed} <- observe_many(browser_id, observations),
+           {:ok, _closed_count} <- Pages.reconcile(browser_id, observed) do
+        observed
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  def resync(_browser_id, _observations), do: {:error, :invalid_observations}
 
   def sanitize_url(url) when is_binary(url) do
     with %URI{scheme: scheme, host: host} = uri
@@ -138,6 +125,70 @@ defmodule Webby.Discovery do
       {:ok, discovery} -> discovery
       {:error, reason} -> Repo.rollback(reason)
     end
+  end
+
+  defp route_observation(browser_id, attrs, page, catalog, fingerprint) do
+    case Pages.match(page.origin, page.sanitized_path) do
+      {:ok, registration} ->
+        attach_session(browser_id, registration, attrs, page, catalog, fingerprint)
+
+      :none ->
+        if ignored_origin?(browser_id, page.origin),
+          do: {:ok, :ignored},
+          else: persist_discovery(browser_id, page, catalog, fingerprint)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp attach_session(browser_id, registration, attrs, page, catalog, fingerprint) do
+    with tab_id when is_integer(tab_id) and tab_id >= 0 <- attrs["tab_id"],
+         document_id when is_binary(document_id) and byte_size(document_id) in 1..128 <-
+           attrs["document_id"] do
+      Pages.attach(browser_id, registration, %{
+        tab_id: tab_id,
+        document_id: document_id,
+        current_origin: page.origin,
+        sanitized_path: page.sanitized_path,
+        page_title: page.page_title,
+        catalog_fingerprint: fingerprint,
+        catalog_summary: %{"tools" => catalog}
+      })
+    else
+      _invalid -> {:error, :invalid_document_identity}
+    end
+  end
+
+  defp persist_discovery(browser_id, page, catalog, fingerprint) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    values =
+      Map.merge(page, %{
+        browser_id: browser_id,
+        tool_count: length(catalog),
+        catalog_fingerprint: fingerprint,
+        catalog_summary: %{"tools" => catalog},
+        first_seen_at: now,
+        last_seen_at: now,
+        detection_count: 1
+      })
+
+    %Discovery{}
+    |> Discovery.changeset(values)
+    |> Repo.insert(
+      on_conflict: [
+        set: [
+          page_title: page.page_title,
+          state: "discovered",
+          last_seen_at: now,
+          updated_at: now
+        ],
+        inc: [detection_count: 1]
+      ],
+      conflict_target: [:browser_id, :origin, :sanitized_path, :catalog_fingerprint],
+      returning: true
+    )
   end
 
   defp sanitize_catalog(tools) when is_list(tools) and length(tools) in 1..@max_tools do

@@ -10,8 +10,10 @@ LiveView dashboard, and durable browser-extension pairing over a versioned
 Phoenix Channel protocol with single-use Ed25519 authentication challenges.
 The unpacked Manifest V3 extension now scans already-permitted sites by default,
 offers explicit broad all-tabs scanning with continuous disclosure, and records
-sanitized WebMCP catalogs in the local discovery inbox. MCP transport arrives in
-a subsequent delivery slice; discovered tools are not yet callable.
+sanitized WebMCP catalogs in the local discovery inbox. Discoveries can be
+explicitly promoted into durable page registrations, which bind matching open
+documents to live catalog sessions. MCP transport arrives in a subsequent
+delivery slice; registered tools are not yet callable.
 
 Webby is independent software. It has no dependency on Labby or any other MCP
 gateway, and no particular MCP client receives privileged integration.
