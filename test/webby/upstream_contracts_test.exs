@@ -20,6 +20,12 @@ defmodule Webby.UpstreamContractsTest do
     def npm_package(_package), do: {:ok, %{"version" => "0.1.3"}}
 
     @impl true
+    def github_file_symbol(_repo, _path, _symbol), do: {:ok, %{"present" => true}}
+
+    @impl true
+    def chrome_status(_feature_id), do: {:ok, %{"chrome_status" => "Proposed"}}
+
+    @impl true
     def github_commits(_repo, _path, _since) do
       {:ok,
        [
@@ -44,6 +50,12 @@ defmodule Webby.UpstreamContractsTest do
 
     @impl true
     def npm_package(_package), do: {:error, "HTTP 503"}
+
+    @impl true
+    def github_file_symbol(_repo, _path, _symbol), do: {:error, "HTTP 503"}
+
+    @impl true
+    def chrome_status(_feature_id), do: {:error, "HTTP 503"}
 
     @impl true
     def github_commits(_repo, _path, _since), do: {:error, "HTTP 503"}
@@ -101,6 +113,56 @@ defmodule Webby.UpstreamContractsTest do
       assert UpstreamContracts.diff(lock(), observed) == []
       assert length(errors) == 3
       assert Enum.all?(errors, fn {_id, reason} -> reason == "HTTP 503" end)
+    end
+  end
+
+  describe "capability watches" do
+    test "reports an API arriving upstream as drift, not only a change" do
+      lock = %{
+        "contracts" => %{
+          "webmcp-execute-tool" => %{
+            "kind" => "github_file_symbol",
+            "repo" => "webmachinelearning/webmcp",
+            "path" => "index.bs",
+            "symbol" => "executeTool",
+            "present" => false,
+            "why" => "Watched until upstream specifies it."
+          }
+        }
+      }
+
+      {observed, []} = UpstreamContracts.observe(lock, StubFetcher)
+
+      assert [entry] = UpstreamContracts.diff(lock, observed)
+      assert entry.key == "present"
+      assert entry.locked == false
+      assert entry.live == true
+    end
+
+    test "tracks Chrome's shipping status for the feature" do
+      lock = %{
+        "contracts" => %{
+          "chrome-webmcp-status" => %{
+            "kind" => "chrome_status",
+            "feature_id" => 5_117_755_740_913_664,
+            "chrome_status" => "Enabled by default",
+            "why" => "Chrome shipping status."
+          }
+        }
+      }
+
+      {observed, []} = UpstreamContracts.observe(lock, StubFetcher)
+
+      assert [entry] = UpstreamContracts.diff(lock, observed)
+      assert entry.locked == "Enabled by default"
+      assert entry.live == "Proposed"
+    end
+
+    test "an unknown contract kind is an error, not a silent skip" do
+      lock = %{"contracts" => %{"mystery" => %{"kind" => "telepathy", "why" => "?"}}}
+
+      assert {%{}, [{"mystery", reason}]} = UpstreamContracts.observe(lock, StubFetcher)
+      assert reason =~ "unknown contract kind"
     end
   end
 
@@ -276,7 +338,7 @@ defmodule Webby.UpstreamContractsTest do
       assert map_size(contracts) > 0
 
       for {id, contract} <- contracts do
-        assert contract["kind"] in ["github_file", "github_tags", "npm_package"],
+        assert contract["kind"] in UpstreamContracts.known_kinds(),
                "#{id} has an unrecognized kind"
 
         assert is_binary(contract["why"]) and contract["why"] != "",

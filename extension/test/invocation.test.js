@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {cancelWebMcp, invokeWebMcp} from "../src/probe.js";
+import {normalizeTools, stableStringify} from "../src/scanning.js";
 
 test("executes only the named tool from the expected catalog", async () => {
   const tool = {name: "find", description: "Find", inputSchema: {type: "object"}};
@@ -13,7 +14,7 @@ test("executes only the named tool from the expected catalog", async () => {
     }
   }};
 
-  const catalog = '[{"annotations":{"read_only_hint":false,"untrusted_content_hint":false},"description":"Find","input_schema":{"type":"object"},"name":"find"}]';
+  const catalog = stableStringify(normalizeTools([tool]));
   assert.deepEqual(await invokeWebMcp("find", {query: "hello"}, "call-1", catalog), {count: 1});
   delete globalThis.document;
 });
@@ -27,7 +28,7 @@ test("aborts the exact pending page call", async () => {
     })
   }};
 
-  const catalog = '[{"annotations":{"read_only_hint":false,"untrusted_content_hint":false},"description":"Wait","input_schema":{},"name":"wait"}]';
+  const catalog = stableStringify(normalizeTools([tool]));
   const pending = invokeWebMcp("wait", {}, "call-2", catalog);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(cancelWebMcp("call-2"), true);

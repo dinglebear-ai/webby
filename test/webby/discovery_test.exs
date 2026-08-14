@@ -194,4 +194,66 @@ defmodule Webby.DiscoveryTest do
       assert annotations["read_only_hint"] == false
     end
   end
+
+  describe "tool provenance" do
+    defp tool_with(extra) do
+      Map.merge(%{"name" => "read_page", "description" => "Read", "input_schema" => %{}}, extra)
+    end
+
+    defp observe_tool(browser_id, extra) do
+      {:ok, discovery} =
+        Discovery.observe(browser_id, %{
+          "url" => "https://example.com/tools",
+          "title" => "Tools",
+          "tools" => [tool_with(extra)]
+        })
+
+      [tool] = discovery.catalog_summary["tools"]
+      tool
+    end
+
+    test "keeps the origin of a tool registered by an embedded frame", %{browser: browser} do
+      tool = observe_tool(browser.id, %{"origin" => "https://embedded.example.net"})
+      assert tool["origin"] == "https://embedded.example.net"
+    end
+
+    test "keeps a port-qualified origin", %{browser: browser} do
+      tool = observe_tool(browser.id, %{"origin" => "https://embedded.example.net:8443"})
+      assert tool["origin"] == "https://embedded.example.net:8443"
+    end
+
+    test "records no origin when the page omits it", %{browser: browser} do
+      assert observe_tool(browser.id, %{})["origin"] == ""
+    end
+
+    test "refuses an origin carrying a path, query, or fragment", %{browser: browser} do
+      for value <- [
+            "https://evil.example/path",
+            "https://evil.example/?q=1",
+            "https://evil.example/#f"
+          ] do
+        assert observe_tool(browser.id, %{"origin" => value})["origin"] == "",
+               "expected #{value} to be refused"
+      end
+    end
+
+    test "refuses a non-http scheme", %{browser: browser} do
+      for value <- ["javascript:alert(1)", "data:text/html,x", "file:///etc/passwd"] do
+        assert observe_tool(browser.id, %{"origin" => value})["origin"] == "",
+               "expected #{value} to be refused"
+      end
+    end
+
+    test "refuses a value that is not a string", %{browser: browser} do
+      assert observe_tool(browser.id, %{"origin" => %{"host" => "evil"}})["origin"] == ""
+    end
+
+    test "carries the tool title, bounded and control-stripped", %{browser: browser} do
+      assert observe_tool(browser.id, %{"title" => "Read\u0000 page"})["title"] == "Read page"
+      assert observe_tool(browser.id, %{})["title"] == ""
+
+      long = String.duplicate("t", 500)
+      assert byte_size(observe_tool(browser.id, %{"title" => long})["title"]) <= 200
+    end
+  end
 end

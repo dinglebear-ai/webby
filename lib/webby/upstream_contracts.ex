@@ -20,8 +20,13 @@ defmodule Webby.UpstreamContracts do
   @tracked_keys %{
     "github_file" => ["blob_sha"],
     "github_tags" => ["latest_tag"],
-    "npm_package" => ["version"]
+    "npm_package" => ["version"],
+    "github_file_symbol" => ["present"],
+    "chrome_status" => ["chrome_status"]
   }
+
+  @doc "Contract kinds the checker knows how to observe."
+  def known_kinds, do: Map.keys(@tracked_keys)
 
   @doc "Path to the checked-in lock file."
   def lock_path, do: Application.get_env(:webby, :upstream_lock_path, @default_lock_path)
@@ -67,6 +72,14 @@ defmodule Webby.UpstreamContracts do
 
   defp observe_one(%{"kind" => "npm_package"} = contract, fetcher) do
     fetcher.npm_package(contract["package"])
+  end
+
+  defp observe_one(%{"kind" => "github_file_symbol"} = contract, fetcher) do
+    fetcher.github_file_symbol(contract["repo"], contract["path"], contract["symbol"])
+  end
+
+  defp observe_one(%{"kind" => "chrome_status"} = contract, fetcher) do
+    fetcher.chrome_status(contract["feature_id"])
   end
 
   defp observe_one(%{"kind" => kind}, _fetcher), do: {:error, "unknown contract kind #{kind}"}
@@ -281,6 +294,12 @@ defmodule Webby.UpstreamContracts do
 
   defp source_url(%{"kind" => "npm_package"} = contract),
     do: "https://www.npmjs.com/package/#{contract["package"]}"
+
+  defp source_url(%{"kind" => "github_file_symbol"} = contract),
+    do: "https://github.com/#{contract["repo"]}/blob/main/#{contract["path"]}"
+
+  defp source_url(%{"kind" => "chrome_status"} = contract),
+    do: "https://chromestatus.com/feature/#{contract["feature_id"]}"
 
   defp source_url(_contract), do: "(unknown)"
 

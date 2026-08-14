@@ -38,7 +38,7 @@ export async function canScanTab(tab, permissionsApi) {
 
 /**
  * @param {unknown} tools
- * @returns {Array<{name: string, description: string, input_schema: unknown, annotations: {read_only_hint: boolean, untrusted_content_hint: boolean}}>}
+ * @returns {Array<{name: string, title: string, description: string, input_schema: unknown, origin: string, annotations: {read_only_hint: boolean, untrusted_content_hint: boolean}}>}
  */
 export function normalizeTools(tools) {
   if (!Array.isArray(tools) || tools.length === 0 || tools.length > 64) return [];
@@ -51,8 +51,10 @@ export function normalizeTools(tools) {
     const annotations = tool.annotations ?? {};
     return [{
       name: tool.name,
+      title: typeof tool.title === "string" ? tool.title.slice(0, 200) : "",
       description: typeof tool.description === "string" ? tool.description.slice(0, 1000) : "",
       input_schema: inputSchema,
+      origin: typeof tool.origin === "string" ? tool.origin.slice(0, 256) : "",
       annotations: {
         read_only_hint: (annotations.readOnlyHint ?? annotations.read_only_hint) === true,
         untrusted_content_hint: (annotations.untrustedContentHint ?? annotations.untrusted_content_hint) === true

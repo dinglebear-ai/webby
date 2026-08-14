@@ -22,7 +22,7 @@
  * `tsconfig.json`): if upstream renames a field this reads, the build fails
  * instead of the probe quietly reporting an empty catalog on every page.
  *
- * @returns {Promise<{supported: boolean, tools: Array<{name: string, description: string, input_schema: unknown}>}>}
+ * @returns {Promise<{supported: boolean, tools: Array<{name: string, title: string, description: string, input_schema: unknown, origin: string, annotations: {read_only_hint: boolean, untrusted_content_hint: boolean}}>}>}
  */
 export async function probeWebMcp() {
   const context = document.modelContext;
@@ -31,9 +31,12 @@ export async function probeWebMcp() {
     const tools = await context.getTools();
     const summary = Array.from(tools ?? []).slice(0, 64).flatMap((tool) => {
       if (!tool || typeof tool.name !== "string") return [];
-      // The spec declares `inputSchema` as a stringified JSON Schema; the
-      // snake_case read tolerates an origin-trial browser spelling it
-      // otherwise. Rename `inputSchema` upstream and the type check fails.
+      // `RegisteredTool.inputSchema` became an `object` on 2026-08-14
+      // (webmachinelearning/webmcp#241); it was a stringified JSON Schema
+      // before, and origin-trial browsers still ship that form. Both are
+      // handled below. The snake_case read separately tolerates a browser
+      // spelling the field differently. Rename `inputSchema` upstream and the
+      // type check fails.
       let inputSchema = tool.inputSchema ?? /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (tool)).input_schema ?? {};
       if (typeof inputSchema === "string") {
         try { inputSchema = JSON.parse(inputSchema); } catch { return []; }
@@ -44,10 +47,17 @@ export async function probeWebMcp() {
       // the bridge silently drops it. Both spellings are accepted so this
       // stays idempotent under scanning.js normalizeTools.
       const annotations = tool.annotations ?? {};
+      // `origin` is the origin of the document that *registered* the tool,
+      // which is only meaningful when it differs from the page's own. A
+      // cross-origin frame can expose tools into this document via
+      // `exposedTo`, and without carrying this they would reach an MCP client
+      // attributed to the page rather than to whoever actually wrote them.
       return [{
         name: tool.name,
+        title: typeof tool.title === "string" ? tool.title : "",
         description: typeof tool.description === "string" ? tool.description : "",
         input_schema: inputSchema,
+        origin: typeof tool.origin === "string" ? tool.origin : "",
         annotations: {
           read_only_hint: (annotations.readOnlyHint ?? /** @type {Record<string, unknown>} */ (annotations).read_only_hint) === true,
           untrusted_content_hint: (annotations.untrustedContentHint ?? /** @type {Record<string, unknown>} */ (annotations).untrusted_content_hint) === true
@@ -84,18 +94,25 @@ export async function invokeWebMcp(toolName, input, callId, expectedCatalog) {
   const context = document.modelContext;
   if (!context || typeof context.getTools !== "function") throw new Error("webmcp_unavailable");
 
-  // `executeTool()` is NOT in the WebMCP specification. The upstream README
-  // still reads "TODO: Spec and describe the modelContext.getTools() and
-  // modelContext.executeTool() APIs", and webmachinelearning/webmcp#51 -- the
-  // issue defining how an agent invokes a site's declared tools -- has been
-  // open since 2025-11-03. getTools() was specced in #223; its sibling was
-  // not. Per section 21 of the design spec, feature-detect and report
-  // unsupported rather than simulating invocation. When upstream specs it,
-  // webmcp-types will publish a signature and the contract check will report
-  // the version bump.
+  // `executeTool()` was specified on 2026-08-14 (webmachinelearning/webmcp#226)
+  // as:
+  //
+  //   Promise<DOMString> executeTool(RegisteredTool tool, DOMString inputArguments,
+  //                                  optional ModelContextExecuteToolOptions options)
+  //
+  // which is exactly the call below. The published `webmcp-types` (0.1.3)
+  // predates that and does not declare it yet, so the cast stays until the
+  // definitions catch up -- the `webmcp-types` contract will report that
+  // version bump. Feature detection stays regardless: no browser implements it
+  // yet, and per section 21 an unimplemented API must be reported as
+  // unsupported rather than simulated.
   const executeTool = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (context)).executeTool;
   if (typeof executeTool !== "function") throw new Error("webmcp_unavailable");
 
+  // `getTools()` is called without `fromOrigins` deliberately: restricting to
+  // same-origin would silently drop tools a page intentionally exposed from a
+  // frame. They are carried, with their origin recorded, so the decision is
+  // visible rather than made here.
   const tools = Array.from(await context.getTools() ?? []);
 
   const normalized = tools.slice(0, 64).flatMap((tool) => {
@@ -108,8 +125,10 @@ export async function invokeWebMcp(toolName, input, callId, expectedCatalog) {
     const annotations = tool.annotations ?? {};
     return [{
       name: tool.name,
+      title: typeof tool.title === "string" ? tool.title.slice(0, 200) : "",
       description: typeof tool.description === "string" ? tool.description.slice(0, 1000) : "",
       input_schema: schema,
+      origin: typeof tool.origin === "string" ? tool.origin.slice(0, 256) : "",
       annotations: {
         read_only_hint: (annotations.readOnlyHint ?? /** @type {Record<string, unknown>} */ (annotations).read_only_hint) === true,
         untrusted_content_hint: (annotations.untrustedContentHint ?? /** @type {Record<string, unknown>} */ (annotations).untrusted_content_hint) === true

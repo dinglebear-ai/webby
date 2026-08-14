@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {probeWebMcp} from "../src/probe.js";
+import {expectedTool} from "./support.js";
 
 function withModelContext(modelContext, body) {
   const previous = globalThis.document;
@@ -29,7 +30,7 @@ test("parses the stringified inputSchema the specification returns", async () =>
   await withModelContext({getTools: async () => [tool({inputSchema: "{\"type\":\"object\"}"})]}, async () => {
     assert.deepEqual(await probeWebMcp(), {
       supported: true,
-      tools: [{name: "search", description: "Search", input_schema: {type: "object"}, annotations: {read_only_hint: false, untrusted_content_hint: false}}]
+      tools: [expectedTool({input_schema: {type: "object"}})]
     });
   });
 });
@@ -44,7 +45,7 @@ test("defaults a missing schema and description instead of forwarding undefined"
   await withModelContext({getTools: async () => [tool({description: 42})]}, async () => {
     assert.deepEqual(await probeWebMcp(), {
       supported: true,
-      tools: [{name: "search", description: "", input_schema: {}, annotations: {read_only_hint: false, untrusted_content_hint: false}}]
+      tools: [expectedTool({description: ""})]
     });
   });
 });
@@ -84,7 +85,7 @@ test("tolerates a browser shipping the snake_case schema field", async () => {
   await withModelContext({getTools: async () => [tool({input_schema: {type: "object"}})]}, async () => {
     assert.deepEqual(await probeWebMcp(), {
       supported: true,
-      tools: [{name: "search", description: "Search", input_schema: {type: "object"}, annotations: {read_only_hint: false, untrusted_content_hint: false}}]
+      tools: [expectedTool({input_schema: {type: "object"}})]
     });
   });
 });
