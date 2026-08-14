@@ -81,7 +81,12 @@ defmodule Webby.RuntimeDiscovery do
       base_url: base_url,
       capabilities: %{
         health: %{status: "available", url: base_url <> "/health", transport: "http-json"},
-        mcp: %{status: "unavailable", kind: "not_implemented", retryable: false}
+        mcp: %{
+          status: "available",
+          url: base_url <> "/mcp",
+          transport: "streamable-http",
+          protocol_versions: ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"]
+        }
       },
       pid: System.pid()
     }

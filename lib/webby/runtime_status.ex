@@ -82,7 +82,7 @@ defmodule Webby.RuntimeStatus do
       base_url: nil,
       capabilities: %{
         health: %{status: "unavailable", kind: "runtime_starting", retryable: true},
-        mcp: %{status: "unavailable", kind: "not_implemented", retryable: false}
+        mcp: %{status: "unavailable", kind: "runtime_starting", retryable: true}
       }
     }
   end

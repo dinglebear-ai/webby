@@ -24,6 +24,8 @@ defmodule WebbyWeb.Router do
     pipe_through :api
 
     get "/health", StatusController, :show
+    post "/mcp", MCPController, :create
+    get "/mcp", MCPController, :listen
   end
 
   # Other scopes may use custom stacks.

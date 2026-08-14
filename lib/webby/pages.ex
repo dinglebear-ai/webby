@@ -20,6 +20,22 @@ defmodule Webby.Pages do
     )
   end
 
+  def get_registration(identifier) do
+    Repo.one(
+      from r in PageRegistration,
+        where: r.id == ^identifier or r.slug == ^identifier,
+        preload: [:preferred_browser]
+    )
+  end
+
+  def sessions_for(registration_id) do
+    Repo.all(
+      from s in DocumentSession,
+        where: s.registration_id == ^registration_id and s.status == "active",
+        order_by: [desc: s.last_seen_at]
+    )
+  end
+
   def register_discovery(id) do
     case Repo.get(Discovery, id) do
       %Discovery{state: "discovered"} = discovery ->
