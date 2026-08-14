@@ -1,18 +1,33 @@
 import {BROAD_ORIGINS, disableAllTabs, enableAllTabs} from "./permissions.js";
 
-const baseUrl = document.querySelector("#base-url");
-const mode = document.querySelector("#mode");
-const paused = document.querySelector("#paused");
-const disclosure = document.querySelector("#disclosure");
-const status = document.querySelector("#status");
+/**
+ * Every element below is declared in popup.html. Failing loudly on a missing
+ * one beats a null dereference somewhere further down.
+ *
+ * @param {string} selector
+ * @returns {Element}
+ */
+function required(selector) {
+  const element = document.querySelector(selector);
+  if (!element) throw new Error(`missing element: ${selector}`);
+  return element;
+}
 
-const saved = await chrome.storage.local.get(["baseUrl", "scanningMode", "scanningPaused"]);
+const baseUrl = /** @type {HTMLInputElement} */ (required("#base-url"));
+const mode = /** @type {HTMLSelectElement} */ (required("#mode"));
+const paused = /** @type {HTMLInputElement} */ (required("#paused"));
+const disclosure = /** @type {HTMLElement} */ (required("#disclosure"));
+const status = /** @type {HTMLElement} */ (required("#status"));
+
+const saved = /** @type {{baseUrl?: string, scanningMode?: string, scanningPaused?: boolean}} */ (
+  await chrome.storage.local.get(["baseUrl", "scanningMode", "scanningPaused"])
+);
 baseUrl.value = saved.baseUrl || "http://127.0.0.1:6477";
 mode.value = saved.scanningMode || "granted_sites";
 paused.checked = saved.scanningPaused || false;
 await renderDisclosure();
 
-document.querySelector("#save").addEventListener("click", async () => {
+required("#save").addEventListener("click", async () => {
   if (mode.value === "all_tabs") {
     const granted = await enableAllTabs(chrome.permissions);
     if (!granted) { mode.value = "granted_sites"; status.textContent = "Broad permission was not granted."; return; }
@@ -24,8 +39,8 @@ document.querySelector("#save").addEventListener("click", async () => {
   renderDisclosure();
   status.textContent = "Saved.";
 });
-document.querySelector("#scan").addEventListener("click", async () => { await chrome.runtime.sendMessage({type: "scan-now"}); status.textContent = "Scan requested."; });
-document.querySelector("#pair").addEventListener("click", async () => { await chrome.runtime.sendMessage({type: "pair", displayName: "Chrome"}); status.textContent = "Pairing request sent. Approve it in Webby."; });
+required("#scan").addEventListener("click", async () => { await chrome.runtime.sendMessage({type: "scan-now"}); status.textContent = "Scan requested."; });
+required("#pair").addEventListener("click", async () => { await chrome.runtime.sendMessage({type: "pair", displayName: "Chrome"}); status.textContent = "Pairing request sent. Approve it in Webby."; });
 mode.addEventListener("change", renderDisclosure);
 
 async function renderDisclosure() {

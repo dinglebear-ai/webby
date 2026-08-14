@@ -73,24 +73,34 @@ demand. Drift is collected into a single rolling issue labelled
 The schedule only fails when an upstream is unreachable, because a red build
 should mean something is wrong with Webby.
 
-## Type-checking the probe
+## Type-checking the extension
 
 Tracking tells you a specification moved. It does not tell you whether Webby
-still matches it — for that, `extension/tsconfig.json` type-checks
-`extension/src/probe.js` against the published `webmcp-types` definitions:
+still matches it — for that, `extension/tsconfig.json` type-checks every module
+under `extension/src` against the published `webmcp-types` definitions and
+`@types/chrome`:
 
 ```bash
 cd extension && npm ci && npm run typecheck
 ```
 
-This is a contract check, not a build step: nothing is emitted, and only the
-files touching the WebMCP surface are included. If upstream renames a field the
-probe reads, CI fails with the exact property — rather than the probe silently
-reporting an empty catalog on every page, which is how this class of breakage
-would otherwise surface.
+This is a correctness check, not a build step: nothing is emitted. If upstream
+renames a field the probe reads, CI fails with the exact property — rather than
+the probe silently reporting an empty catalog on every page, which is how this
+class of breakage would otherwise surface. Renaming `getTools` or
+`RegisteredTool.inputSchema` in the definitions is verified to fail the check.
 
-Both directions are verified: renaming `getTools` or `RegisteredTool.inputSchema`
-in the definitions fails the check.
+It earns its keep beyond the spec surface too. Enabling it across `src/` is
+what found `tabs.map(scanTab)` in `scanAll()`: `Array.prototype.map` passes the
+index as the second argument, so every tab after the first arrived with
+`allowActiveTab` truthy and skipped `canScanTab` entirely — the check that
+excludes incognito tabs, ineligible URLs, and origins the user never granted.
+`scanning.js` tested that exclusion and passed; only the caller was wrong. That
+specific mistake is now a type error.
+
+Tests are excluded deliberately. They construct partial mocks on purpose — a
+fake `RegisteredTool` has no `window` or `origin` — and demanding full shapes
+there would be noise for no safety.
 
 One deliberate exception is documented in the probe itself. The spec has only
 ever spelled the field `inputSchema`, but the probe also tolerates a
@@ -130,10 +140,6 @@ same answer. Do not "clean up" that duplication by extracting a helper.
 
 ## Known gaps
 
-- Only `probe.js` is type-checked. Extending the check to the rest of the
-  extension needs `@types/chrome` and annotations across `channel.js`,
-  `scanning.js`, `permissions.js`, and `service_worker.js` — 112 errors under
-  `strict` at last count, so it is a project rather than a follow-up.
 - The probe still drops `RegisteredTool.title` and `origin`, and calls
   `getTools()` without `fromOrigins`. None carries a safety signal, unlike
   `annotations`, which is now carried through.
