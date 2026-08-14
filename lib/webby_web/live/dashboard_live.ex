@@ -1,6 +1,8 @@
 defmodule WebbyWeb.DashboardLive do
   use WebbyWeb, :live_view
 
+  alias Webby.MCP.Credentials
+
   @refresh_interval :timer.seconds(5)
 
   @impl true
@@ -8,7 +10,13 @@ defmodule WebbyWeb.DashboardLive do
     if connected?(socket), do: Process.send_after(self(), :refresh_status, @refresh_interval)
 
     {:ok,
-     socket |> assign_status() |> assign_browsers() |> assign_discoveries() |> assign_pages()}
+     socket
+     |> assign(:credential_token, nil)
+     |> assign_credentials()
+     |> assign_status()
+     |> assign_browsers()
+     |> assign_discoveries()
+     |> assign_pages()}
   end
 
   @impl true
@@ -36,6 +44,30 @@ defmodule WebbyWeb.DashboardLive do
     do:
       {:noreply,
        resolve_page(socket, Webby.Pages.register_discovery(id), "Page registration created")}
+
+  def handle_event("create-mcp-credential", _params, socket) do
+    case Credentials.create("Local MCP client") do
+      {:ok, _credential, token} ->
+        {:noreply, socket |> assign(:credential_token, token) |> assign_credentials()}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "The MCP credential could not be created")}
+    end
+  end
+
+  def handle_event("revoke-mcp-credential", %{"id" => id}, socket) do
+    case Credentials.revoke(id) do
+      {:ok, _credential} ->
+        {:noreply,
+         socket
+         |> assign(:credential_token, nil)
+         |> put_flash(:info, "MCP credential revoked")
+         |> assign_credentials()}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "The MCP credential could not be revoked")}
+    end
+  end
 
   @impl true
   def render(assigns) do
@@ -68,6 +100,43 @@ defmodule WebbyWeb.DashboardLive do
         <p class="rounded-xl bg-base-200 px-4 py-3 text-sm text-base-content/70">
           Extension discovery and explicit page registration are active. Only registered pages can create live tool sessions.
         </p>
+
+        <section class="space-y-3" id="mcp-access">
+          <h2 class="text-2xl font-semibold">MCP access</h2>
+          <p class="text-sm text-base-content/60">
+            Create a read-only bearer credential for any standards-compatible MCP client.
+          </p>
+          <button
+            phx-click="create-mcp-credential"
+            class="rounded-lg bg-cyan-700 px-3 py-2 text-sm font-medium text-white"
+          >Create read credential</button>
+          <div
+            :if={@credential_token}
+            id="mcp-credential-token"
+            class="rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950"
+          >
+            <p class="text-sm font-semibold">Copy this token now. It will not be shown again.</p>
+            <code class="mt-2 block break-all font-mono text-xs">{@credential_token}</code>
+          </div>
+          <article
+            :for={credential <- @mcp_credentials}
+            id={"mcp-credential-#{credential.id}"}
+            class="flex items-center justify-between rounded-xl border border-base-300 p-4"
+          >
+            <div>
+              <p class="text-sm font-medium">{credential.display_name}</p>
+              <p class="text-xs text-base-content/60">
+                {if credential.revoked_at, do: "Revoked", else: "Read access"}
+              </p>
+            </div>
+            <button
+              :if={is_nil(credential.revoked_at)}
+              phx-click="revoke-mcp-credential"
+              phx-value-id={credential.id}
+              class="rounded-lg border border-rose-300 px-3 py-2 text-sm font-medium text-rose-700"
+            >Revoke</button>
+          </article>
+        </section>
 
         <section class="space-y-4" id="browser-pairing">
           <h2 class="text-2xl font-semibold">Pairing requests</h2>
@@ -238,6 +307,8 @@ defmodule WebbyWeb.DashboardLive do
         registrations: Webby.Pages.list_registrations(),
         sessions: Webby.Pages.list_active_sessions()
       )
+
+  defp assign_credentials(socket), do: assign(socket, :mcp_credentials, Credentials.list())
 
   defp resolve(socket, {:ok, _value}, message),
     do: socket |> put_flash(:info, message) |> assign_browsers()

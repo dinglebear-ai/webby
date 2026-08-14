@@ -17,6 +17,8 @@ defmodule Webby.Discovery do
     )
   end
 
+  def get_discovery(id), do: Repo.get(Discovery, id)
+
   def list_ignored_origins(browser_id) do
     Repo.all(
       from d in Discovery,

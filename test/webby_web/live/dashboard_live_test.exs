@@ -14,6 +14,19 @@ defmodule WebbyWeb.DashboardLiveTest do
     assert html =~ "Pairing requests"
     assert html =~ "Paired browsers"
     assert has_element?(view, "[data-status=ok]")
+    assert has_element?(view, "#mcp-access", "Create read credential")
+  end
+
+  test "creates and displays an MCP token once", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+    view |> element("#mcp-access button", "Create read credential") |> render_click()
+
+    assert has_element?(view, "#mcp-credential-token", "webby_")
+    assert has_element?(view, "#mcp-credential-token", "It will not be shown again")
+
+    view |> element("#mcp-access button", "Revoke") |> render_click()
+    refute has_element?(view, "#mcp-credential-token")
+    assert has_element?(view, "#mcp-access", "Revoked")
   end
 
   test "locally approves and revokes a pending browser", %{conn: conn} do
