@@ -1,6 +1,18 @@
 const VERSION = 1;
 
+/** @typedef {{resolve: (value: any) => void, reject: (reason?: any) => void, timeout: ReturnType<typeof setTimeout>}} Pending */
+
 export class WebbyChannel {
+  /**
+   * @param {object} options
+   * @param {string} options.baseUrl
+   * @param {string} options.extensionId
+   * @param {string} [options.browserId]
+   * @param {(payload: any) => Promise<void> | void} options.onChallenge
+   * @param {() => void} [options.onReady]
+   * @param {(payload: any) => void} [options.onEvent]
+   * @param {number} [options.replyTimeoutMs]
+   */
   constructor({baseUrl, extensionId, browserId, onChallenge, onReady, onEvent, replyTimeoutMs = 10_000}) {
     this.baseUrl = baseUrl;
     this.extensionId = extensionId;
@@ -10,14 +22,31 @@ export class WebbyChannel {
     this.onEvent = onEvent;
     this.replyTimeoutMs = replyTimeoutMs;
     this.ref = 0;
+    /** @type {Map<string, Pending>} */
     this.pending = new Map();
+    /** @type {WebSocket} */
+    this.socket;
+    /** @type {(value?: any) => void} */
+    this.resolveReady = () => {};
+    /** @type {(reason?: any) => void} */
+    this.rejectReady = () => {};
+    /** @type {string} */
+    this.topic = "";
+    /** @type {string | undefined} */
+    this.joinRef = undefined;
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    this.reconnectTimer = undefined;
+    /** @type {ReturnType<typeof setInterval> | undefined} */
+    this.heartbeatTimer = undefined;
+    /** @type {Promise<void> | undefined} */
+    this.ready = undefined;
   }
 
   connect() {
-    this.ready = new Promise((resolve, reject) => {
+    this.ready = /** @type {Promise<void>} */ (new Promise((resolve, reject) => {
       this.resolveReady = resolve;
       this.rejectReady = reject;
-    });
+    }));
     // A browser may remain intentionally unpaired, so a failed initial join can
     // precede any caller awaiting readiness. Keep that expected failure handled;
     // callers awaiting the original promise still receive the rejection.
@@ -53,11 +82,19 @@ export class WebbyChannel {
       });
   }
 
+  /**
+   * @param {string} type
+   * @param {unknown} payload
+   */
   async message(type, payload) {
     await this.ready;
     return this.messageNow(type, payload);
   }
 
+  /**
+   * @param {string} type
+   * @param {unknown} payload
+   */
   messageNow(type, payload) {
     return this.sendFrame("message", {
       protocol_version: VERSION,
@@ -69,9 +106,13 @@ export class WebbyChannel {
     });
   }
 
+  /**
+   * @param {[unknown, string, string, string, any]} frame
+   */
   receive([_joinRef, ref, _topic, event, payload]) {
-    if (event === "phx_reply" && this.pending.has(ref)) {
-      const {resolve, reject, timeout} = this.pending.get(ref);
+    const entry = this.pending.get(ref);
+    if (event === "phx_reply" && entry) {
+      const {resolve, reject, timeout} = entry;
       this.pending.delete(ref);
       clearTimeout(timeout);
       payload.status === "ok" ? resolve(payload.response) : reject(payload.response);
@@ -88,6 +129,9 @@ export class WebbyChannel {
     this.socket.close();
   }
 
+  /**
+   * @param {Error} reason
+   */
   rejectPending(reason) {
     for (const {reject, timeout} of this.pending.values()) {
       clearTimeout(timeout);
@@ -96,6 +140,11 @@ export class WebbyChannel {
     this.pending.clear();
   }
 
+  /**
+   * @param {string} event
+   * @param {unknown} payload
+   * @returns {Promise<any>}
+   */
   sendFrame(event, payload) {
     const ref = String(++this.ref);
     if (event === "phx_join") this.joinRef = ref;

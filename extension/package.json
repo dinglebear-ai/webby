@@ -11,6 +11,7 @@
     "node": ">=22"
   },
   "devDependencies": {
+    "@types/chrome": "0.2.6",
     "typescript": "5.9.3",
     "webmcp-types": "0.1.3"
   }

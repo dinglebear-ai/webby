@@ -3,9 +3,25 @@ import {buildObservation, canScanTab, stableStringify} from "./scanning.js";
 import {cancelWebMcp, invokeWebMcp, probeWebMcp} from "./probe.js";
 import {reconcileModeAfterRemoval} from "./permissions.js";
 
+/** @typedef {{url: string, title: string, tools: unknown[], tab_id: number, document_id: string}} Observation */
+
 const DEFAULTS = {baseUrl: "http://127.0.0.1:6477", scanningMode: "granted_sites", scanningPaused: false};
+/** @type {WebbyChannel | undefined} */
 let channel;
+/** @type {Map<number | undefined, Observation>} */
 let observations = new Map();
+
+/**
+ * The channel is created by `initialize()`, which runs at worker start and
+ * before any listener can fire. Callers that only run in response to a server
+ * event therefore have one; this keeps that assumption in a single place
+ * instead of scattering optional chaining that would silently do nothing.
+ * @returns {WebbyChannel}
+ */
+function requireChannel() {
+  if (!channel) throw new Error("channel_unavailable");
+  return channel;
+}
 
 chrome.runtime.onInstalled.addListener(() => initialize());
 chrome.runtime.onStartup.addListener(() => initialize());
@@ -61,8 +77,13 @@ async function initialize() {
   if (identity.browserId && !settings.scanningPaused) await scanAll();
 }
 
+/**
+ * @returns {Promise<{publicKey?: string, privateKey?: JsonWebKey, browserId?: string}>}
+ */
 async function ensureIdentity() {
-  const current = await chrome.storage.local.get(["publicKey", "privateKey", "browserId"]);
+  const current = /** @type {{publicKey?: string, privateKey?: JsonWebKey, browserId?: string}} */ (
+    await chrome.storage.local.get(["publicKey", "privateKey", "browserId"])
+  );
   if (current.publicKey && current.privateKey) return current;
   const pair = await crypto.subtle.generateKey({name: "Ed25519"}, true, ["sign", "verify"]);
   const publicKey = encode(await crypto.subtle.exportKey("raw", pair.publicKey));
@@ -71,19 +92,22 @@ async function ensureIdentity() {
   return {publicKey, privateKey};
 }
 
+/**
+ * @param {{signed_message: string, challenge_id: string}} challenge
+ */
 async function authenticate(challenge) {
-  const {privateKey} = await chrome.storage.local.get("privateKey");
+  const {privateKey} = /** @type {{privateKey: JsonWebKey}} */ (await chrome.storage.local.get("privateKey"));
   const key = await crypto.subtle.importKey("jwk", privateKey, {name: "Ed25519"}, false, ["sign"]);
   const signature = await crypto.subtle.sign("Ed25519", key, new TextEncoder().encode(challenge.signed_message));
-  await channel.messageNow("auth.respond", {challenge_id: challenge.challenge_id, signature: encode(signature)});
-  const welcome = await channel.messageNow("browser.hello", {});
+  await requireChannel().messageNow("auth.respond", {challenge_id: challenge.challenge_id, signature: encode(signature)});
+  const welcome = await requireChannel().messageNow("browser.hello", {});
   await persistIgnoredOrigins(welcome);
 }
 
 async function resumeAndScan() {
   const {browserId, pairingId} = await chrome.storage.local.get(["browserId", "pairingId"]);
   if (!browserId && pairingId) {
-    const reply = await channel.message("pairing.status", {pairing_id: pairingId}).catch(() => null);
+    const reply = await requireChannel().message("pairing.status", {pairing_id: pairingId}).catch(() => null);
     if (reply?.payload?.status === "approved" && reply.payload.browser_id) {
       await handleServerEvent({type: "pairing.approved", payload: reply.payload});
       return;
@@ -92,6 +116,9 @@ async function resumeAndScan() {
   if (browserId) await resync();
 }
 
+/**
+ * @param {{type?: string, payload?: any} | undefined} envelope
+ */
 async function handleServerEvent(envelope) {
   if (envelope?.type === "pairing.approved" && envelope.payload?.browser_id) {
     if (channel?.browserId !== envelope.payload.browser_id) {
@@ -103,6 +130,9 @@ async function handleServerEvent(envelope) {
   if (envelope?.type === "tool.cancel") return cancelToolCall(envelope.payload);
 }
 
+/**
+ * @param {{tab_id: number, document_id: string, call_id: string, tool_name: string, arguments?: unknown}} payload
+ */
 async function executeToolCall(payload) {
   const observation = observations.get(payload.tab_id);
   if (!observation || observation.document_id !== payload.document_id) {
@@ -118,13 +148,17 @@ async function executeToolCall(payload) {
     });
     const result = execution?.result;
     if (encodedSize(result) > 131_072 || jsonDepth(result) > 32) throw new Error("result_too_large");
-    await channel.message("tool.result", {call_id: payload.call_id, result});
+    await requireChannel().message("tool.result", {call_id: payload.call_id, result});
   } catch (error) {
-    const kind = knownToolError(error?.message) ? error.message : "tool_failed";
+    const message = error instanceof Error ? error.message : undefined;
+    const kind = knownToolError(message) ? /** @type {string} */ (message) : "tool_failed";
     await sendToolError(payload.call_id, kind, "The page tool could not be completed");
   }
 }
 
+/**
+ * @param {{document_id: string, call_id: string}} payload
+ */
 async function cancelToolCall(payload) {
   const observation = [...observations.values()].find((entry) => entry.document_id === payload.document_id);
   if (!observation) return;
@@ -134,35 +168,62 @@ async function cancelToolCall(payload) {
   }).catch(() => {});
 }
 
+/**
+ * @param {string} callId
+ * @param {string} kind
+ * @param {string} message
+ */
 function sendToolError(callId, kind, message) {
-  return channel.message("tool.error", {call_id: callId, error: {kind, message}}).catch(() => {});
+  return requireChannel().message("tool.error", {call_id: callId, error: {kind, message}}).catch(() => {});
 }
 
+/**
+ * @param {unknown} value
+ * @returns {number}
+ */
 function encodedSize(value) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
+/**
+ * @param {unknown} value
+ * @param {number} [depth]
+ * @returns {number}
+ */
 function jsonDepth(value, depth = 0) {
   if (!value || typeof value !== "object") return depth;
   const values = Array.isArray(value) ? value : Object.values(value);
-  return values.reduce((maximum, item) => Math.max(maximum, jsonDepth(item, depth + 1)), depth);
+  return values.reduce((/** @type {number} */ maximum, /** @type {unknown} */ item) => Math.max(maximum, jsonDepth(item, depth + 1)), depth);
 }
 
+/**
+ * @param {string | undefined} kind
+ * @returns {boolean}
+ */
 function knownToolError(kind) {
-  return ["webmcp_unavailable", "stale_catalog", "tool_not_found", "AbortError"].includes(kind);
+  return kind !== undefined && ["webmcp_unavailable", "stale_catalog", "tool_not_found", "AbortError"].includes(kind);
 }
 
 async function scanAll() {
   const settings = {...DEFAULTS, ...await chrome.storage.local.get(Object.keys(DEFAULTS))};
   if (settings.scanningPaused) return;
   const tabs = await chrome.tabs.query({});
-  await Promise.allSettled(tabs.map(scanTab));
+  // Not `tabs.map(scanTab)`: map passes the index as the second argument, so
+  // every tab after the first would arrive with allowActiveTab truthy and skip
+  // the canScanTab check -- incognito, ineligible URLs, and origins the user
+  // never granted included.
+  await Promise.allSettled(tabs.map((tab) => scanTab(tab)));
 }
 
+/**
+ * @param {chrome.tabs.Tab | undefined} tab
+ * @param {boolean} [allowActiveTab]
+ */
 async function scanTab(tab, allowActiveTab = false) {
   const settings = {...DEFAULTS, ...await chrome.storage.local.get(Object.keys(DEFAULTS))};
   if (settings.scanningPaused || (!allowActiveTab && !(await canScanTab(tab, chrome.permissions)))) return;
-  const {ignoredOrigins = []} = await chrome.storage.local.get("ignoredOrigins");
+  if (!tab?.id || !tab.url) return;
+  const {ignoredOrigins = []} = /** @type {{ignoredOrigins?: string[]}} */ (await chrome.storage.local.get("ignoredOrigins"));
   if (ignoredOrigins.includes(new URL(tab.url).origin)) return;
   try {
     const [result] = await chrome.scripting.executeScript({target: {tabId: tab.id}, world: "MAIN", func: probeWebMcp});
@@ -179,6 +240,9 @@ async function scanTab(tab, allowActiveTab = false) {
   }
 }
 
+/**
+ * @param {number | undefined} tabId
+ */
 async function closeObservation(tabId) {
   const observation = observations.get(tabId);
   observations.delete(tabId);
@@ -190,15 +254,18 @@ async function closeObservation(tabId) {
 }
 
 async function resync() {
-  const reply = await channel.message("browser.resync", {observations: [...observations.values()]});
+  const reply = await requireChannel().message("browser.resync", {observations: [...observations.values()]});
   await persistIgnoredOrigins(reply);
   await scanAll();
 }
 
+/**
+ * @param {{type: string, displayName?: string}} message
+ */
 async function handleUiMessage(message) {
   if (message.type === "pair") {
     const identity = await ensureIdentity();
-    const reply = await channel.message("pairing.request", {display_name: message.displayName || "Chrome", public_key: identity.publicKey, scanning_mode: "granted_sites"});
+    const reply = await requireChannel().message("pairing.request", {display_name: message.displayName || "Chrome", public_key: identity.publicKey, scanning_mode: "granted_sites"});
     if (reply?.payload?.pairing_id) await chrome.storage.local.set({pairingId: reply.payload.pairing_id});
     return reply;
   }
@@ -209,10 +276,17 @@ async function handleUiMessage(message) {
   return {ok: true};
 }
 
+/**
+ * @param {ArrayBuffer} buffer
+ * @returns {string}
+ */
 function encode(buffer) {
   return btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
+/**
+ * @param {{payload?: {ignored_origins?: unknown}} | null | undefined} envelope
+ */
 async function persistIgnoredOrigins(envelope) {
   const ignoredOrigins = envelope?.payload?.ignored_origins;
   if (Array.isArray(ignoredOrigins)) await chrome.storage.local.set({ignoredOrigins});
