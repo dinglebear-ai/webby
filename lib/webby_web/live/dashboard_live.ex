@@ -6,13 +6,13 @@ defmodule WebbyWeb.DashboardLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket), do: Process.send_after(self(), :refresh_status, @refresh_interval)
-    {:ok, socket |> assign_status() |> assign_browsers()}
+    {:ok, socket |> assign_status() |> assign_browsers() |> assign_discoveries()}
   end
 
   @impl true
   def handle_info(:refresh_status, socket) do
     Process.send_after(self(), :refresh_status, @refresh_interval)
-    {:noreply, socket |> assign_status() |> assign_browsers()}
+    {:noreply, socket |> assign_status() |> assign_browsers() |> assign_discoveries()}
   end
 
   @impl true
@@ -24,6 +24,9 @@ defmodule WebbyWeb.DashboardLive do
 
   def handle_event("revoke-browser", %{"id" => id}, socket),
     do: {:noreply, resolve(socket, Webby.Browsers.revoke_browser(id), "Browser revoked")}
+
+  def handle_event("ignore-discovery", %{"id" => id}, socket),
+    do: {:noreply, resolve_discovery(socket, Webby.Discovery.ignore(id), "Discovery ignored")}
 
   @impl true
   def render(assigns) do
@@ -54,7 +57,7 @@ defmodule WebbyWeb.DashboardLive do
         </div>
 
         <p class="rounded-xl bg-base-200 px-4 py-3 text-sm text-base-content/70">
-          Browser pairing is active. Extension scanning and MCP transport arrive in later slices.
+          Extension discovery is active. Discovered tools are informational and cannot be invoked until explicitly registered in a later slice.
         </p>
 
         <section class="space-y-4" id="browser-pairing">
@@ -101,7 +104,7 @@ defmodule WebbyWeb.DashboardLive do
             class="rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-950"
           >
             <strong>Broad tab scanning is enabled.</strong>
-            At least one paired browser can inspect every eligible permitted tab. Revoke that browser to disable this access.
+            At least one paired browser can inspect every eligible permitted tab. Pause scanning, return the extension to granted-sites mode, or revoke that browser to disable this access.
           </aside>
           <p :if={@browsers == []} class="text-sm text-base-content/60">No browsers paired yet.</p>
           <article
@@ -113,7 +116,7 @@ defmodule WebbyWeb.DashboardLive do
               <p class="font-medium">{browser.display_name}</p><p class="text-xs text-base-content/60">
                 {if browser.revoked_at, do: "Revoked", else: "Paired"} · {scanning_mode_label(
                   browser.scanning_mode
-                )}
+                )} · {if browser.scanning_paused, do: "Paused", else: "Scanning"}
               </p>
             </div>
             <button
@@ -122,6 +125,50 @@ defmodule WebbyWeb.DashboardLive do
               phx-value-id={browser.id}
               class="rounded-lg border border-rose-300 px-3 py-2 text-sm font-medium text-rose-700"
             >Revoke</button>
+          </article>
+        </section>
+        <section class="space-y-4" id="discovery-inbox">
+          <div>
+            <h2 class="text-2xl font-semibold">Discovery inbox</h2>
+            <p class="mt-1 text-sm text-base-content/60">
+              Sanitized WebMCP catalogs found on unregistered pages.
+            </p>
+          </div>
+          <p
+            :if={@discoveries == []}
+            class="rounded-xl border border-dashed border-base-300 p-5 text-sm text-base-content/60"
+          >
+            No unregistered WebMCP pages discovered yet.
+          </p>
+          <article
+            :for={discovery <- @discoveries}
+            id={"discovery-#{discovery.id}"}
+            class="rounded-2xl border border-base-300 p-5"
+          >
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p class="font-medium">{discovery.page_title}</p>
+                <p class="font-mono text-xs text-base-content/60">
+                  {discovery.origin}{discovery.sanitized_path}
+                </p>
+              </div>
+              <p class="text-sm text-base-content/60">
+                {discovery.tool_count} tools · seen {discovery.detection_count} times
+              </p>
+            </div>
+            <ul class="mt-3 flex flex-wrap gap-2" aria-label="Discovered tools">
+              <li
+                :for={tool <- discovery.catalog_summary["tools"]}
+                class="rounded-full bg-base-200 px-3 py-1 font-mono text-xs"
+              >
+                {tool["name"]}
+              </li>
+            </ul>
+            <button
+              phx-click="ignore-discovery"
+              phx-value-id={discovery.id}
+              class="mt-4 rounded-lg border border-base-300 px-3 py-2 text-sm font-medium"
+            >Ignore</button>
           </article>
         </section>
       </section>
@@ -142,11 +189,20 @@ defmodule WebbyWeb.DashboardLive do
         pairings: Webby.Browsers.list_pending_pairings()
       )
 
+  defp assign_discoveries(socket),
+    do: assign(socket, :discoveries, Webby.Discovery.list_discoveries())
+
   defp resolve(socket, {:ok, _value}, message),
     do: socket |> put_flash(:info, message) |> assign_browsers()
 
   defp resolve(socket, {:error, _reason}, _message),
     do: put_flash(socket, :error, "The request could not be completed")
+
+  defp resolve_discovery(socket, {:ok, _value}, message),
+    do: socket |> put_flash(:info, message) |> assign_discoveries()
+
+  defp resolve_discovery(socket, {:error, _reason}, _message),
+    do: put_flash(socket, :error, "The discovery could not be updated")
 
   defp scanning_mode_label("all_tabs"), do: "All eligible tabs"
   defp scanning_mode_label("granted_sites"), do: "Granted sites only"

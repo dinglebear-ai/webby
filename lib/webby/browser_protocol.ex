@@ -2,7 +2,7 @@ defmodule Webby.BrowserProtocol do
   @moduledoc "Transport-neutral validation for Webby Browser Protocol version 1."
 
   @version 1
-  @types ~w(pairing.request pairing.status auth.respond browser.hello browser.resync heartbeat)
+  @types ~w(pairing.request pairing.status auth.respond browser.hello browser.resync browser.settings discovery.observed heartbeat)
 
   def version, do: @version
 
@@ -74,7 +74,43 @@ defmodule Webby.BrowserProtocol do
     end
   end
 
+  defp validate_payload("browser.settings", payload) do
+    if payload["scanning_mode"] in ["granted_sites", "all_tabs"] and
+         is_boolean(payload["scanning_paused"]) do
+      :ok
+    else
+      {:error, error("invalid_payload", %{"type" => "browser.settings"})}
+    end
+  end
+
+  defp validate_payload("discovery.observed", %{"observations" => observations})
+       when is_list(observations) and length(observations) <= 128 do
+    if Enum.all?(observations, &valid_observation?/1),
+      do: :ok,
+      else: {:error, error("invalid_payload", %{"type" => "discovery.observed"})}
+  end
+
+  defp validate_payload("discovery.observed", _payload),
+    do: {:error, error("invalid_payload", %{"type" => "discovery.observed"})}
+
+  defp validate_payload("browser.resync", %{"observations" => observations})
+       when is_list(observations) and length(observations) <= 128 do
+    validate_payload("discovery.observed", %{"observations" => observations})
+  end
+
+  defp validate_payload("browser.resync", _payload),
+    do: {:error, error("invalid_payload", %{"type" => "browser.resync"})}
+
   defp validate_payload(_type, _payload), do: :ok
+
+  defp valid_observation?(%{"url" => url, "tools" => tools} = observation)
+       when is_binary(url) and byte_size(url) in 1..8_192 and is_list(tools) and
+              length(tools) in 1..64 do
+    title = Map.get(observation, "title", "")
+    is_binary(title) and byte_size(title) <= 1_000
+  end
+
+  defp valid_observation?(_observation), do: false
 
   defp required_string(payload, key, max_length) do
     case payload[key] do

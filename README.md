@@ -8,7 +8,10 @@ The current implementation provides a loopback-only Phoenix service, SQLite WAL
 persistence, atomic runtime discovery metadata, a JSON health endpoint, a local
 LiveView dashboard, and durable browser-extension pairing over a versioned
 Phoenix Channel protocol with single-use Ed25519 authentication challenges.
-Extension scanning and MCP transport arrive in subsequent delivery slices.
+The unpacked Manifest V3 extension now scans already-permitted sites by default,
+offers explicit broad all-tabs scanning with continuous disclosure, and records
+sanitized WebMCP catalogs in the local discovery inbox. MCP transport arrives in
+a subsequent delivery slice; discovered tools are not yet callable.
 
 Webby is independent software. It has no dependency on Labby or any other MCP
 gateway, and no particular MCP client receives privileged integration.
@@ -33,7 +36,12 @@ Run the verification suite:
 ```bash
 MIX_ENV=test mise exec -- mix test
 MIX_ENV=test mise exec -- mix credo --strict
+npm test --prefix extension
 ```
+
+For extension development, load the [`extension`](extension) directory as an
+unpacked Chrome extension, open its popup, set the loopback Webby URL if needed,
+and submit a pairing request for approval in the local dashboard.
 
 Build a production release:
 
@@ -52,3 +60,4 @@ owner-only signing secret under its platform configuration directory;
 - [Architecture specification](docs/superpowers/specs/2026-08-13-webby-design.md)
 - [Foundation implementation plan](docs/superpowers/plans/2026-08-13-webby-foundation.md)
 - [Browser pairing implementation plan](.claude/plans/browser-pairing/plan.md)
+- [Extension discovery implementation plan](.claude/plans/extension-discovery/plan.md)

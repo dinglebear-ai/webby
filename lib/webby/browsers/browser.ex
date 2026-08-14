@@ -8,6 +8,7 @@ defmodule Webby.Browsers.Browser do
     field :extension_id, :string
     field :public_key, :binary
     field :scanning_mode, :string
+    field :scanning_paused, :boolean, default: false
     field :paired_at, :utc_datetime
     field :last_seen_at, :utc_datetime
     field :revoked_at, :utc_datetime
@@ -21,6 +22,7 @@ defmodule Webby.Browsers.Browser do
       :extension_id,
       :public_key,
       :scanning_mode,
+      :scanning_paused,
       :paired_at,
       :last_seen_at,
       :revoked_at
