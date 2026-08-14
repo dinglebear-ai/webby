@@ -58,9 +58,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -o pipefail
           status=0
-          mix webby.contracts.check --format markdown | tee report.md || status=$?
+          # --output rather than capturing stdout: Mix writes dependency
+          # compilation progress there, which would otherwise be spliced into
+          # the issue body ahead of the report.
+          mix webby.contracts.check --format markdown --output report.md || status=$?
 
           # Exit 2 means an upstream could not be reached. That is an unknown,
           # not a clean result, so fail loudly rather than reporting "no drift".
