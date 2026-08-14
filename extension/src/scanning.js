@@ -1,5 +1,3 @@
-export const BROAD_ORIGINS = ["http://*/*", "https://*/*"];
-
 export function eligibleUrl(value) {
   try {
     const url = new URL(value);

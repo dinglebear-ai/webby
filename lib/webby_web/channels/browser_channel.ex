@@ -3,6 +3,7 @@ defmodule WebbyWeb.BrowserChannel do
   use WebbyWeb, :channel
 
   alias Webby.{BrowserProtocol, Browsers, Discovery}
+  alias Webby.Discovery.Discovery, as: DiscoveryRecord
   require Logger
 
   @impl true
@@ -157,7 +158,7 @@ defmodule WebbyWeb.BrowserChannel do
       {:ok, discoveries} ->
         Logger.info("browser discovery observations accepted",
           browser_id: browser_id,
-          observation_count: length(discoveries),
+          observation_count: accepted_count(discoveries),
           event: type
         )
 
@@ -166,7 +167,7 @@ defmodule WebbyWeb.BrowserChannel do
             "acknowledgement",
             %{
               "received" => type,
-              "observation_count" => length(discoveries),
+              "observation_count" => accepted_count(discoveries),
               "ignored_origins" => Discovery.list_ignored_origins(browser_id)
             },
             request_id: request_id,
@@ -197,4 +198,6 @@ defmodule WebbyWeb.BrowserChannel do
       browser_id: browser_id
     )
   end
+
+  defp accepted_count(discoveries), do: Enum.count(discoveries, &match?(%DiscoveryRecord{}, &1))
 end

@@ -1,6 +1,7 @@
 import {WebbyChannel} from "./channel.js";
 import {canScanTab, normalizeTools, sanitizePage} from "./scanning.js";
 import {probeWebMcp} from "./probe.js";
+import {reconcileModeAfterRemoval} from "./permissions.js";
 
 const DEFAULTS = {baseUrl: "http://127.0.0.1:6477", scanningMode: "granted_sites", scanningPaused: false};
 let channel;
@@ -18,11 +19,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 chrome.permissions.onAdded.addListener(() => scanAll());
 chrome.permissions.onRemoved.addListener(async () => {
-  const broad = await chrome.permissions.contains({origins: ["http://*/*", "https://*/*"]});
-  const {scanningMode} = await chrome.storage.local.get("scanningMode");
-  if (!broad && scanningMode === "all_tabs") {
-    await chrome.storage.local.set({scanningMode: "granted_sites"});
-  }
+  await reconcileModeAfterRemoval(chrome.permissions, chrome.storage.local);
   await scanAll();
 });
 chrome.storage.onChanged.addListener((changes) => {
@@ -35,7 +32,9 @@ chrome.storage.onChanged.addListener((changes) => {
   initialize();
 });
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  handleUiMessage(message).then(sendResponse);
+  handleUiMessage(message)
+    .then(sendResponse)
+    .catch((error) => sendResponse({ok: false, kind: error.message || "request_failed"}));
   return true;
 });
 

@@ -8,6 +8,8 @@ defmodule Webby.Discovery do
   @max_tools 64
   @max_description_bytes 1_000
   @max_schema_bytes 32_768
+  @max_schema_depth 16
+  @max_schema_nodes 2_048
 
   def list_discoveries do
     Repo.all(
@@ -51,6 +53,7 @@ defmodule Webby.Discovery do
 
   def observe(browser_id, attrs) do
     with {:ok, page} <- sanitize_page(attrs),
+         false <- ignored_origin?(browser_id, page.origin),
          {:ok, catalog} <- sanitize_catalog(attrs["tools"]),
          {:ok, fingerprint} <- fingerprint(catalog) do
       now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -76,6 +79,9 @@ defmodule Webby.Discovery do
         conflict_target: [:browser_id, :origin, :sanitized_path, :catalog_fingerprint],
         returning: true
       )
+    else
+      true -> {:ok, :ignored}
+      error -> error
     end
   end
 
@@ -154,7 +160,7 @@ defmodule Webby.Discovery do
        when is_binary(name) and byte_size(name) in 1..128 do
     schema = Map.get(tool, "input_schema", %{})
 
-    if json_size(schema) <= @max_schema_bytes do
+    if json_size(schema) <= @max_schema_bytes and valid_json_shape?(schema) do
       {:ok,
        %{
          "name" => sanitize_string(name, 128),
@@ -175,6 +181,42 @@ defmodule Webby.Discovery do
       {:error, _reason} -> @max_schema_bytes + 1
     end
   end
+
+  defp ignored_origin?(browser_id, origin) do
+    Repo.exists?(
+      from d in Discovery,
+        where: d.browser_id == ^browser_id and d.origin == ^origin and d.state == "ignored"
+    )
+  end
+
+  defp valid_json_shape?(value) do
+    case walk_json([{value, 0}], 0) do
+      {:ok, _nodes} -> true
+      :error -> false
+    end
+  end
+
+  defp walk_json([], nodes), do: {:ok, nodes}
+  defp walk_json(_pending, nodes) when nodes > @max_schema_nodes, do: :error
+  defp walk_json([{_value, depth} | _pending], _nodes) when depth > @max_schema_depth, do: :error
+
+  defp walk_json([{value, depth} | pending], nodes) when is_map(value) do
+    children =
+      Enum.flat_map(value, fn {key, nested} -> [{key, depth + 1}, {nested, depth + 1}] end)
+
+    walk_json(children ++ pending, nodes + 1)
+  end
+
+  defp walk_json([{value, depth} | pending], nodes) when is_list(value) do
+    children = Enum.map(value, &{&1, depth + 1})
+    walk_json(children ++ pending, nodes + 1)
+  end
+
+  defp walk_json([{value, _depth} | pending], nodes)
+       when is_binary(value) or is_number(value) or is_boolean(value) or is_nil(value),
+       do: walk_json(pending, nodes + 1)
+
+  defp walk_json(_pending, _nodes), do: :error
 
   defp sanitize_string(value, max_bytes) when is_binary(value),
     do: value |> String.replace(~r/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u, "") |> truncate(max_bytes)

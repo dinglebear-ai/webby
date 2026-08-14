@@ -34,3 +34,40 @@ test("uses the stable Phoenix join reference and delivers the auth challenge", a
   await messageReply;
   channel.close();
 });
+
+test("rejects and removes requests that exceed the reply deadline", async () => {
+  const channel = new WebbyChannel({
+    baseUrl: "http://127.0.0.1:6477",
+    extensionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    replyTimeoutMs: 5
+  });
+  channel.socket = {send() {}};
+  channel.topic = "browser:auth";
+  channel.joinRef = "1";
+
+  await assert.rejects(channel.sendFrame("message", {}), /channel_reply_timeout/);
+  assert.equal(channel.pending.size, 0);
+});
+
+test("a join timeout rejects readiness instead of leaving later messages pending", async () => {
+  class FakeWebSocket {
+    static OPEN = 1;
+    readyState = 1;
+    constructor() { queueMicrotask(() => this.onopen()); }
+    send() {}
+    close() { this.onclose?.(); }
+  }
+  globalThis.WebSocket = FakeWebSocket;
+
+  const channel = new WebbyChannel({
+    baseUrl: "http://127.0.0.1:6477",
+    extensionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    replyTimeoutMs: 5
+  });
+  channel.scheduleReconnect = () => {};
+  channel.connect();
+
+  await assert.rejects(channel.message("browser.hello", {}), /channel_reply_timeout/);
+  assert.equal(channel.pending.size, 0);
+  channel.close();
+});

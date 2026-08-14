@@ -1,4 +1,4 @@
-import {BROAD_ORIGINS} from "./scanning.js";
+import {BROAD_ORIGINS, disableAllTabs, enableAllTabs} from "./permissions.js";
 
 const baseUrl = document.querySelector("#base-url");
 const mode = document.querySelector("#mode");
@@ -14,11 +14,10 @@ await renderDisclosure();
 
 document.querySelector("#save").addEventListener("click", async () => {
   if (mode.value === "all_tabs") {
-    const granted = await chrome.permissions.request({origins: BROAD_ORIGINS});
+    const granted = await enableAllTabs(chrome.permissions);
     if (!granted) { mode.value = "granted_sites"; status.textContent = "Broad permission was not granted."; return; }
   } else {
-    const removed = await chrome.permissions.remove({origins: BROAD_ORIGINS});
-    const stillBroad = await chrome.permissions.contains({origins: BROAD_ORIGINS});
+    const {removed, stillBroad} = await disableAllTabs(chrome.permissions);
     if (!removed && stillBroad) { mode.value = "all_tabs"; renderDisclosure(); status.textContent = "Chrome did not remove broad permission."; return; }
   }
   await chrome.storage.local.set({baseUrl: baseUrl.value, scanningMode: mode.value, scanningPaused: paused.checked});
