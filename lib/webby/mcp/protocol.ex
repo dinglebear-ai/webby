@@ -71,12 +71,13 @@ defmodule Webby.MCP.Protocol do
   def handle(_request, _context), do: error(nil, -32_600, "Invalid Request")
 
   defp tool_result(value, error?) do
-    %{
+    result = %{
       "content" => [%{"type" => "text", "text" => Jason.encode!(value)}],
-      "structuredContent" => value,
       "isError" => error?,
       "resultType" => "complete"
     }
+
+    if is_map(value), do: Map.put(result, "structuredContent", value), else: result
   end
 
   defp response(id, result),

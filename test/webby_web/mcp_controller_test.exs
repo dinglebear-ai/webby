@@ -68,7 +68,7 @@ defmodule WebbyWeb.MCPControllerTest do
     assert response["result"]["instructions"] =~ "catalog_revision"
   end
 
-  test "calls a read-only broker action with structured content", %{conn: conn, token: token} do
+  test "encodes non-object broker results as MCP text content", %{conn: conn, token: token} do
     response =
       conn
       |> mcp_headers(token, "2025-06-18")
@@ -81,7 +81,8 @@ defmodule WebbyWeb.MCPControllerTest do
       |> json_response(200)
 
     assert response["result"]["isError"] == false
-    assert response["result"]["structuredContent"] == []
+    refute Map.has_key?(response["result"], "structuredContent")
+    assert response["result"]["content"] == [%{"type" => "text", "text" => "[]"}]
   end
 
   test "requires an explicit call scope for page invocation", %{conn: conn, token: token} do

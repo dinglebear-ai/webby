@@ -52,7 +52,7 @@
     "mix_alias": ["assets.build", "assets.deploy", "assets.setup", "ecto.reset", "ecto.setup", "precommit", "setup", "test"],
     "mix_task": ["webby.contracts.check"],
     "extension_npm_script": ["test", "typecheck"],
-    "e2e_npm_script": ["parity", "test", "test:chromium", "typecheck:chromium", "validate"],
+    "e2e_npm_script": ["parity", "test", "test:chromium", "test:mcp-official", "typecheck:chromium", "validate"],
     "ci_entrypoint": ["ci:elixir", "ci:extension", "upstream-contracts:check"],
     "world_manifest_field": ["artifact_directory", "base_url", "browser_profile_path", "database_path", "environment_marker", "fixture_url", "instance_nonce", "manifest_version", "metrics", "pid", "process_cwd", "process_executable", "process_group_id", "process_started", "scenario_id", "seed", "started_at", "stderr_path", "stdout_path", "telemetry_capability_path", "telemetry_path", "versions", "world_id"]
   },
@@ -220,6 +220,7 @@
     {"id": "command:extension-typecheck", "category": "extension_npm_script", "symbol": "typecheck", "source": "extension/package.json:8", "scenarios": ["e2e-command-ci-entrypoints"]},
     {"id": "command:e2e-test", "category": "e2e_npm_script", "symbol": "test", "source": "e2e/package.json", "scenarios": ["e2e-command-ci-entrypoints"]},
     {"id": "command:e2e-test-chromium", "category": "e2e_npm_script", "symbol": "test:chromium", "source": "e2e/package.json", "scenarios": ["e2e-command-ci-entrypoints"]},
+    {"id": "command:e2e-test-mcp-official", "category": "e2e_npm_script", "symbol": "test:mcp-official", "source": "e2e/package.json", "scenarios": ["e2e-command-ci-entrypoints"]},
     {"id": "command:e2e-typecheck-chromium", "category": "e2e_npm_script", "symbol": "typecheck:chromium", "source": "e2e/package.json", "scenarios": ["e2e-command-ci-entrypoints"]},
     {"id": "command:e2e-validate", "category": "e2e_npm_script", "symbol": "validate", "source": "e2e/package.json", "scenarios": ["e2e-command-ci-entrypoints"]},
     {"id": "command:e2e-parity", "category": "e2e_npm_script", "symbol": "parity", "source": "e2e/package.json", "scenarios": ["e2e-command-ci-entrypoints"]},

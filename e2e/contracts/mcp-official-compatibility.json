@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "sdk": {
+    "package": "@modelcontextprotocol/client",
+    "version": "2.0.0",
+    "transport": "StreamableHTTPClientTransport",
+    "telemetry": "disabled",
+    "update_checks": "disabled"
+  },
+  "sdk_supported_versions": ["2025-11-25", "2025-06-18", "2025-03-26"],
+  "negotiated_versions": ["2025-11-25"],
+  "required_methods": [
+    "initialize",
+    "notifications/initialized",
+    "ping",
+    "tools/list",
+    "tools/call",
+    "notifications/cancelled"
+  ],
+  "required_actions": [
+    "status",
+    "browser.list",
+    "discovery.list",
+    "discovery.get",
+    "page.list",
+    "page.get",
+    "page.tools",
+    "page.call"
+  ],
+  "page_call_outcomes": [
+    "success",
+    "tool_error",
+    "malformed_result",
+    "cancelled",
+    "timed_out",
+    "disconnected",
+    "revoked",
+    "late_result_rejected"
+  ],
+  "executed_outcomes": [
+    "success",
+    "tool_error",
+    "malformed_result",
+    "cancelled",
+    "timed_out",
+    "disconnected",
+    "revoked",
+    "late_result_rejected"
+  ],
+  "negative_boundaries": ["authentication", "origin", "version"],
+  "reviewed_exclusions": [
+    {
+      "id": "sdk-version-selection",
+      "covers": ["2026-07-28", "2025-06-18", "2025-03-26"],
+      "reason": "Client 2.0.0 legacy mode initializes with its latest 2025 revision. Its modern pinned mode requires server/discover, which Webby does not advertise as a public method. Direct transport remains the exhaustive version oracle."
+    }
+  ]
+}
