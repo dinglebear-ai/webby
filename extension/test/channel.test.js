@@ -124,9 +124,9 @@ test("drops malformed and wrong-topic frames and reports async event failures wi
   const payload = {type: "tool.call", payload: {call_id: "call-17"}};
   assert.doesNotThrow(() => channel.receive([null, "1", "browser:auth", "message", payload]));
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(failures.length, 1);
-  assert.match(failures[0].error.message, /handler failed/);
-  assert.equal(failures[0].payload.payload.call_id, "call-17");
+  const handlerFailure = failures.find(({error}) => error.message === "handler failed");
+  assert.ok(handlerFailure);
+  assert.equal(handlerFailure.payload.payload.call_id, "call-17");
 });
 
 test("rejects a malformed reply without throwing from the frame handler", async () => {
@@ -138,4 +138,71 @@ test("rejects a malformed reply without throwing from the frame handler", async 
   const ref = String(channel.ref);
   assert.doesNotThrow(() => channel.receive(["1", ref, "browser:auth", "phx_reply", null]));
   await assert.rejects(pending, /malformed_channel_reply/);
+});
+
+test("reports invalid frame shapes and unexpected topics", () => {
+  const failures = [];
+  const channel = new WebbyChannel({
+    baseUrl: "http://127.0.0.1:6477",
+    extensionId: "a",
+    onError: (error, context) => failures.push({error, context})
+  });
+  channel.topic = "browser:auth";
+  channel.receive(null);
+  channel.receive([null, 1, "browser:auth", "message", {}]);
+  channel.receive([null, "1", "other", "message", {}]);
+  assert.deepEqual(failures.map(({context}) => context.kind), ["invalid_frame", "invalid_frame", "invalid_frame"]);
+});
+
+test("reports invalid JSON with raw frame context", async () => {
+  let socket;
+  class FakeWebSocket {
+    static OPEN = 1;
+    readyState = 1;
+    constructor() { socket = this; }
+    send() {}
+    close() {}
+  }
+  globalThis.WebSocket = FakeWebSocket;
+  const failures = [];
+  const channel = new WebbyChannel({
+    baseUrl: "http://127.0.0.1:6477",
+    extensionId: "a",
+    onError: (error, context) => failures.push({error, context})
+  });
+  channel.connect();
+  socket.onmessage({data: "{not-json"});
+  assert.equal(failures[0].context.kind, "invalid_json");
+  assert.equal(failures[0].context.data, "{not-json");
+  channel.close();
+});
+
+test("onReady rejection is reported and closes the socket for reconnect", async () => {
+  let socket;
+  class FakeWebSocket {
+    static OPEN = 1;
+    readyState = 1;
+    constructor() { socket = this; queueMicrotask(() => this.onopen()); }
+    send() {}
+    close() { this.closed = true; this.onclose?.(); }
+  }
+  globalThis.WebSocket = FakeWebSocket;
+  const failures = [];
+  const channel = new WebbyChannel({
+    baseUrl: "http://127.0.0.1:6477",
+    extensionId: "a",
+    onReady: async () => { throw new Error("settings failed"); },
+    onError: (error, context) => failures.push({error, context})
+  });
+  channel.scheduleReconnect = () => { channel.reconnectScheduled = true; };
+  channel.connect();
+  await new Promise((resolve) => setImmediate(resolve));
+  const ref = String(channel.ref);
+  channel.receive([ref, ref, channel.topic, "phx_reply", {status: "ok", response: {}}]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(failures[0].context.kind, "ready_reconciliation_failed");
+  assert.match(failures[0].error.message, /settings failed/);
+  assert.equal(socket.closed, true);
+  assert.equal(channel.reconnectScheduled, true);
+  channel.close();
 });

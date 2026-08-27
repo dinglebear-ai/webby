@@ -63,7 +63,12 @@ export class WebbyChannel {
     socket.onmessage = (event) => {
       if (this.socket !== socket) return;
       let frame;
-      try { frame = JSON.parse(event.data); } catch { return; }
+      try {
+        frame = JSON.parse(event.data);
+      } catch (error) {
+        this.onError(error, {kind: "invalid_json", data: event.data});
+        return;
+      }
       this.receive(frame);
     };
     socket.onopen = () => {
@@ -89,7 +94,11 @@ export class WebbyChannel {
         if (this.socket !== socket) throw new Error("stale_socket");
         this.resolveReady();
         this.startHeartbeat();
-        Promise.resolve(this.onReady?.()).catch(() => {});
+        Promise.resolve(this.onReady?.()).catch((error) => {
+          if (this.socket !== socket) return;
+          this.onError(error, {kind: "ready_reconciliation_failed"});
+          socket.close();
+        });
       })
       .catch((reason) => {
         if (this.socket !== socket) return;
@@ -124,10 +133,19 @@ export class WebbyChannel {
 
   /** @param {unknown} frame */
   receive(frame) {
-    if (!Array.isArray(frame) || frame.length !== 5) return;
+    if (!Array.isArray(frame) || frame.length !== 5) {
+      this.onError(new Error("malformed_channel_frame"), {kind: "invalid_frame", frame});
+      return;
+    }
     const [_joinRef, ref, topic, event, payload] = frame;
-    if (typeof ref !== "string" || typeof topic !== "string" || typeof event !== "string") return;
-    if (topic !== this.topic && topic !== "phoenix") return;
+    if (typeof ref !== "string" || typeof topic !== "string" || typeof event !== "string") {
+      this.onError(new Error("malformed_channel_frame"), {kind: "invalid_frame", frame});
+      return;
+    }
+    if (topic !== this.topic && topic !== "phoenix") {
+      this.onError(new Error("unexpected_channel_topic"), {kind: "invalid_frame", topic});
+      return;
+    }
     const entry = this.pending.get(ref);
     if (event === "phx_reply" && entry) {
       const {resolve, reject, timeout} = entry;

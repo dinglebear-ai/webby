@@ -21,10 +21,16 @@ export class ScanScheduler {
   }
 
   async #drain() {
+    let firstError;
     do {
       this.again = false;
-      await this.scan();
+      try {
+        await this.scan();
+      } catch (error) {
+        firstError ??= error;
+      }
     } while (this.again);
+    if (firstError !== undefined) throw firstError;
   }
 }
 

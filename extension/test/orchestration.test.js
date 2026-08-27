@@ -43,6 +43,24 @@ test("scan scheduler coalesces overlap and performs one requested rerun", async 
   assert.equal(passes, 2);
 });
 
+test("scan scheduler honors its queued rerun after the current scan rejects", async () => {
+  let release;
+  let passes = 0;
+  const firstPass = new Promise((resolve) => { release = resolve; });
+  const scheduler = new ScanScheduler(async () => {
+    passes += 1;
+    if (passes === 1) {
+      await firstPass;
+      throw new Error("first scan failed");
+    }
+  });
+  const pending = scheduler.run();
+  scheduler.run();
+  release();
+  await assert.rejects(pending, /first scan failed/);
+  assert.equal(passes, 2);
+});
+
 test("pausing attempts to close every observation and exposes failed closes", async () => {
   const closed = [];
   const results = await closeObservations([1, 2, 3], async (tabId) => {

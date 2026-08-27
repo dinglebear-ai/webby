@@ -83,9 +83,6 @@ async function initialize() {
     });
     channel.connect();
   }
-  if (identity.browserId) {
-    await channel.message("browser.settings", {scanning_mode: settings.scanningMode, scanning_paused: settings.scanningPaused}).catch(() => {});
-  }
   if (settings.scanningPaused) await closeAllObservations();
   else if (identity.browserId) await scanAll();
 }
@@ -126,7 +123,27 @@ async function resumeAndScan() {
       return;
     }
   }
-  if (browserId) await resync();
+  if (browserId) {
+    await syncBrowserSettings();
+    await resync();
+  }
+}
+
+async function syncBrowserSettings() {
+  const settings = {...DEFAULTS, ...await chrome.storage.local.get(["scanningMode", "scanningPaused"])};
+  try {
+    await requireChannel().message("browser.settings", {
+      scanning_mode: settings.scanningMode,
+      scanning_paused: settings.scanningPaused
+    });
+  } catch (error) {
+    console.error("Webby browser settings reconciliation failed", {
+      scanningMode: settings.scanningMode,
+      scanningPaused: settings.scanningPaused,
+      error
+    });
+    throw error;
+  }
 }
 
 /**
@@ -182,10 +199,21 @@ async function executeToolCall(payload) {
 async function cancelToolCall(payload) {
   const observation = [...observations.values()].find((entry) => entry.document_id === payload.document_id);
   if (!observation) return;
-  await chrome.scripting.executeScript({
-    target: {tabId: observation.tab_id, documentIds: [observation.document_id]},
-    world: "MAIN", func: cancelWebMcp, args: [payload.call_id]
-  }).catch(() => {});
+  try {
+    await chrome.scripting.executeScript({
+      target: {tabId: observation.tab_id, documentIds: [observation.document_id]},
+      world: "MAIN", func: cancelWebMcp, args: [payload.call_id]
+    });
+  } catch (error) {
+    if (expectedGoneDocumentError(error)) return;
+    console.error("Webby tool cancellation failed", {
+      callId: payload.call_id,
+      tabId: observation.tab_id,
+      documentId: observation.document_id,
+      error
+    });
+    throw error;
+  }
 }
 
 /**
@@ -387,6 +415,13 @@ function expectedScanError(error) {
     "Frame with ID 0 was removed",
     "The frame was removed"
   ].some((expected) => message.includes(expected));
+}
+
+/** @param {unknown} error @returns {boolean} */
+function expectedGoneDocumentError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return ["No tab with id", "The tab was closed", "Frame with ID 0 was removed", "The frame was removed"]
+    .some((expected) => message.includes(expected));
 }
 
 initialize();
