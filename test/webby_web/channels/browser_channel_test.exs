@@ -8,7 +8,7 @@ defmodule WebbyWeb.BrowserChannelTest do
     extension_id = "abcdefghijklmnopabcdefghijklmnop"
     {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
 
-    assert {:ok, socket} = connect(WebbyWeb.BrowserSocket, %{"extension_id" => extension_id})
+    assert {:ok, socket} = connect_extension(extension_id)
 
     assert {:ok, _, socket} =
              subscribe_and_join(
@@ -68,7 +68,7 @@ defmodule WebbyWeb.BrowserChannelTest do
   test "a connected extension receives a local rejection decision" do
     extension_id = "gggggggggggggggggggggggggggggggg"
     {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
-    assert {:ok, socket} = connect(WebbyWeb.BrowserSocket, %{"extension_id" => extension_id})
+    assert {:ok, socket} = connect_extension(extension_id)
 
     assert {:ok, _, _socket} =
              subscribe_and_join(
@@ -92,7 +92,26 @@ defmodule WebbyWeb.BrowserChannelTest do
   end
 
   test "rejects an invalid extension identity" do
-    assert :error = connect(WebbyWeb.BrowserSocket, %{"extension_id" => "not-an-extension"})
+    assert :error =
+             connect(WebbyWeb.BrowserSocket, %{"extension_id" => "not-an-extension"},
+               connect_info: %{origin_extension_id: "not-an-extension"}
+             )
+  end
+
+  test "rejects a claimed extension identity that differs from the Origin" do
+    assert :error =
+             connect(
+               WebbyWeb.BrowserSocket,
+               %{"extension_id" => "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+               connect_info: %{origin_extension_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+             )
+  end
+
+  test "rejects a connection when the transport did not validate an Origin" do
+    assert :error =
+             connect(WebbyWeb.BrowserSocket, %{
+               "extension_id" => "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+             })
   end
 
   test "origin policy allows Chrome extensions and rejects ordinary web origins" do
@@ -102,6 +121,32 @@ defmodule WebbyWeb.BrowserChannelTest do
            })
 
     refute WebbyWeb.BrowserOrigin.allowed?(%URI{scheme: "https", host: "evil.example"})
+  end
+
+  test "a consumed Origin identity cannot authorize a later connection" do
+    extension_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    assert WebbyWeb.BrowserOrigin.allowed?(%URI{
+             scheme: "chrome-extension",
+             host: extension_id
+           })
+
+    assert {:ok, _socket} =
+             connect(WebbyWeb.BrowserSocket, %{"extension_id" => extension_id})
+
+    assert :error = connect(WebbyWeb.BrowserSocket, %{"extension_id" => extension_id})
+  end
+
+  test "a rejected Origin clears identity retained by a previous check" do
+    extension_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    assert WebbyWeb.BrowserOrigin.allowed?(%URI{
+             scheme: "chrome-extension",
+             host: extension_id
+           })
+
+    refute WebbyWeb.BrowserOrigin.allowed?(%URI{scheme: "https", host: "evil.example"})
+    assert :error = connect(WebbyWeb.BrowserSocket, %{"extension_id" => extension_id})
   end
 
   test "a paired extension authenticates its channel with the issued challenge" do
@@ -119,10 +164,7 @@ defmodule WebbyWeb.BrowserChannelTest do
     {:ok, browser} = Webby.Browsers.approve_pairing(pairing.id)
 
     assert {:ok, socket} =
-             connect(WebbyWeb.BrowserSocket, %{
-               "extension_id" => extension_id,
-               "browser_id" => browser.id
-             })
+             connect_extension(extension_id, browser.id)
 
     assert {:ok, %{"type" => "auth.challenge", "payload" => challenge}, socket} =
              subscribe_and_join(socket, WebbyWeb.BrowserChannel, "browser:auth", %{
@@ -199,7 +241,7 @@ defmodule WebbyWeb.BrowserChannelTest do
 
   test "an unauthenticated browser cannot submit discoveries" do
     extension_id = "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh"
-    assert {:ok, socket} = connect(WebbyWeb.BrowserSocket, %{"extension_id" => extension_id})
+    assert {:ok, socket} = connect_extension(extension_id)
 
     assert {:ok, _, socket} =
              subscribe_and_join(
@@ -226,5 +268,11 @@ defmodule WebbyWeb.BrowserChannelTest do
 
     assert_reply ref, :error, %{kind: "not_ready"}
     assert Webby.Discovery.list_discoveries() == []
+  end
+
+  defp connect_extension(extension_id, browser_id \\ nil) do
+    params = %{"extension_id" => extension_id, "browser_id" => browser_id}
+
+    connect(WebbyWeb.BrowserSocket, params, connect_info: %{origin_extension_id: extension_id})
   end
 end

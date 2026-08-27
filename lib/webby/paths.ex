@@ -1,38 +1,38 @@
 defmodule Webby.Paths do
   @moduledoc "Platform-aware locations for Webby's local configuration and state."
 
-  def config_dir, do: Path.join(config_root(), app_dir())
-  def data_dir, do: Path.join(data_root(), app_dir())
-  def state_dir, do: Path.join(state_root(), app_dir())
-  def runtime_file, do: Path.join(config_dir(), "runtime.json")
-  def instance_file, do: Path.join(config_dir(), "instance-id")
-  def secret_file, do: Path.join(config_dir(), "secret-key-base")
+  def config_dir(platform \\ :os.type()), do: Path.join(config_root(platform), app_dir(platform))
+  def data_dir(platform \\ :os.type()), do: Path.join(data_root(platform), app_dir(platform))
+  def state_dir(platform \\ :os.type()), do: Path.join(state_root(platform), app_dir(platform))
+  def runtime_file(platform \\ :os.type()), do: Path.join(config_dir(platform), "runtime.json")
+  def instance_file(platform \\ :os.type()), do: Path.join(config_dir(platform), "instance-id")
+  def secret_file(platform \\ :os.type()), do: Path.join(config_dir(platform), "secret-key-base")
 
-  defp app_dir do
-    case :os.type() do
+  defp app_dir(platform) do
+    case platform do
       {:unix, :darwin} -> "Webby"
       _ -> "webby"
     end
   end
 
-  defp config_root do
-    case :os.type() do
+  defp config_root(platform) do
+    case platform do
       {:win32, _} -> env!("LOCALAPPDATA")
       {:unix, :darwin} -> Path.join(home!(), "Library/Application Support")
       _ -> System.get_env("XDG_CONFIG_HOME") || Path.join(home!(), ".config")
     end
   end
 
-  defp data_root do
-    case :os.type() do
+  defp data_root(platform) do
+    case platform do
       {:win32, _} -> env!("LOCALAPPDATA")
       {:unix, :darwin} -> Path.join(home!(), "Library/Application Support")
       _ -> System.get_env("XDG_DATA_HOME") || Path.join(home!(), ".local/share")
     end
   end
 
-  defp state_root do
-    case :os.type() do
+  defp state_root(platform) do
+    case platform do
       {:win32, _} -> env!("LOCALAPPDATA")
       {:unix, :darwin} -> Path.join(home!(), "Library/Logs")
       _ -> System.get_env("XDG_STATE_HOME") || Path.join(home!(), ".local/state")

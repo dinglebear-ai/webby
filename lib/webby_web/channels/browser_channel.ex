@@ -98,6 +98,9 @@ defmodule WebbyWeb.BrowserChannel do
        ) do
     case Browsers.authenticate(browser_id, payload["challenge_id"], payload["signature"]) do
       {:ok, browser} ->
+        {:ok, _count} =
+          Pages.close_browser_sessions(browser.id, "page.session.browser_authenticated")
+
         :ok = BrowserConnections.register(browser.id)
 
         response =
@@ -117,7 +120,7 @@ defmodule WebbyWeb.BrowserChannel do
          %{assigns: %{authenticated: true, browser_id: browser_id}} = socket
        )
        when type in ["tool.result", "tool.error"] do
-    BrowserConnections.complete(browser_id, Map.put(payload, "type", type))
+    BrowserConnections.complete(browser_id, self(), Map.put(payload, "type", type))
     {:reply, {:ok, acknowledgement(type, nil, browser_id)}, socket}
   end
 
@@ -251,4 +254,14 @@ defmodule WebbyWeb.BrowserChannel do
       _ignored -> false
     end)
   end
+
+  @impl true
+  def terminate(_reason, %{assigns: %{authenticated: true, browser_id: browser_id}}) do
+    if BrowserConnections.unregister(browser_id, self()) == :ok,
+      do: Pages.close_browser_sessions(browser_id)
+
+    :ok
+  end
+
+  def terminate(_reason, _socket), do: :ok
 end

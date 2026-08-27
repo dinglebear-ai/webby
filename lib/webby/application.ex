@@ -25,6 +25,13 @@ defmodule Webby.Application do
     ]
 
     children =
+      if Application.get_env(:webby, :retention_enabled, true) do
+        List.insert_at(children, -1, Webby.RetentionWorker)
+      else
+        children
+      end
+
+    children =
       if Application.get_env(:webby, :runtime_discovery, true) do
         children ++ [{Webby.RuntimeDiscovery, []}, Webby.RuntimeStatusCache]
       else

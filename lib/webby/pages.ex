@@ -3,13 +3,24 @@ defmodule Webby.Pages do
 
   import Ecto.Query
   alias Ecto.Multi
-  alias Webby.Discovery.Discovery
+  alias Webby.{BrowserConnections, Discovery.Discovery}
   alias Webby.Pages.{DocumentSession, PageRegistration}
   alias Webby.Repo
   require Logger
 
   def list_registrations,
     do: Repo.all(from r in PageRegistration, order_by: [asc: r.display_name])
+
+  def list_registrations_with_session_counts do
+    Repo.all(
+      from r in PageRegistration,
+        left_join: s in DocumentSession,
+        on: s.registration_id == r.id and s.status == "active",
+        group_by: r.id,
+        order_by: [asc: r.display_name],
+        select: {r, count(s.id)}
+    )
+  end
 
   def list_active_sessions do
     Repo.all(
@@ -106,6 +117,18 @@ defmodule Webby.Pages do
   end
 
   def attach(browser_id, registration, attrs) do
+    case attach_deferred(browser_id, registration, attrs) do
+      {:ok, {session, cancellations}} ->
+        run_cancellations(cancellations)
+        {:ok, session}
+
+      error ->
+        error
+    end
+  end
+
+  @doc false
+  def attach_deferred(browser_id, registration, attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     Repo.transaction(fn ->
@@ -122,7 +145,27 @@ defmodule Webby.Pages do
         replaced_count: replaced_count
       )
 
-      session
+      {session,
+       [
+         {:stale_document, browser_id, session.tab_id, session.document_id,
+          session.catalog_revision}
+       ]}
+    end)
+  end
+
+  @doc false
+  def run_cancellations(cancellations) do
+    Enum.each(cancellations, fn
+      {:stale_document, browser_id, tab_id, document_id, catalog_revision} ->
+        BrowserConnections.cancel_stale_document(
+          browser_id,
+          tab_id,
+          document_id,
+          catalog_revision
+        )
+
+      {:document, browser_id, tab_id, document_id} ->
+        BrowserConnections.cancel_document(browser_id, tab_id, document_id)
     end)
   end
 
@@ -140,10 +183,20 @@ defmodule Webby.Pages do
       )
 
     log_closed(browser_id, count, "page.session.closed")
+    BrowserConnections.cancel_document(browser_id, tab_id, document_id)
     {:ok, count}
   end
 
   def reconcile(browser_id, observed_records) do
+    case reconcile_deferred(browser_id, observed_records) do
+      {:ok, {count, cancellations}} ->
+        run_cancellations(cancellations)
+        {:ok, count}
+    end
+  end
+
+  @doc false
+  def reconcile_deferred(browser_id, observed_records) do
     current =
       observed_records
       |> Enum.flat_map(fn
@@ -152,7 +205,7 @@ defmodule Webby.Pages do
       end)
       |> MapSet.new()
 
-    stale_ids =
+    stale_sessions =
       Repo.all(
         from s in DocumentSession,
           where: s.browser_id == ^browser_id and s.status == "active",
@@ -161,12 +214,17 @@ defmodule Webby.Pages do
       |> Enum.reject(fn {_id, tab_id, document_id} ->
         MapSet.member?(current, {tab_id, document_id})
       end)
-      |> Enum.map(&elem(&1, 0))
 
-    case close_sessions(stale_ids) do
-      {:ok, count} = result ->
+    case close_sessions(Enum.map(stale_sessions, &elem(&1, 0))) do
+      {:ok, count} ->
         log_closed(browser_id, count, "page.session.reconciled")
-        result
+
+        cancellations =
+          Enum.map(stale_sessions, fn {_id, tab_id, document_id} ->
+            {:document, browser_id, tab_id, document_id}
+          end)
+
+        {:ok, {count, cancellations}}
     end
   end
 
@@ -181,6 +239,18 @@ defmodule Webby.Pages do
     case close_sessions(ids) do
       {:ok, count} = result ->
         log_closed(browser_id, count, event)
+        result
+    end
+  end
+
+  def close_all_active_sessions(event \\ "page.session.startup_reconciled") do
+    ids = Repo.all(from s in DocumentSession, where: s.status == "active", select: s.id)
+
+    case close_sessions(ids) do
+      {:ok, count} = result ->
+        if count > 0,
+          do: Logger.info("document sessions closed", event: event, session_count: count)
+
         result
     end
   end

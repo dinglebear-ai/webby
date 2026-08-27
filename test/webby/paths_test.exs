@@ -9,13 +9,26 @@ defmodule Webby.PathsTest do
         "XDG_STATE_HOME" => "/tmp/webby-state"
       },
       fn ->
-        assert Webby.Paths.config_dir() == "/tmp/webby-config/webby"
-        assert Webby.Paths.data_dir() == "/tmp/webby-data/webby"
-        assert Webby.Paths.state_dir() == "/tmp/webby-state/webby"
-        assert Webby.Paths.runtime_file() == "/tmp/webby-config/webby/runtime.json"
-        assert Webby.Paths.secret_file() == "/tmp/webby-config/webby/secret-key-base"
+        platform = {:unix, :linux}
+
+        assert Webby.Paths.config_dir(platform) == "/tmp/webby-config/webby"
+        assert Webby.Paths.data_dir(platform) == "/tmp/webby-data/webby"
+        assert Webby.Paths.state_dir(platform) == "/tmp/webby-state/webby"
+        assert Webby.Paths.runtime_file(platform) == "/tmp/webby-config/webby/runtime.json"
+        assert Webby.Paths.secret_file(platform) == "/tmp/webby-config/webby/secret-key-base"
       end
     )
+  end
+
+  test "macOS paths use the application support and logs conventions" do
+    home = System.user_home!()
+    platform = {:unix, :darwin}
+
+    assert Webby.Paths.config_dir(platform) ==
+             Path.join(home, "Library/Application Support/Webby")
+
+    assert Webby.Paths.data_dir(platform) == Path.join(home, "Library/Application Support/Webby")
+    assert Webby.Paths.state_dir(platform) == Path.join(home, "Library/Logs/Webby")
   end
 
   defp with_env(values, fun) do

@@ -46,7 +46,8 @@ test("the injected cancel resolves against the page's own global", async () => {
   try {
     assert.equal(injected("call-1"), true);
     assert.equal(controller.signal.aborted, true);
-    assert.equal(injected("absent"), false);
+    assert.equal(injected("absent"), true);
+    assert.equal(globalThis.__webbyToolCalls.get("absent").cancelled, true);
   } finally {
     delete globalThis.__webbyToolCalls;
   }

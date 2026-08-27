@@ -12,7 +12,17 @@ config :webby,
   generators: [timestamp_type: :utc_datetime],
   listen_host: {127, 0, 0, 1},
   listen_port: 6477,
-  runtime_discovery: true
+  runtime_discovery: true,
+  retention_enabled: true
+
+config :webby, :retention,
+  interval_ms: :timer.hours(1),
+  abandoned_after_seconds: 60,
+  invocation_days: 30,
+  discovery_days: 30,
+  session_days: 7,
+  pairing_days: 7,
+  batch_size: 500
 
 # Configure the endpoint
 config :webby, WebbyWeb.Endpoint,

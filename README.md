@@ -61,6 +61,27 @@ selects a different loopback port. On first launch, Webby creates a stable,
 owner-only signing secret under its platform configuration directory;
 `SECRET_KEY_BASE` can override it for managed deployments.
 
+Automatic retention runs hourly by default. It marks invocation audits left in
+`started` state for more than 60 seconds as abandoned, retains invocation audits
+and discoveries for 30 days, and retains closed document sessions and resolved
+pairing requests for 7 days. Managed deployments can tune the positive-integer
+settings below:
+
+| Environment variable | Default | Unit or effect |
+| --- | ---: | --- |
+| `WEBBY_RETENTION_INTERVAL_MS` | `3600000` | Milliseconds between maintenance runs |
+| `WEBBY_ABANDONED_AFTER_SECONDS` | `60` | Seconds before an incomplete invocation is reconciled |
+| `WEBBY_INVOCATION_RETENTION_DAYS` | `30` | Days to retain completed invocation audits |
+| `WEBBY_DISCOVERY_RETENTION_DAYS` | `30` | Days to retain stale discoveries |
+| `WEBBY_SESSION_RETENTION_DAYS` | `7` | Days to retain closed document sessions |
+| `WEBBY_PAIRING_RETENTION_DAYS` | `7` | Days to retain resolved pairing requests |
+| `WEBBY_RETENTION_BATCH_SIZE` | `500` | Rows pruned per category and batch (maximum `5000`) |
+
+When a maintenance batch reaches that limit, Webby immediately runs another
+batch. It briefly yields after every ten batches, then resumes until the backlog
+is drained. This lets old rows drain promptly without allowing retention work to
+monopolize the application indefinitely.
+
 ## Design
 
 - [Architecture specification](docs/superpowers/specs/2026-08-13-webby-design.md)

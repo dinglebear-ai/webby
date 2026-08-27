@@ -1,4 +1,5 @@
 import {BROAD_ORIGINS, disableAllTabs, enableAllTabs} from "./permissions.js";
+import {parseLoopbackBaseUrl} from "./base_url.js";
 
 /**
  * Every element below is declared in popup.html. Failing loudly on a missing
@@ -28,6 +29,13 @@ paused.checked = saved.scanningPaused || false;
 await renderDisclosure();
 
 required("#save").addEventListener("click", async () => {
+  let normalizedBaseUrl;
+  try {
+    normalizedBaseUrl = parseLoopbackBaseUrl(baseUrl.value);
+  } catch {
+    status.textContent = "Webby must use a loopback URL such as http://127.0.0.1:6477.";
+    return;
+  }
   if (mode.value === "all_tabs") {
     const granted = await enableAllTabs(chrome.permissions);
     if (!granted) { mode.value = "granted_sites"; status.textContent = "Broad permission was not granted."; return; }
@@ -35,7 +43,8 @@ required("#save").addEventListener("click", async () => {
     const {removed, stillBroad} = await disableAllTabs(chrome.permissions);
     if (!removed && stillBroad) { mode.value = "all_tabs"; renderDisclosure(); status.textContent = "Chrome did not remove broad permission."; return; }
   }
-  await chrome.storage.local.set({baseUrl: baseUrl.value, scanningMode: mode.value, scanningPaused: paused.checked});
+  baseUrl.value = normalizedBaseUrl;
+  await chrome.storage.local.set({baseUrl: normalizedBaseUrl, scanningMode: mode.value, scanningPaused: paused.checked});
   renderDisclosure();
   status.textContent = "Saved.";
 });

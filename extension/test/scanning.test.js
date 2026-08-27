@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {buildObservation, canScanTab, eligibleUrl, normalizeTools, sanitizePage} from "../src/scanning.js";
+import {buildObservation, canScanTab, eligibleUrl, ignoredObservationTabIds, normalizeTools, sanitizePage} from "../src/scanning.js";
 import {expectedTool} from "./support.js";
 
 test("excludes internal and incognito tabs and scans only granted origins", async () => {
@@ -47,4 +47,15 @@ test("binds observations to Chrome's document identity", () => {
     ),
     null
   );
+});
+
+test("selects existing observations that must close when origins become ignored", () => {
+  const observations = [
+    {tab_id: 1, url: "https://ignored.example/path"},
+    {tab_id: 2, url: "https://kept.example/"},
+    {tab_id: 3, url: "https://ignored.example/other"},
+    {tab_id: 4, url: "not a url"}
+  ];
+  assert.deepEqual(ignoredObservationTabIds(observations, ["https://ignored.example"]), [1, 3]);
+  assert.deepEqual(ignoredObservationTabIds(observations, undefined), []);
 });

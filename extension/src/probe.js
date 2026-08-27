@@ -91,77 +91,89 @@ export async function probeWebMcp() {
  * @returns {Promise<unknown>}
  */
 export async function invokeWebMcp(toolName, input, callId, expectedCatalog) {
-  const context = document.modelContext;
-  if (!context || typeof context.getTools !== "function") throw new Error("webmcp_unavailable");
-
-  // `executeTool()` was specified on 2026-08-14 (webmachinelearning/webmcp#226)
-  // as:
-  //
-  //   Promise<DOMString> executeTool(RegisteredTool tool, DOMString inputArguments,
-  //                                  optional ModelContextExecuteToolOptions options)
-  //
-  // which is exactly the call below. The published `webmcp-types` (0.1.3)
-  // predates that and does not declare it yet, so the cast stays until the
-  // definitions catch up -- the `webmcp-types` contract will report that
-  // version bump. Feature detection stays regardless: no browser implements it
-  // yet, and per section 21 an unimplemented API must be reported as
-  // unsupported rather than simulated.
-  const executeTool = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (context)).executeTool;
-  if (typeof executeTool !== "function") throw new Error("webmcp_unavailable");
-
-  // `getTools()` is called without `fromOrigins` deliberately: restricting to
-  // same-origin would silently drop tools a page intentionally exposed from a
-  // frame. They are carried, with their origin recorded, so the decision is
-  // visible rather than made here.
-  const tools = Array.from(await context.getTools() ?? []);
-
-  const normalized = tools.slice(0, 64).flatMap((tool) => {
-    if (!tool || typeof tool.name !== "string") return [];
-    if (tool.name.length < 1 || tool.name.length > 128) return [];
-    let schema = tool.inputSchema ?? /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (tool)).input_schema ?? {};
-    if (typeof schema === "string") {
-      try { schema = JSON.parse(schema); } catch { return []; }
-    }
-    const annotations = tool.annotations ?? {};
-    return [{
-      name: tool.name,
-      title: typeof tool.title === "string" ? tool.title.slice(0, 200) : "",
-      description: typeof tool.description === "string" ? tool.description.slice(0, 1000) : "",
-      input_schema: schema,
-      origin: typeof tool.origin === "string" ? tool.origin.slice(0, 256) : "",
-      annotations: {
-        read_only_hint: (annotations.readOnlyHint ?? /** @type {Record<string, unknown>} */ (annotations).read_only_hint) === true,
-        untrusted_content_hint: (annotations.untrustedContentHint ?? /** @type {Record<string, unknown>} */ (annotations).untrusted_content_hint) === true
-      }
-    }];
-  }).sort((left, right) => left.name.localeCompare(right.name));
-
-  // Key order is not observable through the WebMCP surface, so canonicalize
-  // before comparing as a string.
-  /** @type {(value: unknown) => unknown} */
-  const stable = (value) => {
-    if (Array.isArray(value)) return value.map(stable);
-    if (value && typeof value === "object") {
-      const record = /** @type {Record<string, unknown>} */ (value);
-      return Object.fromEntries(Object.keys(record).sort().map((key) => [key, stable(record[key])]));
-    }
-    return value;
-  };
-
-  if (JSON.stringify(stable(normalized)) !== expectedCatalog) throw new Error("stale_catalog");
-
-  const tool = tools.find((candidate) => candidate?.name === toolName);
-  if (!tool) throw new Error("tool_not_found");
-
-  const controllers = globalThis.__webbyToolCalls ??= new Map();
-  const controller = new AbortController();
-  controllers.set(callId, controller);
+  const calls = globalThis.__webbyToolCalls ??= new Map();
+  const prior = calls.get(callId);
+  if (prior?.cancelled) {
+    calls.delete(callId);
+    throw new Error("AbortError");
+  }
+  if (prior) throw new Error("duplicate_call_id");
+  const state = {cancelled: false, controller: new AbortController()};
+  calls.set(callId, state);
   try {
-    const result = await executeTool.call(context, tool, JSON.stringify(input ?? {}), {signal: controller.signal});
+    const context = document.modelContext;
+    if (!context || typeof context.getTools !== "function") throw new Error("webmcp_unavailable");
+
+    // `executeTool()` was specified on 2026-08-14 (webmachinelearning/webmcp#226)
+    // as:
+    //
+    //   Promise<DOMString> executeTool(RegisteredTool tool, DOMString inputArguments,
+    //                                  optional ModelContextExecuteToolOptions options)
+    //
+    // which is exactly the call below. The published `webmcp-types` (0.1.3)
+    // predates that and does not declare it yet, so the cast stays until the
+    // definitions catch up -- the `webmcp-types` contract will report that
+    // version bump. Feature detection stays regardless: no browser implements it
+    // yet, and per section 21 an unimplemented API must be reported as
+    // unsupported rather than simulated.
+    const executeTool = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (context)).executeTool;
+    if (typeof executeTool !== "function") throw new Error("webmcp_unavailable");
+
+    // `getTools()` is called without `fromOrigins` deliberately: restricting to
+    // same-origin would silently drop tools a page intentionally exposed from a
+    // frame. They are carried, with their origin recorded, so the decision is
+    // visible rather than made here.
+    const tools = Array.from(await context.getTools() ?? []);
+    if (state.cancelled) throw new Error("AbortError");
+
+    const normalized = tools.slice(0, 64).flatMap((tool) => {
+      if (!tool || typeof tool.name !== "string") return [];
+      if (tool.name.length < 1 || tool.name.length > 128) return [];
+      let schema = tool.inputSchema ?? /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (tool)).input_schema ?? {};
+      if (typeof schema === "string") {
+        try { schema = JSON.parse(schema); } catch { return []; }
+      }
+      const annotations = tool.annotations ?? {};
+      return [{
+        name: tool.name,
+        title: typeof tool.title === "string" ? tool.title.slice(0, 200) : "",
+        description: typeof tool.description === "string" ? tool.description.slice(0, 1000) : "",
+        input_schema: schema,
+        origin: typeof tool.origin === "string" ? tool.origin.slice(0, 256) : "",
+        annotations: {
+          read_only_hint: (annotations.readOnlyHint ?? /** @type {Record<string, unknown>} */ (annotations).read_only_hint) === true,
+          untrusted_content_hint: (annotations.untrustedContentHint ?? /** @type {Record<string, unknown>} */ (annotations).untrusted_content_hint) === true
+        }
+      }];
+    }).sort((left, right) => left.name.localeCompare(right.name));
+
+    // Key order is not observable through the WebMCP surface, so canonicalize
+    // before comparing as a string.
+    /** @type {(value: unknown) => unknown} */
+    const stable = (value) => {
+      if (Array.isArray(value)) return value.map(stable);
+      if (value && typeof value === "object") {
+        const record = /** @type {Record<string, unknown>} */ (value);
+        return Object.fromEntries(Object.keys(record).sort().map((key) => [key, stable(record[key])]));
+      }
+      return value;
+    };
+
+    if (JSON.stringify(stable(normalized)) !== expectedCatalog) throw new Error("stale_catalog");
+
+    const tool = tools.find((candidate) => candidate?.name === toolName);
+    if (!tool) throw new Error("tool_not_found");
+
+    const result = await executeTool.call(
+      context,
+      tool,
+      JSON.stringify(input ?? {}),
+      {signal: state.controller.signal}
+    );
     if (typeof result !== "string") return result;
     try { return JSON.parse(result); } catch { return result; }
   } finally {
-    controllers.delete(callId);
+    if (calls.get(callId) === state) calls.delete(callId);
   }
 }
 
@@ -170,8 +182,17 @@ export async function invokeWebMcp(toolName, input, callId, expectedCatalog) {
  * @returns {boolean}
  */
 export function cancelWebMcp(callId) {
-  const controller = globalThis.__webbyToolCalls?.get(callId);
-  if (!controller) return false;
-  controller.abort();
+  const calls = globalThis.__webbyToolCalls ??= new Map();
+  const state = calls.get(callId);
+  if (!state) {
+    calls.set(callId, {cancelled: true, controller: null});
+    return true;
+  }
+  if (state instanceof AbortController) {
+    state.abort();
+    return true;
+  }
+  state.cancelled = true;
+  state.controller?.abort();
   return true;
 }

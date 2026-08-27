@@ -55,31 +55,36 @@ defmodule Webby.Discovery do
   end
 
   def observe(browser_id, attrs) do
-    with {:ok, page} <- sanitize_page(attrs),
-         {:ok, catalog} <- sanitize_catalog(attrs["tools"]),
-         {:ok, fingerprint} <- fingerprint(catalog) do
-      route_observation(browser_id, attrs, page, catalog, fingerprint)
+    with {:ok, prepared} <- prepare_observation(attrs) do
+      persist_observation(browser_id, prepared)
     end
   end
 
   def observe_many(browser_id, observations)
       when is_list(observations) and length(observations) <= 128 do
-    Repo.transaction(fn ->
-      Enum.map(observations, &observe_or_rollback(browser_id, &1))
-    end)
+    with {:ok, prepared} <- prepare_many(observations) do
+      transaction_with_cancellations(fn ->
+        observed = Enum.map(prepared, &persist_or_rollback(browser_id, &1, :deferred))
+        {Enum.map(observed, &elem(&1, 0)), Enum.flat_map(observed, &elem(&1, 1))}
+      end)
+    end
   end
 
   def observe_many(_browser_id, _observations), do: {:error, :invalid_observations}
 
   def resync(browser_id, observations) when is_list(observations) do
-    Repo.transaction(fn ->
-      with {:ok, observed} <- observe_many(browser_id, observations),
-           {:ok, _closed_count} <- Pages.reconcile(browser_id, observed) do
-        observed
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+    with {:ok, prepared} <- prepare_many(observations) do
+      transaction_with_cancellations(fn ->
+        observed = Enum.map(prepared, &persist_or_rollback(browser_id, &1, :deferred))
+        records = Enum.map(observed, &elem(&1, 0))
+        cancellations = Enum.flat_map(observed, &elem(&1, 1))
+
+        {:ok, {_closed_count, reconcile_cancellations}} =
+          Pages.reconcile_deferred(browser_id, records)
+
+        {records, cancellations ++ reconcile_cancellations}
+      end)
+    end
   end
 
   def resync(_browser_id, _observations), do: {:error, :invalid_observations}
@@ -123,33 +128,97 @@ defmodule Webby.Discovery do
 
   defp sanitize_page(_attrs), do: {:error, :invalid_page_url}
 
-  defp observe_or_rollback(browser_id, attrs) do
-    case observe(browser_id, attrs) do
-      {:ok, discovery} -> discovery
+  defp prepare_observation(attrs) do
+    with {:ok, page} <- sanitize_page(attrs),
+         {:ok, catalog} <- sanitize_catalog(attrs["tools"]),
+         {:ok, fingerprint} <- fingerprint(catalog) do
+      {:ok, %{attrs: attrs, page: page, catalog: catalog, fingerprint: fingerprint}}
+    end
+  end
+
+  defp prepare_many(observations) when length(observations) <= 128 do
+    Enum.reduce_while(observations, {:ok, []}, fn attrs, {:ok, prepared} ->
+      case prepare_observation(attrs) do
+        {:ok, observation} -> {:cont, {:ok, [observation | prepared]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
+      error -> error
+    end
+  end
+
+  defp prepare_many(_observations), do: {:error, :invalid_observations}
+
+  defp transaction_with_cancellations(callback) do
+    case Repo.transaction(callback) do
+      {:ok, {records, cancellations}} ->
+        Pages.run_cancellations(cancellations)
+        {:ok, records}
+
+      error ->
+        error
+    end
+  end
+
+  defp persist_or_rollback(browser_id, prepared, cancellation_mode) do
+    case persist_observation(browser_id, prepared, cancellation_mode) do
+      {:ok, record} -> record
       {:error, reason} -> Repo.rollback(reason)
     end
   end
 
-  defp route_observation(browser_id, attrs, page, catalog, fingerprint) do
+  defp persist_observation(browser_id, prepared, cancellation_mode \\ :immediate) do
+    route_observation(
+      browser_id,
+      prepared.attrs,
+      prepared.page,
+      prepared.catalog,
+      prepared.fingerprint,
+      cancellation_mode
+    )
+  end
+
+  defp route_observation(browser_id, attrs, page, catalog, fingerprint, cancellation_mode) do
     case Pages.match(page.origin, page.sanitized_path) do
       {:ok, registration} ->
-        attach_session(browser_id, registration, attrs, page, catalog, fingerprint)
+        attach_session(
+          browser_id,
+          registration,
+          attrs,
+          page,
+          catalog,
+          fingerprint,
+          cancellation_mode
+        )
 
       :none ->
-        if ignored_origin?(browser_id, page.origin),
-          do: {:ok, :ignored},
-          else: persist_discovery(browser_id, page, catalog, fingerprint)
+        result =
+          if ignored_origin?(browser_id, page.origin),
+            do: {:ok, :ignored},
+            else: persist_discovery(browser_id, page, catalog, fingerprint)
+
+        maybe_defer(result, cancellation_mode)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp attach_session(browser_id, registration, attrs, page, catalog, fingerprint) do
+  defp attach_session(
+         browser_id,
+         registration,
+         attrs,
+         page,
+         catalog,
+         fingerprint,
+         cancellation_mode
+       ) do
     with tab_id when is_integer(tab_id) and tab_id >= 0 <- attrs["tab_id"],
          document_id when is_binary(document_id) and byte_size(document_id) in 1..128 <-
            attrs["document_id"] do
-      Pages.attach(browser_id, registration, %{
+      attach_page(cancellation_mode, browser_id, registration, %{
         tab_id: tab_id,
         document_id: document_id,
         current_origin: page.origin,
@@ -162,6 +231,15 @@ defmodule Webby.Discovery do
       _invalid -> {:error, :invalid_document_identity}
     end
   end
+
+  defp maybe_defer({:ok, record}, :deferred), do: {:ok, {record, []}}
+  defp maybe_defer(result, _cancellation_mode), do: result
+
+  defp attach_page(:deferred, browser_id, registration, attrs),
+    do: Pages.attach_deferred(browser_id, registration, attrs)
+
+  defp attach_page(_cancellation_mode, browser_id, registration, attrs),
+    do: Pages.attach(browser_id, registration, attrs)
 
   defp persist_discovery(browser_id, page, catalog, fingerprint) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)

@@ -36,6 +36,36 @@ defmodule WebbyWeb.MCPControllerTest do
     assert tools["result"]["resultType"] == "complete"
     assert "page.tools" in schema["properties"]["action"]["enum"]
     assert "page.call" in schema["properties"]["action"]["enum"]
+
+    branches = Map.new(schema["oneOf"], &{&1["properties"]["action"]["const"], &1})
+
+    assert Map.keys(branches) |> Enum.sort() ==
+             ~w(browser.list discovery.get discovery.list page.call page.get page.list page.tools status)
+
+    for action <- ~w(status browser.list discovery.list page.list) do
+      assert branches[action]["properties"]["params"]["maxProperties"] == 0
+      refute "params" in Map.get(branches[action], "required", [])
+    end
+
+    for action <- ~w(page.get page.tools) do
+      assert branches[action]["required"] == ["params"]
+      assert branches[action]["properties"]["params"]["required"] == ["page"]
+      assert branches[action]["properties"]["params"]["additionalProperties"] == false
+    end
+
+    assert branches["discovery.get"]["properties"]["params"]["required"] == ["id"]
+
+    page_call = branches["page.call"]
+
+    assert page_call["properties"]["params"]["required"] == [
+             "page",
+             "tool",
+             "catalog_revision"
+           ]
+
+    assert page_call["properties"]["params"]["properties"]["arguments"]["type"] == "object"
+    assert response["result"]["instructions"] =~ "page.list"
+    assert response["result"]["instructions"] =~ "catalog_revision"
   end
 
   test "calls a read-only broker action with structured content", %{conn: conn, token: token} do

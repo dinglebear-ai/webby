@@ -17,6 +17,7 @@ config :webby,
   allowed_hosts: ["www.example.com", "127.0.0.1", "localhost", "[::1]"],
   instance_id_provider: fn -> "test-instance-id" end,
   runtime_discovery: false,
+  retention_enabled: false,
   runtime_status_module: Webby.TestHealthyRuntimeStatus
 
 # We don't run a server during test. If one is required,

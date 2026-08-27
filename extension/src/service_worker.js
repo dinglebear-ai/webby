@@ -1,7 +1,9 @@
 import {WebbyChannel} from "./channel.js";
-import {buildObservation, canScanTab, stableStringify} from "./scanning.js";
+import {buildObservation, canScanTab, ignoredObservationTabIds, stableStringify} from "./scanning.js";
 import {cancelWebMcp, invokeWebMcp, probeWebMcp} from "./probe.js";
 import {reconcileModeAfterRemoval} from "./permissions.js";
+import {parseLoopbackBaseUrl} from "./base_url.js";
+import {closeObservations, executionAllowed, publishCurrentObservation, ScanScheduler} from "./orchestration.js";
 
 /** @typedef {{url: string, title: string, tools: unknown[], tab_id: number, document_id: string}} Observation */
 
@@ -10,6 +12,11 @@ const DEFAULTS = {baseUrl: "http://127.0.0.1:6477", scanningMode: "granted_sites
 let channel;
 /** @type {Map<number | undefined, Observation>} */
 let observations = new Map();
+/** @type {Map<number, number>} */
+const scanGenerations = new Map();
+const SCAN_CONCURRENCY = 8;
+/** @type {Map<number, string>} */
+const pendingClosures = new Map();
 
 /**
  * The channel is created by `initialize()`, which runs at worker start and
@@ -38,6 +45,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.permissions.onAdded.addListener(() => scanAll());
 chrome.permissions.onRemoved.addListener(async () => {
   await reconcileModeAfterRemoval(chrome.permissions, chrome.storage.local);
+  await closeIneligibleObservations();
   await scanAll();
 });
 chrome.storage.onChanged.addListener((changes) => {
@@ -59,6 +67,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 async function initialize() {
   await chrome.alarms.create("webby-periodic-scan", {periodInMinutes: 1});
   const settings = {...DEFAULTS, ...await chrome.storage.local.get(Object.keys(DEFAULTS))};
+  try { settings.baseUrl = parseLoopbackBaseUrl(settings.baseUrl); } catch {
+    settings.baseUrl = DEFAULTS.baseUrl;
+    await chrome.storage.local.set({baseUrl: settings.baseUrl});
+  }
   const identity = await ensureIdentity();
   if (!channel) {
     channel = new WebbyChannel({
@@ -71,10 +83,8 @@ async function initialize() {
     });
     channel.connect();
   }
-  if (identity.browserId) {
-    await channel.message("browser.settings", {scanning_mode: settings.scanningMode, scanning_paused: settings.scanningPaused}).catch(() => {});
-  }
-  if (identity.browserId && !settings.scanningPaused) await scanAll();
+  if (settings.scanningPaused) await closeAllObservations();
+  else if (identity.browserId) await scanAll();
 }
 
 /**
@@ -113,7 +123,27 @@ async function resumeAndScan() {
       return;
     }
   }
-  if (browserId) await resync();
+  if (browserId) {
+    await syncBrowserSettings();
+    await resync();
+  }
+}
+
+async function syncBrowserSettings() {
+  const settings = {...DEFAULTS, ...await chrome.storage.local.get(["scanningMode", "scanningPaused"])};
+  try {
+    await requireChannel().message("browser.settings", {
+      scanning_mode: settings.scanningMode,
+      scanning_paused: settings.scanningPaused
+    });
+  } catch (error) {
+    console.error("Webby browser settings reconciliation failed", {
+      scanningMode: settings.scanningMode,
+      scanningPaused: settings.scanningPaused,
+      error
+    });
+    throw error;
+  }
 }
 
 /**
@@ -134,12 +164,18 @@ async function handleServerEvent(envelope) {
  * @param {{tab_id: number, document_id: string, call_id: string, tool_name: string, arguments?: unknown}} payload
  */
 async function executeToolCall(payload) {
-  const observation = observations.get(payload.tab_id);
-  if (!observation || observation.document_id !== payload.document_id) {
-    return sendToolError(payload.call_id, "stale_document", "The requested document is no longer active");
-  }
-  const expectedCatalog = stableStringify(observation.tools);
   try {
+    const observation = observations.get(payload.tab_id);
+    if (!observation || observation.document_id !== payload.document_id) {
+      return await sendToolError(payload.call_id, "stale_document", "The requested document is no longer active");
+    }
+    const settings = {...DEFAULTS, ...await chrome.storage.local.get(["scanningPaused"])};
+    const permissionGranted = await canScanTab(await chrome.tabs.get(payload.tab_id).catch(() => undefined), chrome.permissions);
+    if (!executionAllowed(settings.scanningPaused, permissionGranted)) {
+      await closeObservation(payload.tab_id);
+      return await sendToolError(payload.call_id, "permission_denied", "Browser access is paused or no longer granted");
+    }
+    const expectedCatalog = stableStringify(observation.tools);
     const [execution] = await chrome.scripting.executeScript({
       target: {tabId: payload.tab_id, documentIds: [payload.document_id]},
       world: "MAIN",
@@ -152,6 +188,7 @@ async function executeToolCall(payload) {
   } catch (error) {
     const message = error instanceof Error ? error.message : undefined;
     const kind = knownToolError(message) ? /** @type {string} */ (message) : "tool_failed";
+    console.error("Webby tool call failed", {callId: payload.call_id, kind, error});
     await sendToolError(payload.call_id, kind, "The page tool could not be completed");
   }
 }
@@ -162,10 +199,21 @@ async function executeToolCall(payload) {
 async function cancelToolCall(payload) {
   const observation = [...observations.values()].find((entry) => entry.document_id === payload.document_id);
   if (!observation) return;
-  await chrome.scripting.executeScript({
-    target: {tabId: observation.tab_id, documentIds: [observation.document_id]},
-    world: "MAIN", func: cancelWebMcp, args: [payload.call_id]
-  }).catch(() => {});
+  try {
+    await chrome.scripting.executeScript({
+      target: {tabId: observation.tab_id, documentIds: [observation.document_id]},
+      world: "MAIN", func: cancelWebMcp, args: [payload.call_id]
+    });
+  } catch (error) {
+    if (expectedGoneDocumentError(error)) return;
+    console.error("Webby tool cancellation failed", {
+      callId: payload.call_id,
+      tabId: observation.tab_id,
+      documentId: observation.document_id,
+      error
+    });
+    throw error;
+  }
 }
 
 /**
@@ -174,7 +222,7 @@ async function cancelToolCall(payload) {
  * @param {string} message
  */
 function sendToolError(callId, kind, message) {
-  return requireChannel().message("tool.error", {call_id: callId, error: {kind, message}}).catch(() => {});
+  return requireChannel().message("tool.error", {call_id: callId, error: {kind, message}});
 }
 
 /**
@@ -204,15 +252,25 @@ function knownToolError(kind) {
   return kind !== undefined && ["webmcp_unavailable", "stale_catalog", "tool_not_found", "AbortError"].includes(kind);
 }
 
-async function scanAll() {
+function scanAll() {
+  return fullScanScheduler.run();
+}
+
+const fullScanScheduler = new ScanScheduler(scanAllOnce);
+
+async function scanAllOnce() {
   const settings = {...DEFAULTS, ...await chrome.storage.local.get(Object.keys(DEFAULTS))};
-  if (settings.scanningPaused) return;
+  if (settings.scanningPaused) return closeAllObservations();
   const tabs = await chrome.tabs.query({});
   // Not `tabs.map(scanTab)`: map passes the index as the second argument, so
   // every tab after the first would arrive with allowActiveTab truthy and skip
   // the canScanTab check -- incognito, ineligible URLs, and origins the user
   // never granted included.
-  await Promise.allSettled(tabs.map((tab) => scanTab(tab)));
+  let next = 0;
+  const workers = Array.from({length: Math.min(SCAN_CONCURRENCY, tabs.length)}, async () => {
+    while (next < tabs.length) await scanTab(tabs[next++]);
+  });
+  reportRejected("full tab scan", await Promise.allSettled(workers));
 }
 
 /**
@@ -221,22 +279,38 @@ async function scanAll() {
  */
 async function scanTab(tab, allowActiveTab = false) {
   const settings = {...DEFAULTS, ...await chrome.storage.local.get(Object.keys(DEFAULTS))};
-  if (settings.scanningPaused || (!allowActiveTab && !(await canScanTab(tab, chrome.permissions)))) return;
   if (!tab?.id || !tab.url) return;
+  const tabId = tab.id;
+  const generation = (scanGenerations.get(tabId) ?? 0) + 1;
+  scanGenerations.set(tabId, generation);
+  if (settings.scanningPaused || (!allowActiveTab && !(await canScanTab(tab, chrome.permissions)))) {
+    await closeObservation(tab.id);
+    return;
+  }
   const {ignoredOrigins = []} = /** @type {{ignoredOrigins?: string[]}} */ (await chrome.storage.local.get("ignoredOrigins"));
-  if (ignoredOrigins.includes(new URL(tab.url).origin)) return;
+  if (ignoredOrigins.includes(new URL(tab.url).origin)) {
+    await closeObservation(tab.id);
+    return;
+  }
   try {
     const [result] = await chrome.scripting.executeScript({target: {tabId: tab.id}, world: "MAIN", func: probeWebMcp});
+    if (scanGenerations.get(tabId) !== generation) return;
     const observation = buildObservation(tab, result);
     if (!observation) {
       if (result?.documentId) await closeObservation(tab.id);
       return;
     }
-    observations.set(tab.id, observation);
-    const reply = await channel?.message("discovery.observed", {observations: [observation]});
-    await persistIgnoredOrigins(reply);
-  } catch {
-    // Restricted, navigated, or closed tabs are expected and are not discoveries.
+    await publishCurrentObservation(
+      generation,
+      () => scanGenerations.get(tabId),
+      async () => {
+        const reply = await requireChannel().message("discovery.observed", {observations: [observation]});
+        await persistIgnoredOrigins(reply);
+      },
+      () => observations.set(tabId, observation)
+    );
+  } catch (error) {
+    if (!expectedScanError(error)) console.error("Webby tab scan failed", {tabId: tab.id, error});
   }
 }
 
@@ -244,17 +318,45 @@ async function scanTab(tab, allowActiveTab = false) {
  * @param {number | undefined} tabId
  */
 async function closeObservation(tabId) {
+  if (tabId !== undefined) scanGenerations.set(tabId, (scanGenerations.get(tabId) ?? 0) + 1);
   const observation = observations.get(tabId);
-  observations.delete(tabId);
   if (!observation?.document_id) return;
-  await channel?.message("session.closed", {
-    tab_id: tabId,
-    document_id: observation.document_id
-  }).catch(() => {});
+  pendingClosures.set(/** @type {number} */ (tabId), observation.document_id);
+  try {
+    await requireChannel().message("session.closed", {
+      tab_id: tabId,
+      document_id: observation.document_id
+    });
+    if (observations.get(tabId)?.document_id === observation.document_id) observations.delete(tabId);
+    if (pendingClosures.get(/** @type {number} */ (tabId)) === observation.document_id) {
+      pendingClosures.delete(/** @type {number} */ (tabId));
+    }
+  } catch (error) {
+    console.error("Webby observation close failed; resync required", {tabId, error});
+    throw error;
+  }
+}
+
+async function closeAllObservations() {
+  reportRejected("close all observations", await closeObservations(/** @type {Iterable<number>} */ (observations.keys()), closeObservation));
+}
+
+async function closeIneligibleObservations() {
+  reportRejected("close ineligible observations", await Promise.allSettled([...observations.keys()].map(async (tabId) => {
+    const tab = tabId === undefined ? undefined : await chrome.tabs.get(tabId).catch(() => undefined);
+    if (!(await canScanTab(tab, chrome.permissions))) await closeObservation(tabId);
+  })));
 }
 
 async function resync() {
-  const reply = await requireChannel().message("browser.resync", {observations: [...observations.values()]});
+  const active = [...observations.values()].filter(
+    (observation) => pendingClosures.get(observation.tab_id) !== observation.document_id
+  );
+  const reply = await requireChannel().message("browser.resync", {observations: active});
+  for (const [tabId, documentId] of pendingClosures) {
+    if (observations.get(tabId)?.document_id === documentId) observations.delete(tabId);
+  }
+  pendingClosures.clear();
   await persistIgnoredOrigins(reply);
   await scanAll();
 }
@@ -289,7 +391,37 @@ function encode(buffer) {
  */
 async function persistIgnoredOrigins(envelope) {
   const ignoredOrigins = envelope?.payload?.ignored_origins;
-  if (Array.isArray(ignoredOrigins)) await chrome.storage.local.set({ignoredOrigins});
+  if (!Array.isArray(ignoredOrigins)) return;
+  await chrome.storage.local.set({ignoredOrigins});
+  reportRejected("close ignored observations", await Promise.allSettled(
+    ignoredObservationTabIds(observations.values(), ignoredOrigins).map(closeObservation)
+  ));
+}
+
+/** @param {string} operation @param {PromiseSettledResult<unknown>[]} results */
+function reportRejected(operation, results) {
+  for (const result of results) {
+    if (result.status === "rejected") console.error(`Webby ${operation} failed`, result.reason);
+  }
+}
+
+/** @param {unknown} error @returns {boolean} */
+function expectedScanError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return [
+    "Cannot access contents of url",
+    "No tab with id",
+    "The tab was closed",
+    "Frame with ID 0 was removed",
+    "The frame was removed"
+  ].some((expected) => message.includes(expected));
+}
+
+/** @param {unknown} error @returns {boolean} */
+function expectedGoneDocumentError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return ["No tab with id", "The tab was closed", "Frame with ID 0 was removed", "The frame was removed"]
+    .some((expected) => message.includes(expected));
 }
 
 initialize();
