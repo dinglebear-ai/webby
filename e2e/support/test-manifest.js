@@ -86,7 +86,27 @@ initializeBoundE2EWorker().catch(error => console.error("Webby E2E binding faile
     "    const observation = buildObservation(tab, result);",
     "    const observation = buildObservation(tab, result);\n    await chrome.storage.local.set({e2eLastScan: {tabId, supported: result?.result?.supported === true, toolCount: observation?.tools?.length ?? 0, documentId: result?.documentId ?? null}});",
   )
-  await writeFile(workerPath, diagnosticWorker.slice(0, -"initialize();\n".length) + boundBootstrap, {mode: 0o600})
+  const eventCounter = `const e2eChromeEvents = globalThis.__webbyE2EChromeEvents ??= {};
+function recordE2EChromeEvent(name) {
+  e2eChromeEvents[name] = (e2eChromeEvents[name] ?? 0) + 1;
+  chrome.storage.local.set({e2eChromeEvents: {...e2eChromeEvents}}).catch(() => {});
+}
+`
+  const instrumentedWorker = diagnosticWorker
+    .replace('chrome.runtime.onInstalled.addListener(() => initialize());', 'chrome.runtime.onInstalled.addListener(() => { recordE2EChromeEvent("runtime.onInstalled"); return initialize(); });')
+    .replace('chrome.runtime.onStartup.addListener(() => initialize());', 'chrome.runtime.onStartup.addListener(() => { recordE2EChromeEvent("runtime.onStartup"); return initialize(); });')
+    .replace('chrome.tabs.onUpdated.addListener((_tabId, change, tab) => {', 'chrome.tabs.onUpdated.addListener((_tabId, change, tab) => {\n  recordE2EChromeEvent("tabs.onUpdated");')
+    .replace('chrome.tabs.onActivated.addListener(async ({tabId}) => scanTab(await chrome.tabs.get(tabId)));', 'chrome.tabs.onActivated.addListener(async ({tabId}) => { recordE2EChromeEvent("tabs.onActivated"); return scanTab(await chrome.tabs.get(tabId)); });')
+    .replace('chrome.tabs.onRemoved.addListener(async (tabId) => {', 'chrome.tabs.onRemoved.addListener(async (tabId) => {\n  recordE2EChromeEvent("tabs.onRemoved");')
+    .replace('chrome.alarms.onAlarm.addListener((alarm) => {', 'chrome.alarms.onAlarm.addListener((alarm) => {\n  recordE2EChromeEvent("alarms.onAlarm");')
+    .replace('chrome.permissions.onAdded.addListener(() => scanAll());', 'chrome.permissions.onAdded.addListener(() => { recordE2EChromeEvent("permissions.onAdded"); return scanAll(); });')
+    .replace('chrome.permissions.onRemoved.addListener(async () => {', 'chrome.permissions.onRemoved.addListener(async () => {\n  recordE2EChromeEvent("permissions.onRemoved");')
+    .replace('  if (!relevant.some((key) => key in changes)) return;', '  if (!relevant.some((key) => key in changes)) return;\n  recordE2EChromeEvent("storage.onChanged");')
+    .replace('chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {', 'chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {\n  recordE2EChromeEvent("runtime.onMessage");')
+  for (const symbol of ["runtime.onInstalled", "runtime.onStartup", "tabs.onUpdated", "tabs.onActivated", "tabs.onRemoved", "alarms.onAlarm", "permissions.onAdded", "permissions.onRemoved", "storage.onChanged", "runtime.onMessage"]) {
+    if (!instrumentedWorker.includes(`recordE2EChromeEvent("${symbol}")`)) throw new Error(`production Chrome event contract changed: ${symbol}`)
+  }
+  await writeFile(workerPath, eventCounter + instrumentedWorker.slice(0, -"initialize();\n".length) + boundBootstrap, {mode: 0o600})
   const channelPath = join(destination, "src", "channel.js")
   const channel = await readFile(channelPath, "utf8")
   const socketConstruction = "    const socket = new WebSocket(url);"

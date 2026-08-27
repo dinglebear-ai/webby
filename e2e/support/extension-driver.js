@@ -141,6 +141,32 @@ export class ExtensionDriver {
   }
   async permissions() { return (await this.worker()).evaluate(() => chrome.permissions.getAll()) }
 
+  async chromeEventCounts() {
+    return (await this.worker()).evaluate(() => ({...(globalThis.__webbyE2EChromeEvents ?? {})}))
+  }
+
+  async waitForChromeEvent(name, minimum = 1, {timeoutMs = this.workerTimeoutMs} = {}) {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const count = (await this.chromeEventCounts())[name] ?? 0
+      if (count >= minimum) return count
+      await new Promise(resolve => setImmediate(resolve))
+    }
+    throw new Error(`Chrome event ${name} did not reach ${minimum}`)
+  }
+
+  async scheduleScanAlarm() {
+    const before = (await this.chromeEventCounts())["alarms.onAlarm"] ?? 0
+    await (await this.worker()).evaluate(() => chrome.alarms.create("webby-periodic-scan", {when: Date.now() + 1}))
+    return this.waitForChromeEvent("alarms.onAlarm", before + 1)
+  }
+
+  async closeTab(page) {
+    const before = (await this.chromeEventCounts())["tabs.onRemoved"] ?? 0
+    await page.close()
+    await this.waitForChromeEvent("tabs.onRemoved", before + 1)
+  }
+
   async removeFixturePermission() {
     const origin = `${new URL(this.binding.fixture_url).origin}/*`
     return (await this.worker()).evaluate(value => chrome.permissions.remove({origins: [value]}), origin)
