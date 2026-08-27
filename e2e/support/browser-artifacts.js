@@ -36,7 +36,7 @@ export class BrowserArtifacts {
   }
 
   attachPage(page) {
-    page.on("console", message => this.record("console", {level: message.type(), message: message.text(), url: page.url()}))
+    page.on("console", message => this.record("console", {level: message.type(), message: message.text(), url: message.location().url || page.url()}))
     page.on("pageerror", error => this.record("page_error", {message: error.message, url: page.url()}))
     page.on("requestfailed", request => this.record("network_error", {message: request.failure()?.errorText ?? "request_failed", url: request.url()}))
     page.on("response", response => {

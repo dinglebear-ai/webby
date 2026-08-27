@@ -45,7 +45,7 @@ export async function prepareChromiumAssets({producer, root = repositoryRoot, ti
 }
 
 export class ChromiumWorld {
-  static async launch({world, recorder, extensionSource = join(repositoryRoot, "extension"), closeTimeoutMs = 10_000, chromiumApi = chromium} = {}) {
+  static async launch({world, recorder, extensionSource = join(repositoryRoot, "extension"), closeTimeoutMs = 10_000, chromiumApi = chromium, broadHostPermissions = false} = {}) {
     if (!world?.manifest && world?.manifestPath) world.manifest = JSON.parse(await readFile(world.manifestPath, "utf8"))
     const manifest = world?.manifest ?? world
     if (!manifest?.browser_profile_path || !manifest?.artifact_directory) throw new Error("live world manifest is required")
@@ -54,7 +54,7 @@ export class ChromiumWorld {
     const extensionPath = join(resolve(manifest.browser_profile_path, ".."), "generated-extension")
     await mkdir(resolve(manifest.browser_profile_path), {recursive: true, mode: 0o700})
     await rm(extensionPath, {recursive: true, force: true})
-    const generated = await generateTestExtension({source: extensionSource, destination: extensionPath, fixtureUrl: manifest.fixture_url, world: manifest})
+    const generated = await generateTestExtension({source: extensionSource, destination: extensionPath, fixtureUrl: manifest.fixture_url, world: manifest, broadHostPermissions})
     validateBoundWorld(generated.binding, manifest)
     const args = [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
     const context = await chromiumApi.launchPersistentContext(manifest.browser_profile_path, {
@@ -108,12 +108,13 @@ export class ChromiumWorld {
     let timeout
     try {
       await this.artifacts.drain()
-      this.artifacts.assertClean()
       if (!this.traceCaptured) await this.captureTrace()
       await Promise.race([
         context.close(),
         new Promise((_, reject) => { timeout = setTimeout(() => reject(Object.assign(new Error("Chromium close timed out"), {code: "chromium_close_timeout"})), this.closeTimeoutMs) }),
       ])
+      await this.artifacts.drain()
+      this.artifacts.assertClean()
     } catch (error) {
       await this.artifacts.producer.failure({summary: error.message, code: error.code ?? "chromium_close_failed"})
       if (typeof this.world?.reap === "function") await this.world.reap()
@@ -121,7 +122,6 @@ export class ChromiumWorld {
       throw error
     } finally { clearTimeout(timeout); this.context = undefined }
     await this.artifacts.drain()
-    this.artifacts.assertClean()
   }
 
   async discardGeneratedCopy() { await rm(this.generated.path, {recursive: true, force: true}) }

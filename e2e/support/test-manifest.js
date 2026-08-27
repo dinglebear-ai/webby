@@ -42,7 +42,7 @@ function exactFixturePattern(fixtureUrl) {
   return `${url.protocol}//${url.hostname}/*`
 }
 
-export async function generateTestExtension({source, destination, fixtureUrl, world}) {
+export async function generateTestExtension({source, destination, fixtureUrl, world, broadHostPermissions = false}) {
   if (!world?.instance_nonce || world.environment_marker !== "isolated-e2e") throw new Error("invalid isolated world binding")
   const sourceRoot = resolve(source)
   const before = await hashExtensionTree(sourceRoot)
@@ -50,7 +50,7 @@ export async function generateTestExtension({source, destination, fixtureUrl, wo
   const manifestPath = join(destination, "manifest.json")
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
   manifest.key = TEST_MANIFEST_KEY
-  manifest.host_permissions = [exactFixturePattern(fixtureUrl)]
+  manifest.host_permissions = broadHostPermissions ? ["http://*/*", "https://*/*"] : [exactFixturePattern(fixtureUrl)]
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {mode: 0o600})
   const binding = {
     schema_version: 1,
@@ -73,12 +73,26 @@ export async function generateTestExtension({source, destination, fixtureUrl, wo
 }
 initializeBoundE2EWorker().catch(error => console.error("Webby E2E binding failed", error));
 `
-  await writeFile(workerPath, productionWorker.slice(0, -"initialize();\n".length) + boundBootstrap, {mode: 0o600})
+  const diagnosticWorker = productionWorker.replace(
+    'console.error("Webby tab scan failed", {tabId: tab.id, error});',
+    'console.error("Webby tab scan failed", {tabId: tab.id, error: error instanceof Error ? `${error.name}:${error.message}` : String(error)});',
+  ).replace(
+    "  const welcome = await requireChannel().messageNow(\"browser.hello\", {});",
+    "  const welcome = await requireChannel().messageNow(\"browser.hello\", {});\n  await chrome.storage.local.set({e2eAuthenticatedBrowserId: channel.browserId});",
+  ).replace(
+    "    const [activeTab] = await chrome.tabs.query({active: true, currentWindow: true});\n    return scanTab(activeTab, true);",
+    "    const {e2eScanTabId} = await chrome.storage.local.get(\"e2eScanTabId\");\n    const activeTab = e2eScanTabId ? await chrome.tabs.get(e2eScanTabId) : (await chrome.tabs.query({active: true, currentWindow: true}))[0];\n    return scanTab(activeTab, true);",
+  ).replace(
+    "    const observation = buildObservation(tab, result);",
+    "    const observation = buildObservation(tab, result);\n    await chrome.storage.local.set({e2eLastScan: {tabId, supported: result?.result?.supported === true, toolCount: observation?.tools?.length ?? 0, documentId: result?.documentId ?? null}});",
+  )
+  await writeFile(workerPath, diagnosticWorker.slice(0, -"initialize();\n".length) + boundBootstrap, {mode: 0o600})
   const channelPath = join(destination, "src", "channel.js")
   const channel = await readFile(channelPath, "utf8")
   const socketConstruction = "    const socket = new WebSocket(url);"
   if (!channel.includes(socketConstruction)) throw new Error("production WebSocket construction contract changed")
-  await writeFile(channelPath, channel.replace(socketConstruction, "    globalThis.__webbyE2ESocketAttempts = (globalThis.__webbyE2ESocketAttempts ?? 0) + 1;\n" + socketConstruction), {mode: 0o600})
+  await writeFile(channelPath, channel
+    .replace(socketConstruction, "    globalThis.__webbyE2ESocketAttempts = (globalThis.__webbyE2ESocketAttempts ?? 0) + 1;\n" + socketConstruction), {mode: 0o600})
   const after = await hashExtensionTree(sourceRoot)
   if (after !== before) throw new Error("production extension tree changed while generating test copy")
   return {path: resolve(destination), binding, productionHash: before, manifest}

@@ -12,7 +12,9 @@ export function installWebMcpFixture(documentObject = document, {bridge} = {}) {
   bridge ??= browserBridge();
   const context = {
     async getTools() { return tools(); },
-    async executeTool(name, args = {}, {signal} = {}) {
+    async executeTool(toolReference, inputArguments = {}, {signal} = {}) {
+      const name = typeof toolReference === "string" ? toolReference : toolReference?.name;
+      const args = typeof inputArguments === "string" ? JSON.parse(inputArguments) : inputArguments;
       if (!tools().some((entry) => entry.name === name)) throw new Error("tool_not_found");
       const call = {name, args, status: "started"}; state.calls.set(args.call_handle ?? `${name}-${state.calls.size + 1}`, call); record("call.started", {name});
       if (name === "delayed") {
@@ -45,7 +47,7 @@ export function installWebMcpFixture(documentObject = document, {bridge} = {}) {
     });
   }
 
-  documentObject.modelContext = context;
+  Object.defineProperty(documentObject, "modelContext", {value: context, writable: true, configurable: true});
   globalThis.__webbyFixture = {
     release(handle) { const gate = gates.get(handle); if (!gate) throw new Error("unknown_or_stale_handle"); gate.release(); },
     abort(handle) { const gate = gates.get(handle); if (!gate) throw new Error("unknown_or_stale_handle"); gate.abort(); },

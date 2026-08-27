@@ -113,6 +113,22 @@ export class ExtensionDriver {
   }
 
   async storage(keys) { return (await this.worker()).evaluate(keysValue => chrome.storage.local.get(keysValue), keys) }
+  async waitForStorageValue(key, {timeoutMs = this.workerTimeoutMs} = {}) {
+    if (typeof key !== "string" || !key) throw new Error("storage key is required")
+    return (await this.worker()).evaluate(({storageKey, timeout}) => new Promise((resolve, reject) => {
+      let timer
+      const finish = value => { clearTimeout(timer); chrome.storage.onChanged.removeListener(changed); resolve(value) }
+      const changed = (changes, area) => {
+        if (area === "local" && changes[storageKey]?.newValue) finish(changes[storageKey].newValue)
+      }
+      chrome.storage.onChanged.addListener(changed)
+      timer = setTimeout(() => {
+        chrome.storage.onChanged.removeListener(changed)
+        reject(new Error(`storage value did not arrive: ${storageKey}`))
+      }, timeout)
+      chrome.storage.local.get(storageKey).then(values => { if (values[storageKey]) finish(values[storageKey]) }, reject)
+    }), {storageKey: key, timeout: timeoutMs})
+  }
   async socketAttempts() { return (await this.worker()).evaluate(() => globalThis.__webbyE2ESocketAttempts ?? 0) }
   async waitForSocketAttempts(minimum = 1) {
     const deadline = Date.now() + this.workerTimeoutMs
@@ -139,28 +155,58 @@ export class ExtensionDriver {
     if (new URL(target).origin !== this.binding.fixture_url) throw new Error("fixture tab escaped bound origin")
     const existing = new Set(this.context.pages())
     const created = await (await this.worker()).evaluate(url => chrome.tabs.create({url, active: true}), target)
-    let page = this.context.pages().find(candidate => !existing.has(candidate))
-    page ??= await this.context.waitForEvent("page", {predicate: candidate => !existing.has(candidate)})
+    let page = this.context.pages().find(candidate => !existing.has(candidate) && candidate.url() === target)
+    page ??= await this.context.waitForEvent("page", {predicate: candidate => !existing.has(candidate) && candidate.url() === target})
     await page.waitForURL(target)
     await page.waitForLoadState("load")
     this.tabIds.set(page, created.id)
     return page
   }
 
-  async scanNow() {
+  async scanNow({activePage} = {}) {
+    if (activePage) {
+      const expectedTabId = this.tabIds.get(activePage)
+      if (!expectedTabId) throw new Error("active fixture page is not owned by the extension driver")
+      const tabId = await (await this.worker()).evaluate(async ({url, expected}) => {
+        if (expected) return expected
+        const exact = (await chrome.tabs.query({})).filter(tab => tab.url === url)
+        const tab = exact.length === 1 ? exact[0] : undefined
+        if (!tab?.id) throw new Error("bound fixture tab was not uniquely visible")
+        return tab.id
+      }, {url: activePage.url(), expected: expectedTabId})
+      await (await this.worker()).evaluate(id => chrome.storage.local.set({e2eScanTabId: id}), tabId)
+    }
     const popup = await this.popup()
-    try { await popup.locator("#scan").click(); await popup.locator("#status").filter({hasText: "Scan requested"}).waitFor() }
-    finally { await popup.close() }
+    try {
+      await popup.evaluate(() => {
+        const send = chrome.runtime.sendMessage.bind(chrome.runtime)
+        chrome.runtime.sendMessage = (...args) => {
+          const pending = send(...args)
+          globalThis.__webbyE2EScanResponse = pending
+          return pending
+        }
+      })
+      await popup.locator("#scan").click()
+      await popup.locator("#status").filter({hasText: "Scan requested"}).waitFor()
+      const response = await popup.evaluate(() => globalThis.__webbyE2EScanResponse)
+      if (response?.ok === false) throw new Error(`fixture scan failed: ${response.kind}`)
+      if (!activePage) return response
+      const scan = (await this.storage("e2eLastScan")).e2eLastScan
+      if (!scan?.supported || scan.toolCount < 1) throw new Error(`fixture scan produced no WebMCP catalog: ${JSON.stringify(scan)}`)
+      return scan
+    } finally { await popup.close() }
   }
 
   async capabilityProbe(page) {
     if (new URL(page.url()).origin !== this.binding.fixture_url) throw new Error("capability probe requires bound fixture page")
     const knownTabId = this.tabIds.get(page)
-    const tab = knownTabId ? {id: knownTabId} : await (await this.worker()).evaluate(async targetUrl => {
-      const target = new URL(targetUrl)
-      return (await chrome.tabs.query({url: `${target.origin}/*`})).find(candidate => candidate.url === targetUrl) ?? null
-    }, page.url())
-    if (!tab?.id) throw new Error("fixture tab was not visible to extension")
+    const lookup = await (await this.worker()).evaluate(async ({targetUrl, knownId}) => {
+      if (knownId) return {tab: {id: knownId}, tabs: []}
+      const exact = (await chrome.tabs.query({})).filter(candidate => candidate.url === targetUrl)
+      return {tab: exact.find(candidate => candidate.id === knownId) ?? (exact.length === 1 ? exact[0] : null), tabs: (await chrome.tabs.query({})).map(({id, url, title}) => ({id, url, title}))}
+    }, {targetUrl: page.url(), knownId: knownTabId})
+    const tab = lookup.tab
+    if (!tab?.id) throw new Error(`fixture tab was not visible to extension: page=${page.url()} tabs=${JSON.stringify(lookup.tabs)}`)
     const popup = await this.popup()
     const scripting = await popup.evaluate(() => ({
       execute_script: typeof chrome.scripting?.executeScript === "function",

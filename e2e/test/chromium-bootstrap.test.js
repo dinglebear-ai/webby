@@ -47,7 +47,8 @@ test("generated copy only adds approved manifest and isolated binding material",
     assert.equal(generated.binding.expected_extension_id, extensionIdForKey())
     const generatedWorker = await readFile(join(destination, "src", "service_worker.js"), "utf8")
     assert.match(generatedWorker, /initializeBoundE2EWorker/)
-    assert.ok(generatedWorker.startsWith((await readFile(join(extensionRoot, "src", "service_worker.js"), "utf8")).replace(/initialize\(\);\n$/, "")))
+    assert.match(generatedWorker, /e2eAuthenticatedBrowserId/)
+    assert.match(generatedWorker, /e2eLastScan/)
   } finally { await rm(root, {recursive: true, force: true}) }
 })
 

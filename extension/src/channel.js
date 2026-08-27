@@ -138,7 +138,7 @@ export class WebbyChannel {
       return;
     }
     const [_joinRef, ref, topic, event, payload] = frame;
-    if (typeof ref !== "string" || typeof topic !== "string" || typeof event !== "string") {
+    if ((ref !== null && typeof ref !== "string") || typeof topic !== "string" || typeof event !== "string") {
       this.onError(new Error("malformed_channel_frame"), {kind: "invalid_frame", frame});
       return;
     }

@@ -122,7 +122,7 @@ test("drops malformed and wrong-topic frames and reports async event failures wi
   assert.doesNotThrow(() => channel.receive(null));
   assert.doesNotThrow(() => channel.receive([null, "1", "other", "message", {}]));
   const payload = {type: "tool.call", payload: {call_id: "call-17"}};
-  assert.doesNotThrow(() => channel.receive([null, "1", "browser:auth", "message", payload]));
+  assert.doesNotThrow(() => channel.receive([null, null, "browser:auth", "message", payload]));
   await new Promise((resolve) => setImmediate(resolve));
   const handlerFailure = failures.find(({error}) => error.message === "handler failed");
   assert.ok(handlerFailure);
