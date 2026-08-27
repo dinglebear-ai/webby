@@ -1,11 +1,48 @@
-import {mkdir, readFile, rm} from "node:fs/promises"
+import {execFile} from "node:child_process"
+import {mkdir, readFile, rm, stat} from "node:fs/promises"
 import {join, resolve} from "node:path"
+import {promisify} from "node:util"
 import {chromium} from "playwright"
 import {BrowserArtifacts} from "./browser-artifacts.js"
 import {ExtensionDriver, validateBoundWorld} from "./extension-driver.js"
 import {generateTestExtension} from "./test-manifest.js"
 
 const repositoryRoot = resolve(new URL("../..", import.meta.url).pathname)
+const execFileAsync = promisify(execFile)
+const assetBuilds = new Map()
+
+async function validateAssets(root = repositoryRoot) {
+  for (const name of [join("js", "app.js"), join("css", "app.css")]) {
+    const path = join(root, "priv", "static", "assets", name)
+    const info = await stat(path)
+    if (!info.isFile() || info.size === 0) throw new Error(`Phoenix asset is absent or empty: assets/${name}`)
+  }
+}
+
+export async function prepareChromiumAssets({producer, root = repositoryRoot, timeoutMs = 120_000, execute = execFileAsync, builds = assetBuilds} = {}) {
+  if (!producer?.event || !producer?.diagnostic) throw new Error("Chromium artifact producer is required")
+  let preparation = builds.get(root)
+  if (!preparation) {
+    preparation = (async () => {
+      try {
+        const result = await execute("mix", ["assets.build"], {cwd: root, timeout: timeoutMs, maxBuffer: 2 * 1024 * 1024})
+        await validateAssets(root)
+        await producer.event("browser.assets_prepared", {command: "mix assets.build", status: "ok"})
+        return result
+      } catch (error) {
+        builds.delete(root)
+        await producer.diagnostic("asset-build-failure.json", {
+          command: "mix assets.build", status: "failed", code: String(error.code ?? "asset_build_failed"),
+          stdout: String(error.stdout ?? "").slice(-16_384), stderr: String(error.stderr ?? error.message ?? "").slice(-16_384),
+        }, ["command", "status", "code", "stdout", "stderr"]).catch(() => {})
+        throw new Error(`Phoenix asset preparation failed: ${error.message}`, {cause: error})
+      }
+    })()
+    builds.set(root, preparation)
+  }
+  await preparation
+  await validateAssets(root)
+}
 
 export class ChromiumWorld {
   static async launch({world, recorder, extensionSource = join(repositoryRoot, "extension"), closeTimeoutMs = 10_000, chromiumApi = chromium} = {}) {
@@ -13,6 +50,7 @@ export class ChromiumWorld {
     const manifest = world?.manifest ?? world
     if (!manifest?.browser_profile_path || !manifest?.artifact_directory) throw new Error("live world manifest is required")
     if (!recorder?.producers?.chromium) throw new Error("central ArtifactRecorder Chromium producer is required")
+    await prepareChromiumAssets({producer: recorder.producers.chromium})
     const extensionPath = join(resolve(manifest.browser_profile_path, ".."), "generated-extension")
     await mkdir(resolve(manifest.browser_profile_path), {recursive: true, mode: 0o700})
     await rm(extensionPath, {recursive: true, force: true})

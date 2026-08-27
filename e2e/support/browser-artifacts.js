@@ -1,10 +1,12 @@
 const ignoredConsole = [
   /^Webby tab scan failed.*Cannot access a chrome:\/\//,
-  /^Failed to load resource: the server responded with a status of 404 \(Not Found\)$/,
 ]
 
 export function classifyBrowserError({kind, text}) {
   const message = typeof text === "string" ? text : text.message ?? ""
+  const url = typeof text === "object" ? text.url ?? "" : ""
+  if (/\/assets\/(?:js|css)\/app\.(?:js|css)(?:\?|$)/.test(url) && /404|Failed to load resource/.test(message)) return {severity: "failure", code: "core_asset_missing"}
+  if (/\/favicon\.ico(?:\?|$)/.test(url) && /^Failed to load resource: the server responded with a status of 404/.test(message)) return {severity: "expected", code: "favicon_missing"}
   if (ignoredConsole.some(pattern => pattern.test(message))) return {severity: "expected", code: "known_chromium_restriction"}
   if (kind === "console" && !["error", "assert"].includes(text.level)) return {severity: "diagnostic", code: "console"}
   if (kind === "service_worker") return {severity: "diagnostic", code: "service_worker"}
@@ -37,6 +39,11 @@ export class BrowserArtifacts {
     page.on("console", message => this.record("console", {level: message.type(), message: message.text(), url: page.url()}))
     page.on("pageerror", error => this.record("page_error", {message: error.message, url: page.url()}))
     page.on("requestfailed", request => this.record("network_error", {message: request.failure()?.errorText ?? "request_failed", url: request.url()}))
+    page.on("response", response => {
+      if (response.status() >= 400 && /\/assets\/(?:js|css)\/app\.(?:js|css)(?:\?|$)/.test(response.url())) {
+        this.record("network_error", {message: `HTTP ${response.status()}`, url: response.url()})
+      }
+    })
   }
 
   record(kind, details) {
@@ -48,7 +55,7 @@ export class BrowserArtifacts {
   async drain() { while (this.pending.size) await Promise.allSettled([...this.pending]) }
 
   async observe(kind, details) {
-    const classification = classifyBrowserError({kind, text: ["console", "worker_console"].includes(kind) ? {level: details.level, message: details.message} : details.message ?? ""})
+    const classification = classifyBrowserError({kind, text: ["console", "worker_console"].includes(kind) ? {level: details.level, message: details.message, url: details.url} : {message: details.message ?? "", url: details.url}})
     await this.producer.event(`browser.${kind}`, {...details, classification: classification.code})
     if (classification.severity === "failure") this.failures.push({kind, ...details})
   }
