@@ -4,18 +4,41 @@
   "title": "Webby live-world IPC manifest",
   "type": "object",
   "additionalProperties": false,
-  "required": ["manifest_version", "world_id", "instance_nonce", "pid", "base_url", "database_path", "artifact_directory", "started_at"],
+  "required": ["manifest_version", "world_id", "scenario_id", "seed", "environment_marker", "instance_nonce", "pid", "process_group_id", "process_started", "process_executable", "process_cwd", "base_url", "fixture_url", "database_path", "browser_profile_path", "artifact_directory", "telemetry_path", "telemetry_capability_path", "stdout_path", "stderr_path", "started_at", "versions", "metrics"],
   "properties": {
     "manifest_version": {"const": 1},
     "world_id": {"type": "string", "pattern": "^[a-zA-Z0-9_-]+$"},
+    "scenario_id": {"type": "string", "pattern": "^[a-zA-Z0-9_-]+$"},
+    "seed": {"type": "integer", "minimum": 0},
+    "environment_marker": {"const": "isolated-e2e"},
     "instance_nonce": {"type": "string", "minLength": 32},
     "pid": {"type": "integer", "minimum": 1},
+    "process_group_id": {"type": "integer", "minimum": 1},
+    "process_started": {"type": "string", "minLength": 1},
+    "process_executable": {"type": "string", "minLength": 1},
+    "process_cwd": {"type": "string", "minLength": 1},
     "base_url": {"type": "string", "pattern": "^http://127\\.0\\.0\\.1:[0-9]+$"},
     "fixture_url": {"type": "string", "pattern": "^http://127\\.0\\.0\\.1:[0-9]+$"},
     "database_path": {"type": "string", "minLength": 1},
     "browser_profile_path": {"type": "string", "minLength": 1},
     "artifact_directory": {"type": "string", "minLength": 1},
+    "telemetry_path": {"type": "string", "minLength": 1},
+    "telemetry_capability_path": {"type": "string", "minLength": 1},
+    "stdout_path": {"type": "string", "minLength": 1},
+    "stderr_path": {"type": "string", "minLength": 1},
     "started_at": {"type": "string", "format": "date-time"},
-    "versions": {"type": "object", "additionalProperties": {"type": "string"}}
+    "versions": {"type": "object", "minProperties": 2, "additionalProperties": {"type": "string"}},
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startup_kind", "startup_ms", "migration_ms", "peak_rss_kb", "disk_bytes"],
+      "properties": {
+        "startup_kind": {"enum": ["cold", "warm"]},
+        "startup_ms": {"type": "integer", "minimum": 0},
+        "migration_ms": {"type": "integer", "minimum": 0},
+        "peak_rss_kb": {"type": "integer", "minimum": 0},
+        "disk_bytes": {"type": "integer", "minimum": 0}
+      }
+    }
   }
 }

@@ -18,7 +18,7 @@ test("all committed contracts are schema-valid, mapped, and fail-closed", () => 
   const result = validateContracts();
   assert.deepEqual(result.errors, []);
   assert.equal(result.report.coverage_percent, 100);
-  assert.equal(result.report.surfaces, 141);
+  assert.equal(result.report.surfaces, 153);
 });
 
 test("scenario schema rejects missing IDs, drivers, outcomes, timeouts, and cleanup", () => {
@@ -158,7 +158,31 @@ test("world manifest is a versioned fail-closed IPC contract", () => {
   const ajv = new Ajv2020({allErrors: true, strict: true});
   addFormats(ajv);
   const validate = ajv.compile(readJson(path.join(e2eRoot, "support/world-manifest.schema.json")));
-  const manifest = {manifest_version: 1, world_id: "world_1", instance_nonce: "a".repeat(32), pid: 123, base_url: "http://127.0.0.1:6477", database_path: "/tmp/webby.db", artifact_directory: "/tmp/artifacts", started_at: "2026-08-27T12:00:00Z"};
+  const manifest = {
+    manifest_version: 1,
+    world_id: "world_1",
+    scenario_id: "scenario_1",
+    seed: 42,
+    environment_marker: "isolated-e2e",
+    instance_nonce: "a".repeat(32),
+    pid: 123,
+    process_group_id: 123,
+    process_started: "Wed Aug 27 12:00:00 2026",
+    process_executable: "/usr/bin/beam.smp",
+    process_cwd: "/tmp/webby",
+    base_url: "http://127.0.0.1:6477",
+    fixture_url: "http://127.0.0.1:6478",
+    database_path: "/tmp/webby.db",
+    browser_profile_path: "/tmp/profile",
+    artifact_directory: "/tmp/artifacts",
+    telemetry_path: "/tmp/artifacts/telemetry.ndjson",
+    telemetry_capability_path: "/tmp/config/telemetry-capability",
+    stdout_path: "/tmp/artifacts/stdout.log",
+    stderr_path: "/tmp/artifacts/stderr.log",
+    started_at: "2026-08-27T12:00:00Z",
+    versions: {node: "24.0.0", webby: "0.1.0"},
+    metrics: {startup_kind: "cold", startup_ms: 100, migration_ms: 50, peak_rss_kb: 1000, disk_bytes: 4096},
+  };
   assert.equal(validate(manifest), true);
   assert.equal(validate({...manifest, manifest_version: 2}), false);
   assert.equal(validate({...manifest, secret: "must-not-be-accepted"}), false);

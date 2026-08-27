@@ -33,7 +33,7 @@
     {"category": "extension_npm_script", "source": "extension/package.json", "extractor": "npm-scripts", "minimum_count": 2},
     {"category": "e2e_npm_script", "source": "e2e/package.json", "extractor": "npm-scripts", "minimum_count": 3},
     {"category": "ci_entrypoint", "source": ".github/workflows", "extractor": "ci-jobs", "minimum_count": 3}
-    ,{"category": "world_manifest_field", "source": "e2e/support/world-manifest.schema.json", "extractor": "json-schema-properties", "minimum_count": 11}
+    ,{"category": "world_manifest_field", "source": "e2e/support/world-manifest.schema.json", "extractor": "json-schema-properties", "minimum_count": 23}
   ],
   "snapshots": {
     "http_route": ["ANY /dev/mailbox", "GET /", "GET /dev/dashboard", "GET /health", "GET /mcp", "POST /mcp"],
@@ -54,7 +54,7 @@
     "extension_npm_script": ["test", "typecheck"],
     "e2e_npm_script": ["parity", "test", "validate"],
     "ci_entrypoint": ["ci:elixir", "ci:extension", "upstream-contracts:check"],
-    "world_manifest_field": ["artifact_directory", "base_url", "browser_profile_path", "database_path", "fixture_url", "instance_nonce", "manifest_version", "pid", "started_at", "versions", "world_id"]
+    "world_manifest_field": ["artifact_directory", "base_url", "browser_profile_path", "database_path", "environment_marker", "fixture_url", "instance_nonce", "manifest_version", "metrics", "pid", "process_cwd", "process_executable", "process_group_id", "process_started", "scenario_id", "seed", "started_at", "stderr_path", "stdout_path", "telemetry_capability_path", "telemetry_path", "versions", "world_id"]
   },
   "surfaces": [
     {"id": "http:get-root", "category": "http_route", "symbol": "GET /", "source": "lib/webby_web/router.ex:20", "scenarios": ["e2e-shared-vertical-slice"]},
@@ -180,6 +180,18 @@
     {"id": "world-field:artifacts", "category": "world_manifest_field", "symbol": "artifact_directory", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-shared-vertical-slice"]},
     {"id": "world-field:started", "category": "world_manifest_field", "symbol": "started_at", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-persistence-retention"]},
     {"id": "world-field:versions", "category": "world_manifest_field", "symbol": "versions", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-command-ci-entrypoints"]},
+    {"id": "world-field:scenario-id", "category": "world_manifest_field", "symbol": "scenario_id", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-shared-vertical-slice"]},
+    {"id": "world-field:seed", "category": "world_manifest_field", "symbol": "seed", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-capacity-concurrency"]},
+    {"id": "world-field:environment", "category": "world_manifest_field", "symbol": "environment_marker", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-transport-security"]},
+    {"id": "world-field:process-group", "category": "world_manifest_field", "symbol": "process_group_id", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-persistence-retention"]},
+    {"id": "world-field:process-started", "category": "world_manifest_field", "symbol": "process_started", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-persistence-retention"]},
+    {"id": "world-field:process-executable", "category": "world_manifest_field", "symbol": "process_executable", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-persistence-retention"]},
+    {"id": "world-field:process-cwd", "category": "world_manifest_field", "symbol": "process_cwd", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-persistence-retention"]},
+    {"id": "world-field:telemetry", "category": "world_manifest_field", "symbol": "telemetry_path", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-capacity-concurrency"]},
+    {"id": "world-field:telemetry-capability", "category": "world_manifest_field", "symbol": "telemetry_capability_path", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-transport-security"]},
+    {"id": "world-field:stdout", "category": "world_manifest_field", "symbol": "stdout_path", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-command-ci-entrypoints"]},
+    {"id": "world-field:stderr", "category": "world_manifest_field", "symbol": "stderr_path", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-command-ci-entrypoints"]},
+    {"id": "world-field:metrics", "category": "world_manifest_field", "symbol": "metrics", "source": "e2e/support/world-manifest.schema.json", "scenarios": ["e2e-capacity-concurrency"]},
     {"id": "secret:bearer", "category": "secret_zone", "symbol": "mcp-bearer-token", "source": "lib/webby/mcp/credentials.ex:13", "scenarios": ["e2e-persistence-retention"]},
     {"id": "secret:private-jwk", "category": "secret_zone", "symbol": "extension-private-jwk", "source": "extension/src/service_worker.js:100", "scenarios": ["e2e-persistence-retention"]},
     {"id": "secret:signature", "category": "secret_zone", "symbol": "auth-signature", "source": "extension/src/service_worker.js:111", "scenarios": ["e2e-persistence-retention"]},
