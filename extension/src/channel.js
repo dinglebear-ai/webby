@@ -10,16 +10,18 @@ export class WebbyChannel {
    * @param {string} [options.browserId]
    * @param {(payload: any) => Promise<void> | void} options.onChallenge
    * @param {() => void} [options.onReady]
-   * @param {(payload: any) => void} [options.onEvent]
+   * @param {(payload: any) => Promise<void> | void} [options.onEvent]
+   * @param {(error: unknown, payload?: unknown) => void} [options.onError]
    * @param {number} [options.replyTimeoutMs]
    */
-  constructor({baseUrl, extensionId, browserId, onChallenge, onReady, onEvent, replyTimeoutMs = 10_000}) {
+  constructor({baseUrl, extensionId, browserId, onChallenge, onReady, onEvent, onError = reportChannelError, replyTimeoutMs = 10_000}) {
     this.baseUrl = baseUrl;
     this.extensionId = extensionId;
     this.browserId = browserId;
     this.onChallenge = onChallenge;
     this.onReady = onReady;
     this.onEvent = onEvent;
+    this.onError = onError;
     this.replyTimeoutMs = replyTimeoutMs;
     this.ref = 0;
     /** @type {Map<string, Pending>} */
@@ -137,7 +139,7 @@ export class WebbyChannel {
         payload.status === "ok" ? resolve(payload.response) : reject(payload.response);
       }
     } else if (event === "message") {
-      Promise.resolve(this.onEvent?.(payload)).catch(() => {});
+      Promise.resolve(this.onEvent?.(payload)).catch((error) => this.onError(error, payload));
     }
   }
 
@@ -194,4 +196,20 @@ export class WebbyChannel {
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => this.connect(), 2000);
   }
+}
+
+/**
+ * Event handlers run outside the socket frame callback, so a rejected handler
+ * must be surfaced explicitly or Chrome silently loses the failure.
+ * @param {unknown} error
+ * @param {unknown} payload
+ */
+function reportChannelError(error, payload) {
+  const envelope = /** @type {{payload?: {call_id?: unknown}} | undefined} */ (
+    payload && typeof payload === "object" ? payload : undefined
+  );
+  const callId = typeof envelope?.payload?.call_id === "string"
+    ? envelope.payload.call_id
+    : undefined;
+  console.error("Webby channel event failed", {callId, error});
 }

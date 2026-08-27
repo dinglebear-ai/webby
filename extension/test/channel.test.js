@@ -110,17 +110,23 @@ test("ignores callbacks from a superseded socket", async () => {
   channel.close();
 });
 
-test("drops malformed and wrong-topic frames and contains async event failures", async () => {
+test("drops malformed and wrong-topic frames and reports async event failures with call identity", async () => {
+  const failures = [];
   const channel = new WebbyChannel({
     baseUrl: "http://127.0.0.1:6477",
     extensionId: "a",
-    onEvent: async () => { throw new Error("handler failed"); }
+    onEvent: async () => { throw new Error("handler failed"); },
+    onError: (error, payload) => failures.push({error, payload})
   });
   channel.topic = "browser:auth";
   assert.doesNotThrow(() => channel.receive(null));
   assert.doesNotThrow(() => channel.receive([null, "1", "other", "message", {}]));
-  assert.doesNotThrow(() => channel.receive([null, "1", "browser:auth", "message", {}]));
+  const payload = {type: "tool.call", payload: {call_id: "call-17"}};
+  assert.doesNotThrow(() => channel.receive([null, "1", "browser:auth", "message", payload]));
   await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(failures.length, 1);
+  assert.match(failures[0].error.message, /handler failed/);
+  assert.equal(failures[0].payload.payload.call_id, "call-17");
 });
 
 test("rejects a malformed reply without throwing from the frame handler", async () => {

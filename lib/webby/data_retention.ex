@@ -11,6 +11,26 @@ defmodule Webby.DataRetention do
 
   @max_batch_size 5_000
 
+  @doc false
+  def maintain(state) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    with {:ok, _} <-
+           Webby.Invocations.reconcile_abandoned(
+             DateTime.add(now, -Keyword.fetch!(state, :abandoned_after_seconds), :second)
+           ) do
+      prune(
+        %{
+          discoveries: cutoff(now, state, :discovery_days),
+          sessions: cutoff(now, state, :session_days),
+          pairings: cutoff(now, state, :pairing_days),
+          invocations: cutoff(now, state, :invocation_days)
+        },
+        Keyword.fetch!(state, :batch_size)
+      )
+    end
+  end
+
   def prune(cutoffs, batch_size \\ 500) when batch_size in 1..@max_batch_size do
     Repo.transaction(fn ->
       %{
@@ -78,4 +98,7 @@ defmodule Webby.DataRetention do
     {:ok, count} = Webby.Invocations.prune_before(cutoff, batch_size)
     count
   end
+
+  defp cutoff(now, state, key),
+    do: DateTime.add(now, -Keyword.fetch!(state, key), :day)
 end

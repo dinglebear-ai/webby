@@ -15,35 +15,21 @@ defmodule Webby.RetentionWorker do
 
   @impl true
   def handle_info(:maintain, state) do
-    run(state)
+    run(Keyword.get(state, :maintenance_module, Webby.DataRetention), state)
     Process.send_after(self(), :maintain, Keyword.fetch!(state, :interval_ms))
     {:noreply, state}
   end
 
-  defp run(state) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-    {:ok, _} =
-      Webby.Invocations.reconcile_abandoned(
-        DateTime.add(now, -Keyword.fetch!(state, :abandoned_after_seconds), :second)
-      )
-
-    cutoffs = %{
-      discoveries: cutoff(now, state, :discovery_days),
-      sessions: cutoff(now, state, :session_days),
-      pairings: cutoff(now, state, :pairing_days),
-      invocations: cutoff(now, state, :invocation_days)
-    }
-
-    case Webby.DataRetention.prune(cutoffs, Keyword.fetch!(state, :batch_size)) do
+  defp run(maintenance_module, state) do
+    case maintenance_module.maintain(state) do
       {:ok, _counts} -> :ok
       {:error, reason} -> Logger.error("retention maintenance failed", reason: inspect(reason))
     end
   rescue
     exception ->
-      Logger.error("retention maintenance crashed", reason: Exception.message(exception))
+      Logger.error(
+        "retention maintenance crashed stacktrace=#{Exception.format_stacktrace(__STACKTRACE__)}",
+        reason: Exception.message(exception)
+      )
   end
-
-  defp cutoff(now, state, key),
-    do: DateTime.add(now, -Keyword.fetch!(state, key), :day)
 end

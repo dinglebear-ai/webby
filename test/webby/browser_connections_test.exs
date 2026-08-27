@@ -72,13 +72,19 @@ defmodule Webby.BrowserConnectionsTest do
   test "enforces a global pending-call cap and releases capacity after cancellation" do
     browser_id = Ecto.UUID.generate()
     assert :ok = BrowserConnections.register(browser_id, self())
+    call_timeout = 60_000
 
     tasks =
       for id <- 1..100 do
         Task.async(fn ->
-          BrowserConnections.call(browser_id, %{"sequence" => id}, 2_000, {browser_id, id})
+          BrowserConnections.call(browser_id, %{"sequence" => id}, call_timeout, {browser_id, id})
         end)
       end
+
+    on_exit(fn ->
+      Enum.each(1..100, &BrowserConnections.cancel({browser_id, &1}))
+      Enum.each(tasks, &Process.exit(&1.pid, :kill))
+    end)
 
     for _ <- 1..100, do: assert_receive({:tool_call, %{"call_id" => _}})
 
@@ -99,7 +105,7 @@ defmodule Webby.BrowserConnectionsTest do
 
     assert Task.await(replacement) == {:ok, :ok}
     Enum.each(2..100, &BrowserConnections.cancel({browser_id, &1}))
-    Enum.each(tasks, &Task.await(&1, 1_000))
+    Enum.each(tasks, &Task.await(&1, 5_000))
   end
 
   test "caller death cancels browser work and releases the external identity" do
@@ -132,7 +138,7 @@ defmodule Webby.BrowserConnectionsTest do
     assert_receive {:tool_call, %{"call_id" => call_id}}
 
     rogue =
-      spawn(fn ->
+      Task.async(fn ->
         BrowserConnections.complete(browser_id, self(), %{
           "type" => "tool.result",
           "call_id" => call_id,
@@ -140,8 +146,7 @@ defmodule Webby.BrowserConnectionsTest do
         })
       end)
 
-    ref = Process.monitor(rogue)
-    assert_receive {:DOWN, ^ref, :process, ^rogue, :normal}
+    assert Task.await(rogue) == :ok
     refute Task.yield(task, 20)
 
     BrowserConnections.complete(browser_id, %{

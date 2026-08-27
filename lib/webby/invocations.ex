@@ -106,14 +106,17 @@ defmodule Webby.Invocations do
         {:error, kind, _message} -> {"failed", kind}
       end
 
-    case complete_with_retry(audit.id, outcome, error_kind, duration, @completion_attempts) do
+    case complete_audit(audit.id, outcome, error_kind, duration) do
       {:ok, _updated} ->
         :ok
 
-      {:error, reason} ->
-        Logger.error("page tool call audit completion failed",
+      {:error, {reason, stacktrace}} ->
+        Logger.error(
+          "page tool call audit completion failed audit_id=#{audit.id} " <>
+            "retry_count=#{@completion_attempts - 1} " <>
+            "stacktrace=#{Exception.format_stacktrace(stacktrace)}",
           event: "page.call.audit_failed",
-          reason: inspect(reason)
+          reason: Exception.message(reason)
         )
     end
   end
@@ -136,22 +139,47 @@ defmodule Webby.Invocations do
     )
   end
 
-  defp complete_with_retry(id, outcome, error_kind, duration, attempts) do
-    case Repo.update_all(
-           from(a in InvocationAudit, where: a.id == ^id and a.outcome == "started"),
-           set: [outcome: outcome, error_kind: error_kind, duration_ms: duration]
-         ) do
+  @doc false
+  def complete_audit(id, outcome, error_kind, duration, opts \\ []) do
+    attempts = Keyword.get(opts, :attempts, @completion_attempts)
+    update_fun = Keyword.get(opts, :update_fun, &update_audit/4)
+    complete_with_retry(id, outcome, error_kind, duration, attempts, update_fun)
+  end
+
+  defp complete_with_retry(id, outcome, error_kind, duration, attempts, update_fun) do
+    case update_fun.(id, outcome, error_kind, duration) do
       {1, _} -> {:ok, :completed}
       {0, _} -> {:ok, :already_completed}
     end
   rescue
     exception ->
-      if attempts > 1 do
-        complete_with_retry(id, outcome, error_kind, duration, attempts - 1)
-      else
-        {:error, exception}
+      cond do
+        transient_db_failure?(exception) and attempts > 1 ->
+          complete_with_retry(id, outcome, error_kind, duration, attempts - 1, update_fun)
+
+        transient_db_failure?(exception) ->
+          {:error, {exception, __STACKTRACE__}}
+
+        true ->
+          reraise exception, __STACKTRACE__
       end
   end
+
+  defp update_audit(id, outcome, error_kind, duration) do
+    Repo.update_all(
+      from(a in InvocationAudit, where: a.id == ^id and a.outcome == "started"),
+      set: [outcome: outcome, error_kind: error_kind, duration_ms: duration]
+    )
+  end
+
+  defp transient_db_failure?(%Exqlite.Error{message: message}) do
+    normalized = String.downcase(message)
+
+    String.contains?(normalized, "database is locked") or
+      String.contains?(normalized, "database is busy")
+  end
+
+  defp transient_db_failure?(_exception), do: false
 
   defp elapsed_ms(started),
     do: System.convert_time_unit(System.monotonic_time() - started, :native, :millisecond)
