@@ -47,6 +47,15 @@ defmodule WebbyE2E.RuntimeStatus do
 end
 
 Application.put_env(:webby, :runtime_status_module, WebbyE2E.RuntimeStatus)
+invocation_timeout_ms =
+  System.fetch_env!("WEBBY_E2E_INVOCATION_TIMEOUT_MS")
+  |> Integer.parse()
+  |> case do
+    {value, ""} when value in 100..120_000 -> value
+    _invalid -> raise "invalid E2E invocation timeout"
+  end
+
+Application.put_env(:webby, :invocation_timeout_ms, invocation_timeout_ms)
 
 {:ok, _} = Application.ensure_all_started(:telemetry)
 

@@ -14,15 +14,18 @@ defmodule Webby.BrowserConnections do
   def unregister(browser_id, pid \\ self()),
     do: GenServer.call(__MODULE__, {:unregister, browser_id, pid})
 
-  def call(browser_id, payload, timeout \\ @timeout, external_key \\ nil),
+  def call(browser_id, payload, timeout \\ @timeout, external_key \\ nil, audit_id \\ nil),
     do:
       GenServer.call(
         __MODULE__,
-        {:call, browser_id, payload, timeout, external_key},
+        {:call, browser_id, payload, timeout, external_key, audit_id},
         timeout + 1_000
       )
 
   def cancel(external_key), do: GenServer.call(__MODULE__, {:cancel, external_key})
+
+  def cancel_credential(credential_id),
+    do: GenServer.call(__MODULE__, {:cancel_credential, credential_id})
 
   def cancel_document(browser_id, tab_id, document_id),
     do: GenServer.call(__MODULE__, {:cancel_document, browser_id, tab_id, document_id})
@@ -68,7 +71,7 @@ defmodule Webby.BrowserConnections do
     end
   end
 
-  def handle_call({:call, browser_id, payload, timeout, external_key}, from, state) do
+  def handle_call({:call, browser_id, payload, timeout, external_key, audit_id}, from, state) do
     cond do
       map_size(state.calls) >= @max_pending_calls ->
         {:reply, {:error, "server_busy", "Too many page tool calls are already pending"}, state}
@@ -79,7 +82,7 @@ defmodule Webby.BrowserConnections do
           "A tool call with this request identity is already pending"}, state}
 
       true ->
-        start_call(state, browser_id, payload, timeout, external_key, from)
+        start_call(state, browser_id, payload, timeout, external_key, audit_id, from)
     end
   end
 
@@ -88,6 +91,15 @@ defmodule Webby.BrowserConnections do
       nil -> {:reply, :not_found, state}
       call_id -> {:reply, :ok, finish_call(state, call_id, :cancelled, true)}
     end
+  end
+
+  def handle_call({:cancel_credential, credential_id}, _from, state) do
+    ids =
+      matching_calls(state, fn call ->
+        match?({^credential_id, _request_id}, call.external_key)
+      end)
+
+    {:reply, length(ids), finish_calls(state, ids, :credential_revoked)}
   end
 
   def handle_call({:cancel_document, browser_id, tab_id, document_id}, _from, state) do
@@ -145,12 +157,18 @@ defmodule Webby.BrowserConnections do
         {:noreply, drop_connection(state, browser_id, "browser_offline")}
 
       nil ->
-        {:noreply,
-         finish_calls(state, matching_calls(state, &(&1.caller_monitor == monitor)), :caller_down)}
+        ids = matching_calls(state, &(&1.caller_monitor == monitor))
+
+        Enum.each(ids, fn id ->
+          if audit_id = state.calls[id].audit_id,
+            do: Webby.Invocations.complete_audit(audit_id, "failed", "caller_down", 0)
+        end)
+
+        {:noreply, finish_calls(state, ids, :caller_down)}
     end
   end
 
-  defp start_call(state, browser_id, payload, timeout, external_key, from) do
+  defp start_call(state, browser_id, payload, timeout, external_key, audit_id, from) do
     case state.connections[browser_id] do
       %{pid: pid, generation: generation} ->
         call_id = Ecto.UUID.generate()
@@ -166,7 +184,8 @@ defmodule Webby.BrowserConnections do
           generation: generation,
           timer: timer,
           payload: payload,
-          external_key: external_key
+          external_key: external_key,
+          audit_id: audit_id
         }
 
         state = put_in(state, [:calls, call_id], call)
@@ -227,6 +246,9 @@ defmodule Webby.BrowserConnections do
         from,
         {:error, "stale_document", "The browser document changed before the tool call completed"}
       )
+
+  defp maybe_reply(from, :credential_revoked),
+    do: GenServer.reply(from, {:error, "revoked", "The MCP credential was revoked"})
 
   defp maybe_reply(from, {:connection_lost, kind}),
     do: GenServer.reply(from, {:error, kind, "The selected browser disconnected"})

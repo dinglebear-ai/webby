@@ -32,6 +32,21 @@ defmodule Webby.MCP.Credentials do
   @doc false
   def authenticate(token, options) when is_binary(token) and is_list(options) do
     token_hash = hash(token)
+
+    if Keyword.get(options, :touch, true) do
+      authenticate_and_touch(token_hash, options)
+    else
+      case Repo.one(
+             from c in Credential,
+               where: c.token_hash == ^token_hash and is_nil(c.revoked_at)
+           ) do
+        nil -> {:error, :invalid_credential}
+        credential -> {:ok, credential}
+      end
+    end
+  end
+
+  defp authenticate_and_touch(token_hash, options) do
     now = now()
     cutoff = DateTime.add(now, -@last_used_write_interval_seconds, :second)
     after_write = Keyword.get(options, :after_write, fn -> :ok end)
@@ -50,6 +65,7 @@ defmodule Webby.MCP.Credentials do
            set: [revoked_at: timestamp, updated_at: timestamp]
          ) do
       {1, _} ->
+        Webby.BrowserConnections.cancel_credential(id)
         {:ok, Repo.get!(Credential, id)}
 
       {0, _} ->

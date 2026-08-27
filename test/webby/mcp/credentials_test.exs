@@ -32,6 +32,18 @@ defmodule Webby.MCP.CredentialsTest do
     assert {:error, :invalid_credential} = Credentials.authenticate(token)
   end
 
+  test "read-only authentication validates without opening a last-used write" do
+    assert {:ok, credential, token} = Credentials.create("Cancellation client")
+    assert is_nil(credential.last_used_at)
+
+    assert {:ok, authenticated} = Credentials.authenticate(token, touch: false)
+    assert authenticated.id == credential.id
+    assert is_nil(authenticated.last_used_at)
+
+    assert {:ok, _revoked} = Credentials.revoke(credential.id)
+    assert {:error, :invalid_credential} = Credentials.authenticate(token, touch: false)
+  end
+
   test "revocation waits for an in-flight authentication and remains terminal" do
     assert {:ok, credential, token} = Credentials.create("Concurrent client")
     test_pid = self()

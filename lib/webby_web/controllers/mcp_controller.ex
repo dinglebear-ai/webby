@@ -6,7 +6,7 @@ defmodule WebbyWeb.MCPController do
   def create(conn, request) do
     with :ok <- valid_origin(conn),
          :ok <- valid_accept(conn),
-         {:ok, credential} <- authenticate(conn),
+         {:ok, credential} <- authenticate(conn, request),
          true <- Credentials.scope?(credential, required_scope(request)),
          :ok <- valid_version(conn, request) do
       dispatch(conn, Protocol.handle(request, %{credential_id: credential.id}))
@@ -40,10 +40,13 @@ defmodule WebbyWeb.MCPController do
     |> send_resp(200, Jason.encode!(response))
   end
 
-  defp authenticate(conn) do
+  defp authenticate(conn, request) do
     case get_req_header(conn, "authorization") do
-      ["Bearer " <> token] -> Credentials.authenticate(token)
-      _missing -> {:error, :invalid_credential}
+      ["Bearer " <> token] ->
+        Credentials.authenticate(token, touch: request["method"] != "notifications/cancelled")
+
+      _missing ->
+        {:error, :invalid_credential}
     end
   end
 

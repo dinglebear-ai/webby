@@ -49,6 +49,31 @@ defmodule Webby.BrowserConnectionsTest do
     assert_receive {:tool_cancel, %{"call_id" => ^call_id}}
   end
 
+  test "credential revocation cancels every scoped call and releases each identity" do
+    browser_id = Ecto.UUID.generate()
+    credential_id = Ecto.UUID.generate()
+    assert :ok = BrowserConnections.register(browser_id, self())
+
+    tasks =
+      for request_id <- ["first", "second"] do
+        Task.async(fn ->
+          BrowserConnections.call(browser_id, %{"request_id" => request_id}, 500, {
+            credential_id,
+            request_id
+          })
+        end)
+      end
+
+    for _ <- tasks, do: assert_receive({:tool_call, %{"call_id" => _}})
+    assert 2 = BrowserConnections.cancel_credential(credential_id)
+
+    for task <- tasks,
+        do: assert(Task.await(task) == {:error, "revoked", "The MCP credential was revoked"})
+
+    for _ <- tasks, do: assert_receive({:tool_cancel, %{"call_id" => _}})
+    assert 0 = BrowserConnections.cancel_credential(credential_id)
+  end
+
   test "rejects duplicate active external keys without disturbing the first call" do
     browser_id = Ecto.UUID.generate()
     key = {Ecto.UUID.generate(), 1}

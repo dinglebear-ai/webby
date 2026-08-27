@@ -144,7 +144,14 @@ export class SimulatedBrowser extends EventEmitter {
     for (let attempt = 0; attempt < attempts; attempt++) { if (attempt) await wait(attempt, last); try { return await this.connect(options) } catch (error) { last = error } }
     throw last
   }
-  async disconnect() { await this.gates.disconnect.wait(); this.generation++; await this.wire?.close() }
+  async disconnect() {
+    await this.gates.disconnect.wait()
+    this.generation++
+    for (const [callId, call] of this.calls) {
+      if (call.state === "pending") { call.state = "aborted"; this.emit("browser_work.aborted", {call_id: callId, reason: "disconnect"}) }
+    }
+    await this.wire?.close()
+  }
   async replace(options = {}) { await this.gates.replacement.wait(); await this.disconnect(); return this.connect(options) }
   async navigate(observation) { await this.gates.navigation.wait(); return this.observe([observation]) }
   async simulateTabs(count, {concurrency = 32, reverse = false, action = async observation => observation} = {}) {
@@ -152,6 +159,17 @@ export class SimulatedBrowser extends EventEmitter {
     await this.gates.tab.wait(); let next = 0; let active = 0; let peak = 0; const completed = []
     const workers = Array.from({length: Math.min(concurrency, count)}, async () => { for (;;) { const index = next++; if (index >= count) return; active++; peak = Math.max(peak, active); const value = await action(this.observation(index)); active--; completed.push({index, value}) } })
     await Promise.all(workers); completed.sort((a, b) => reverse ? b.index - a.index : a.index - b.index); return {peakConcurrency: peak, completed}
+  }
+  async scanTabs(count, {batchSize = 128, offset = 0, observation = index => this.observation(index + offset)} = {}) {
+    if (!Number.isInteger(count) || count < 0 || count > 1_000) throw new WireError("tab_count_limit")
+    if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 128) throw new WireError("scan_batch_limit")
+    await this.gates.tab.wait()
+    const observations = Array.from({length: count}, (_, index) => observation(index))
+    let messages = 0
+    for (let index = 0; index < observations.length; index += batchSize) {
+      await this.observe(observations.slice(index, index + batchSize)); messages++
+    }
+    return {count, messages, peakBatchSize: Math.min(count, batchSize), observations}
   }
   async close() { await this.disconnect(); this.calls.clear() }
 }

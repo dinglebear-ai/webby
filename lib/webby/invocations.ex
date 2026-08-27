@@ -5,7 +5,6 @@ defmodule Webby.Invocations do
   alias Webby.{BrowserConnections, InvocationAudit, Repo}
   require Logger
 
-  @timeout 15_000
   @completion_attempts 3
 
   def call(registration, session, tool_name, arguments, context) do
@@ -30,7 +29,12 @@ defmodule Webby.Invocations do
         )
 
         external_key = {context[:credential_id], context[:request_id]}
-        result = BrowserConnections.call(session.browser_id, payload, @timeout, external_key)
+
+        timeout = Application.get_env(:webby, :invocation_timeout_ms, 15_000)
+
+        result =
+          BrowserConnections.call(session.browser_id, payload, timeout, external_key, audit.id)
+
         duration = elapsed_ms(started)
         finish_audit(audit, result, duration)
         log_finish(registration, session, result, duration)
@@ -143,7 +147,11 @@ defmodule Webby.Invocations do
   def complete_audit(id, outcome, error_kind, duration, opts \\ []) do
     attempts = Keyword.get(opts, :attempts, @completion_attempts)
     update_fun = Keyword.get(opts, :update_fun, &update_audit/4)
-    complete_with_retry(id, outcome, error_kind, duration, attempts, update_fun)
+
+    :global.trans(
+      {__MODULE__, :audit_completion},
+      fn -> complete_with_retry(id, outcome, error_kind, duration, attempts, update_fun) end
+    )
   end
 
   defp complete_with_retry(id, outcome, error_kind, duration, attempts, update_fun) do
