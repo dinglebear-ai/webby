@@ -35,8 +35,8 @@ defmodule Webby.DataRetention do
     Repo.transaction(fn ->
       %{
         discoveries: prune_schema(Discovery, Map.fetch!(cutoffs, :discoveries), batch_size),
-        sessions: prune_schema(DocumentSession, Map.fetch!(cutoffs, :sessions), batch_size),
-        pairings: prune_schema(PairingRequest, Map.fetch!(cutoffs, :pairings), batch_size),
+        sessions: prune_sessions(Map.fetch!(cutoffs, :sessions), batch_size),
+        pairings: prune_pairings(Map.fetch!(cutoffs, :pairings), batch_size),
         invocations: prune_invocations(Map.fetch!(cutoffs, :invocations), batch_size)
       }
     end)
@@ -92,6 +92,32 @@ defmodule Webby.DataRetention do
       )
 
     elem(Repo.delete_all(from row in schema, where: row.id in ^ids), 0)
+  end
+
+  defp prune_sessions(cutoff, batch_size) do
+    ids =
+      Repo.all(
+        from session in DocumentSession,
+          where: session.updated_at < ^cutoff and session.status != "active",
+          order_by: [asc: session.updated_at],
+          limit: ^batch_size,
+          select: session.id
+      )
+
+    elem(Repo.delete_all(from session in DocumentSession, where: session.id in ^ids), 0)
+  end
+
+  defp prune_pairings(cutoff, batch_size) do
+    ids =
+      Repo.all(
+        from pairing in PairingRequest,
+          where: pairing.updated_at < ^cutoff and pairing.status != "pending",
+          order_by: [asc: pairing.updated_at],
+          limit: ^batch_size,
+          select: pairing.id
+      )
+
+    elem(Repo.delete_all(from pairing in PairingRequest, where: pairing.id in ^ids), 0)
   end
 
   defp prune_invocations(cutoff, batch_size) do

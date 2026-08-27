@@ -18,6 +18,8 @@ defmodule Webby.DataRetentionTest do
     discovery_ids = insert_discoveries(browser, [old, old, recent])
     session_ids = insert_sessions(browser, registration, [old, old, recent])
     pairing_ids = insert_pairings([old, old, recent])
+    active_session_id = insert_session(browser, registration, old, 99, "active")
+    pending_pairing_id = insert_pairing(old, 99, "pending")
     audit_ids = insert_audits(browser, registration, session_ids, [old, old, recent, old])
 
     cutoffs = %{
@@ -38,6 +40,8 @@ defmodule Webby.DataRetentionTest do
     assert Enum.count(remaining_audits, &(&1.id in audit_ids)) == 3
     assert Enum.any?(remaining_audits, &(&1.outcome == "started" and &1.inserted_at == old))
     assert Enum.any?(remaining_audits, &(&1.outcome == "succeeded" and &1.inserted_at == recent))
+    assert Repo.get(DocumentSession, active_session_id)
+    assert Repo.get(PairingRequest, pending_pairing_id)
   end
 
   defp insert_browser do
@@ -94,50 +98,56 @@ defmodule Webby.DataRetentionTest do
     timestamps
     |> Enum.with_index()
     |> Enum.map(fn {timestamp, index} ->
-      session =
-        %DocumentSession{}
-        |> DocumentSession.changeset(%{
-          browser_id: browser.id,
-          registration_id: registration.id,
-          tab_id: index,
-          document_id: "document-#{index}",
-          current_origin: registration.origin,
-          sanitized_path: registration.url_pattern,
-          page_title: "Session",
-          catalog_revision: 1,
-          catalog_fingerprint: String.duplicate(Integer.to_string(index + 4), 64),
-          catalog_summary: %{},
-          connected_at: timestamp,
-          last_seen_at: timestamp,
-          status: "closed"
-        })
-        |> Repo.insert!()
-
-      set_updated_at(DocumentSession, session.id, timestamp)
-      session.id
+      insert_session(browser, registration, timestamp, index, "closed")
     end)
+  end
+
+  defp insert_session(browser, registration, timestamp, index, status) do
+    session =
+      %DocumentSession{}
+      |> DocumentSession.changeset(%{
+        browser_id: browser.id,
+        registration_id: registration.id,
+        tab_id: index,
+        document_id: "document-#{index}",
+        current_origin: registration.origin,
+        sanitized_path: registration.url_pattern,
+        page_title: "Session",
+        catalog_revision: 1,
+        catalog_fingerprint: String.duplicate(Integer.to_string(rem(index, 6) + 4), 64),
+        catalog_summary: %{},
+        connected_at: timestamp,
+        last_seen_at: timestamp,
+        status: status
+      })
+      |> Repo.insert!()
+
+    set_updated_at(DocumentSession, session.id, timestamp)
+    session.id
   end
 
   defp insert_pairings(timestamps) do
     timestamps
     |> Enum.with_index()
-    |> Enum.map(fn {timestamp, index} ->
-      pairing =
-        %PairingRequest{}
-        |> PairingRequest.changeset(%{
-          display_name: "Pairing #{index}",
-          extension_id: "retention-pairing-#{index}",
-          public_key: :crypto.strong_rand_bytes(32),
-          scanning_mode: "granted_sites",
-          status: "rejected",
-          expires_at: timestamp,
-          resolved_at: timestamp
-        })
-        |> Repo.insert!()
+    |> Enum.map(fn {timestamp, index} -> insert_pairing(timestamp, index, "rejected") end)
+  end
 
-      set_updated_at(PairingRequest, pairing.id, timestamp)
-      pairing.id
-    end)
+  defp insert_pairing(timestamp, index, status) do
+    pairing =
+      %PairingRequest{}
+      |> PairingRequest.changeset(%{
+        display_name: "Pairing #{index}",
+        extension_id: "retention-pairing-#{index}",
+        public_key: :crypto.strong_rand_bytes(32),
+        scanning_mode: "granted_sites",
+        status: status,
+        expires_at: timestamp,
+        resolved_at: if(status == "pending", do: nil, else: timestamp)
+      })
+      |> Repo.insert!()
+
+    set_updated_at(PairingRequest, pairing.id, timestamp)
+    pairing.id
   end
 
   defp insert_audits(browser, registration, session_ids, timestamps) do
