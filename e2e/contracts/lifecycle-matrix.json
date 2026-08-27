@@ -10,20 +10,20 @@
     "audit.once"
   ],
   "transitions": [
-    {"id": "close", "trigger": "session.closed for the active document", "drivers": ["protocol", "chromium"], "recovery": "scan-current-document"},
-    {"id": "replacement", "trigger": "same tab observes a new document id", "drivers": ["protocol", "chromium"], "recovery": "attach-new-document"},
-    {"id": "catalog-change", "trigger": "same document publishes a new catalog revision", "drivers": ["protocol", "chromium"], "recovery": "refresh-page-tools"},
-    {"id": "ignore", "trigger": "dashboard ignores the discovered origin", "drivers": ["protocol", "chromium"], "recovery": "none"},
-    {"id": "pause", "trigger": "browser.settings sets scanning_paused true", "drivers": ["protocol", "chromium"], "recovery": "unpause-and-rescan"},
-    {"id": "permission-revoke", "trigger": "Chrome removes fixture host permission", "drivers": ["chromium"], "recovery": "explicit-permission-grant"},
-    {"id": "browser-revoke", "trigger": "dashboard revokes the paired browser", "drivers": ["protocol", "chromium"], "recovery": "new-pairing"},
-    {"id": "credential-revoke", "trigger": "dashboard revokes the active MCP credential", "drivers": ["protocol", "chromium"], "recovery": "new-credential"},
-    {"id": "disconnect", "trigger": "authenticated browser transport closes", "drivers": ["protocol", "chromium"], "recovery": "reconnect-and-authenticate"},
-    {"id": "reconnect", "trigger": "browser reconnects with durable identity", "drivers": ["protocol", "chromium"], "recovery": "hello-and-resync"},
-    {"id": "resync-omission", "trigger": "browser resync omits the active document", "drivers": ["protocol", "chromium"], "recovery": "scan-current-document"},
-    {"id": "server-restart", "trigger": "live Webby process restarts against the same database", "drivers": ["protocol", "chromium"], "recovery": "reconnect-authenticate-resync"},
-    {"id": "service-worker-restart", "trigger": "MV3 service worker is terminated and reacquired", "drivers": ["chromium"], "recovery": "worker-reconnect-resync"},
-    {"id": "chromium-restart", "trigger": "persistent Chromium context restarts against the same profile", "drivers": ["chromium"], "recovery": "extension-reconnect-resync"},
-    {"id": "retention", "trigger": "retention removes eligible closed metadata", "drivers": ["protocol", "chromium"], "recovery": "none"}
+    {"id": "close", "owner": "webby-ihb.16", "trigger": "session.closed for the active document", "drivers": ["protocol", "chromium"], "recovery": "scan-current-document"},
+    {"id": "replacement", "owner": "webby-ihb.16", "trigger": "same tab observes a new document id", "drivers": ["protocol", "chromium"], "recovery": "attach-new-document"},
+    {"id": "catalog-change", "owner": "webby-ihb.16", "trigger": "same document publishes a new catalog revision", "drivers": ["protocol", "chromium"], "recovery": "refresh-page-tools"},
+    {"id": "ignore", "owner": "webby-ihb.16", "phases": ["idle"], "trigger": "dashboard ignores the discovered origin", "drivers": ["protocol", "chromium"], "recovery": "none", "in_flight_owner": "webby-ihb.16", "in_flight_exclusion": "Ignore is defined only for an unregistered discovery, which cannot own an invocation session."},
+    {"id": "pause", "owner": "webby-ihb.16", "trigger": "browser.settings sets scanning_paused true", "drivers": ["protocol", "chromium"], "recovery": "unpause-and-rescan"},
+    {"id": "permission-revoke", "owner": "webby-ihb.19", "trigger": "Chrome removes fixture host permission", "drivers": ["chromium"], "recovery": "explicit-permission-grant"},
+    {"id": "browser-revoke", "owner": "webby-ihb.16", "trigger": "dashboard revokes the paired browser", "drivers": ["protocol", "chromium"], "recovery": "new-pairing"},
+    {"id": "credential-revoke", "owner": "webby-ihb.16", "phases": ["idle"], "trigger": "dashboard revokes the active MCP credential", "drivers": ["protocol", "chromium"], "recovery": "new-credential", "in_flight_owner": "webby-ihb.14", "in_flight_exclusion": "Credential revocation races and cancellation are owned by the simulated cancellation-race matrix."},
+    {"id": "disconnect", "owner": "webby-ihb.16", "trigger": "authenticated browser transport closes", "drivers": ["protocol", "chromium"], "recovery": "reconnect-and-authenticate"},
+    {"id": "reconnect", "owner": "webby-ihb.16", "trigger": "browser reconnects with durable identity", "drivers": ["protocol", "chromium"], "recovery": "hello-and-resync"},
+    {"id": "resync-omission", "owner": "webby-ihb.16", "trigger": "browser resync omits the active document", "drivers": ["protocol", "chromium"], "recovery": "scan-current-document"},
+    {"id": "server-restart", "owner": "webby-ihb.15", "trigger": "live Webby process restarts against the same database", "drivers": ["protocol", "chromium"], "recovery": "reconnect-authenticate-resync"},
+    {"id": "service-worker-restart", "owner": "webby-ihb.19", "trigger": "MV3 service worker is terminated and reacquired", "drivers": ["chromium"], "recovery": "worker-reconnect-resync"},
+    {"id": "chromium-restart", "owner": "webby-ihb.19", "trigger": "persistent Chromium context restarts against the same profile", "drivers": ["chromium"], "recovery": "extension-reconnect-resync"},
+    {"id": "retention", "owner": "webby-ihb.15", "trigger": "retention removes eligible closed metadata", "drivers": ["protocol", "chromium"], "recovery": "none"}
   ]
 }

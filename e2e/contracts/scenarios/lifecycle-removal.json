@@ -152,10 +152,8 @@
         "disconnect",
         "reconnect",
         "resync-omission",
-        "server-restart",
         "service-worker-restart",
-        "chromium-restart",
-        "retention"
+        "chromium-restart"
       ],
       "call_phase": [
         "before-dispatch",
@@ -179,11 +177,6 @@
         "transition": "browser-revoke",
         "call_phase": "in-flight",
         "result": "late"
-      },
-      {
-        "transition": "server-restart",
-        "call_phase": "in-flight",
-        "result": "recovery"
       }
     ],
     "cartesian_driver": "protocol",
