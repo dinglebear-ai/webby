@@ -3,6 +3,8 @@
   "id": "e2e-capacity-concurrency",
   "title": "Bounded calls pairing and concurrent identities",
   "description": "Proves pending-call and pairing limits, duplicate identities, concurrent callers, cancellation races, and capacity recovery.",
+  "owner": "webby-ihb.14",
+  "deferred_to": "webby-ihb.14",
   "tier": "nightly",
   "weight": 22,
   "drivers": [

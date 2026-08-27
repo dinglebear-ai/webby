@@ -10,6 +10,8 @@
     "id": {"type": "string", "pattern": "^e2e-[a-z0-9-]+$"},
     "title": {"type": "string", "minLength": 5},
     "description": {"type": "string", "minLength": 10},
+    "owner": {"type": "string", "pattern": "^webby-ihb\\.[0-9]+$"},
+    "deferred_to": {"type": "string", "pattern": "^webby-ihb\\.[0-9]+$"},
     "tier": {"enum": ["pr", "main", "nightly", "stress", "compatibility"]},
     "weight": {"type": "integer", "minimum": 1, "maximum": 100},
     "drivers": {"type": "array", "items": {"enum": ["protocol", "chromium"]}, "minItems": 1, "uniqueItems": true},

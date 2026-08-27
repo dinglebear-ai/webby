@@ -3,6 +3,8 @@
   "id": "e2e-transport-security",
   "title": "Transport authentication and malformed input boundaries",
   "description": "Exercises loopback, Origin, bearer scope, protocol version, payload size, malformed frame, and replay defenses.",
+  "owner": "webby-ihb.13",
+  "deferred_to": "webby-ihb.13",
   "tier": "pr",
   "weight": 18,
   "drivers": [

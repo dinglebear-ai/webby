@@ -134,6 +134,59 @@ export class DashboardDriver {
     }
   }
 
+  async acquireCredential(scope) {
+    if (!["read", "call"].includes(scope)) throw new Error("credential scope is required")
+    const context = this.page.context()
+    let secret
+    let row
+    let credentialId
+    let active = true
+    await context.tracing.stop()
+    try {
+      await this.producer.secretZone(`credential-${scope}-acquire`, async () => {
+        const label = scope === "call" ? "Create call credential" : "Create read credential"
+        await this.section("access").getByRole("button", {name: label, exact: true}).click()
+        const token = this.page.locator(dashboardSelectors.token)
+        await token.waitFor({state: "visible"})
+        secret = (await token.locator("code").textContent())?.trim()
+        if (!secret?.startsWith("webby_")) throw new Error("credential token was not displayed")
+        this.recorder.addSecret(secret)
+        row = await this.credentialRow(scope, {active: true})
+        credentialId = await idFrom(row, "mcp-credential-")
+      })
+    } catch (error) {
+      try {
+        if (row && await row.getByRole("button", {name: "Revoke", exact: true}).count()) await this.click(row, "Revoke")
+        await this.page.locator(dashboardSelectors.token).waitFor({state: "detached"}).catch(() => {})
+        await this.clearBrowserSecretSurfaces().catch(() => {})
+      } finally {
+        secret = undefined
+        await context.tracing.start({screenshots: false, snapshots: false, sources: false}).catch(() => {})
+      }
+      throw error
+    }
+    const revoke = async () => {
+      if (!active) return
+      active = false
+      try {
+        if (row && await row.getByRole("button", {name: "Revoke", exact: true}).count()) await this.click(row, "Revoke")
+        await this.page.locator(dashboardSelectors.token).waitFor({state: "detached"})
+        await this.clearBrowserSecretSurfaces()
+      } finally {
+        secret = undefined
+        await context.tracing.start({screenshots: false, snapshots: false, sources: false})
+      }
+    }
+    return Object.freeze({
+      id: credentialId,
+      use: operation => {
+        if (!active || !secret) throw Object.assign(new Error("credential lease is inactive"), {code: "credential_lease_inactive"})
+        return this.producer.secretZone(`credential-${scope}-use`, () => operation(secret))
+      },
+      revoke,
+    })
+  }
+
   async clearBrowserSecretSurfaces() {
     await this.page.evaluate(async () => {
       localStorage.clear(); sessionStorage.clear()

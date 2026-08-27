@@ -3,6 +3,8 @@
   "id": "e2e-lifecycle-removal",
   "title": "Lifecycle removal terminal-state contract",
   "description": "Applies the six mandatory terminal assertions to every lifecycle transition in the lifecycle matrix.",
+  "owner": "webby-ihb.16",
+  "deferred_to": "webby-ihb.16",
   "tier": "main",
   "weight": 30,
   "drivers": [

@@ -3,6 +3,8 @@
   "id": "e2e-persistence-retention",
   "title": "Restart migration retention and erasure lifecycle",
   "description": "Verifies fresh migration, durable identities, startup reconciliation, retention draining, metadata minimization, and erasure.",
+  "owner": "webby-ihb.15",
+  "deferred_to": "webby-ihb.15",
   "tier": "main",
   "weight": 18,
   "drivers": [

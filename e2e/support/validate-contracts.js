@@ -215,6 +215,8 @@ export function validateContracts({root = repoRoot, inventory = readJson(path.jo
   for (const name of scenarioFiles) {
     const scenario = readJson(path.join(scenarioDirectory, name));
     if (!validateScenario(scenario)) errors.push(`${name}: ${ajv.errorsText(validateScenario.errors)}`);
+    if (Boolean(scenario.owner) !== Boolean(scenario.deferred_to)) errors.push(`${scenario.id}: owner and deferred_to must be declared together`);
+    if (scenario.deferred_to && scenario.owner !== scenario.deferred_to) errors.push(`${scenario.id}: deferred scenario owner must match deferred_to`);
     if (scenarios.has(scenario.id)) errors.push(`duplicate scenario id: ${scenario.id}`);
     scenarios.set(scenario.id, scenario);
     for (const step of scenario.steps ?? []) {
