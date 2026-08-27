@@ -10,7 +10,7 @@ import {promisify} from "node:util"
 import {createInflateRaw} from "node:zlib"
 
 const execFileAsync = promisify(execFile)
-const textExtensions = new Set([".txt", ".log", ".json", ".jsonl", ".ndjson", ".html", ".htm", ".xml", ".css", ".js", ".map", ".md", ".sql", ".har", ".yaml", ".yml"])
+const textExtensions = new Set([".txt", ".log", ".json", ".jsonl", ".ndjson", ".html", ".htm", ".xml", ".css", ".js", ".map", ".md", ".sql", ".har", ".yaml", ".yml", ".trace", ".network", ".stacks"])
 const sensitiveKeys = /^(authorization|cookie|set-cookie|token|access_token|refresh_token|secret|password|private_key|private_jwk|signature|credential)$/i
 const genericPatterns = [
   /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi,
