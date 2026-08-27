@@ -90,6 +90,14 @@ defmodule Webby.Invocations do
 
   def prune_before(cutoff, batch_size \\ 500)
       when is_struct(cutoff, DateTime) and batch_size in 1..5_000 do
+    {examined, deleted} = prune_before_diagnostics(cutoff, batch_size)
+    _ = examined
+    {:ok, deleted}
+  end
+
+  @doc false
+  def prune_before_diagnostics(cutoff, batch_size)
+      when is_struct(cutoff, DateTime) and batch_size in 1..5_000 do
     ids =
       Repo.all(
         from a in InvocationAudit,
@@ -99,8 +107,13 @@ defmodule Webby.Invocations do
           select: a.id
       )
 
-    {count, _} = Repo.delete_all(from a in InvocationAudit, where: a.id in ^ids)
-    {:ok, count}
+    {count, _} =
+      case ids do
+        [] -> {0, nil}
+        ids -> Repo.delete_all(from a in InvocationAudit, where: a.id in ^ids)
+      end
+
+    {length(ids), count}
   end
 
   defp finish_audit(audit, result, duration) do

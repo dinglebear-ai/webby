@@ -19,7 +19,7 @@ defmodule Webby.DataRetention do
            Webby.Invocations.reconcile_abandoned(
              DateTime.add(now, -Keyword.fetch!(state, :abandoned_after_seconds), :second)
            ) do
-      prune(
+      drain(
         %{
           discoveries: cutoff(now, state, :discovery_days),
           sessions: cutoff(now, state, :session_days),
@@ -32,6 +32,49 @@ defmodule Webby.DataRetention do
   end
 
   def prune(cutoffs, batch_size \\ 500) when batch_size in 1..@max_batch_size do
+    with {:ok, diagnostics} <- prune_batch(cutoffs, batch_size) do
+      {:ok, Map.new(diagnostics, fn {key, value} -> {key, value.deleted} end)}
+    end
+  end
+
+  @doc "Drains every eligible retention row in bounded transactions."
+  def drain(cutoffs, batch_size \\ 500) when batch_size in 1..@max_batch_size do
+    drain(cutoffs, batch_size, 1, zero_counts())
+  end
+
+  defp drain(cutoffs, batch_size, batch, totals) do
+    {:ok, diagnostics} = prune_batch(cutoffs, batch_size)
+    counts = Map.new(diagnostics, fn {key, value} -> {key, value.deleted} end)
+    examined = diagnostics |> Map.values() |> Enum.sum_by(& &1.examined)
+    deleted = Enum.sum(Map.values(counts))
+
+    totals = Map.merge(totals, counts, fn _key, total, count -> total + count end)
+
+    if examined == 0 do
+      batch_count = batch - 1
+
+      :telemetry.execute(
+        [:webby, :retention, :drain],
+        %{batch_count: batch_count, rows_deleted: Enum.sum(Map.values(totals))},
+        %{counts: totals, batch_size: batch_size}
+      )
+
+      {:ok, %{counts: totals, batch_count: batch_count}}
+    else
+      :telemetry.execute(
+        [:webby, :retention, :batch],
+        %{batch: batch, rows_examined: examined, rows_deleted: deleted},
+        %{counts: counts, diagnostics: diagnostics, batch_size: batch_size}
+      )
+
+      drain(cutoffs, batch_size, batch + 1, totals)
+    end
+  end
+
+  defp zero_counts,
+    do: %{discoveries: 0, sessions: 0, pairings: 0, invocations: 0}
+
+  defp prune_batch(cutoffs, batch_size) do
     Repo.transaction(fn ->
       %{
         discoveries: prune_schema(Discovery, Map.fetch!(cutoffs, :discoveries), batch_size),
@@ -91,7 +134,7 @@ defmodule Webby.DataRetention do
           select: row.id
       )
 
-    elem(Repo.delete_all(from row in schema, where: row.id in ^ids), 0)
+    %{examined: length(ids), deleted: delete_ids(schema, ids)}
   end
 
   defp prune_sessions(cutoff, batch_size) do
@@ -104,7 +147,7 @@ defmodule Webby.DataRetention do
           select: session.id
       )
 
-    elem(Repo.delete_all(from session in DocumentSession, where: session.id in ^ids), 0)
+    %{examined: length(ids), deleted: delete_ids(DocumentSession, ids)}
   end
 
   defp prune_pairings(cutoff, batch_size) do
@@ -117,13 +160,18 @@ defmodule Webby.DataRetention do
           select: pairing.id
       )
 
-    elem(Repo.delete_all(from pairing in PairingRequest, where: pairing.id in ^ids), 0)
+    %{examined: length(ids), deleted: delete_ids(PairingRequest, ids)}
   end
 
   defp prune_invocations(cutoff, batch_size) do
-    {:ok, count} = Webby.Invocations.prune_before(cutoff, batch_size)
-    count
+    {examined, deleted} = Webby.Invocations.prune_before_diagnostics(cutoff, batch_size)
+    %{examined: examined, deleted: deleted}
   end
+
+  defp delete_ids(_schema, []), do: 0
+
+  defp delete_ids(schema, ids),
+    do: elem(Repo.delete_all(from row in schema, where: row.id in ^ids), 0)
 
   defp cutoff(now, state, key),
     do: DateTime.add(now, -Keyword.fetch!(state, key), :day)

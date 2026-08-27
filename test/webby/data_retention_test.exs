@@ -44,6 +44,31 @@ defmodule Webby.DataRetentionTest do
     assert Repo.get(PairingRequest, pending_pairing_id)
   end
 
+  test "drain exhausts eligible rows and reports independently measured batches" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    old = DateTime.add(now, -30, :day)
+    browser = insert_browser()
+    insert_discoveries(browser, [old, old, old])
+    parent = self()
+
+    :telemetry.attach_many(
+      "retention-drain-#{System.unique_integer([:positive])}",
+      [[:webby, :retention, :batch], [:webby, :retention, :drain]],
+      fn event, measurements, metadata, _ -> send(parent, {event, measurements, metadata}) end,
+      nil
+    )
+
+    cutoffs = %{discoveries: now, sessions: now, pairings: now, invocations: now}
+    assert {:ok, %{batch_count: 2, counts: %{discoveries: 3}}} = DataRetention.drain(cutoffs, 2)
+
+    assert_receive {[:webby, :retention, :batch], %{rows_examined: 2, rows_deleted: 2},
+                    %{diagnostics: %{discoveries: %{examined: 2, deleted: 2}}}}
+
+    assert_receive {[:webby, :retention, :batch], %{rows_examined: 1, rows_deleted: 1}, _}
+    assert_receive {[:webby, :retention, :drain], %{batch_count: 2, rows_deleted: 3}, _}
+    refute_receive {[:webby, :retention, :batch], %{rows_examined: 0}, _}
+  end
+
   defp insert_browser do
     {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
 
