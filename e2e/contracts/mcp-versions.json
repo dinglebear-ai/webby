@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "latest": "2026-07-28",
+  "supported": ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"],
+  "latest_metadata": {
+    "version_key": "io.modelcontextprotocol/protocolVersion",
+    "client_info_key": "io.modelcontextprotocol/clientInfo",
+    "client_capabilities_key": "io.modelcontextprotocol/clientCapabilities",
+    "method_header": "mcp-method",
+    "name_header": "mcp-name"
+  },
+  "methods": [
+    "initialize",
+    "notifications/initialized",
+    "ping",
+    "tools/list",
+    "tools/call",
+    "notifications/cancelled"
+  ],
+  "broker_actions": [
+    "status",
+    "browser.list",
+    "discovery.list",
+    "discovery.get",
+    "page.list",
+    "page.get",
+    "page.tools",
+    "page.call"
+  ],
+  "scopes": {"read": ["read"], "call": ["read", "call"]},
+  "transport": {
+    "path": "/mcp",
+    "health_path": "/health",
+    "accept": "application/json, text/event-stream",
+    "content_type": "application/json"
+  }
+}

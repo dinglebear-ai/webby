@@ -2,6 +2,51 @@ telemetry_path = System.fetch_env!("WEBBY_E2E_TELEMETRY_PATH")
 capability_hash = System.fetch_env!("WEBBY_E2E_TELEMETRY_CAPABILITY_HASH")
 instance_nonce = System.fetch_env!("WEBBY_E2E_INSTANCE_NONCE")
 bound_port_path = System.fetch_env!("WEBBY_E2E_BOUND_PORT_FILE")
+world_root = System.fetch_env!("WEBBY_E2E_WORLD_ROOT") |> Path.expand()
+health_fault_path = System.fetch_env!("WEBBY_E2E_HEALTH_FAULT_FILE") |> Path.expand()
+
+unless String.starts_with?(health_fault_path, world_root <> "/") do
+  raise "health fault flag must remain inside the isolated world"
+end
+
+defmodule WebbyE2E.RuntimeStatus do
+  @moduledoc false
+
+  def snapshot do
+    case active_fault?() do
+      true -> degraded_snapshot()
+      false -> Webby.RuntimeStatus.snapshot([])
+    end
+  end
+
+  defp active_fault? do
+    path = System.fetch_env!("WEBBY_E2E_HEALTH_FAULT_FILE")
+    root = System.fetch_env!("WEBBY_E2E_WORLD_ROOT")
+    expected = System.fetch_env!("WEBBY_E2E_INSTANCE_NONCE") <> "\n"
+
+    case {File.lstat(path), File.stat(root)} do
+      {{:ok, %File.Stat{type: :regular, mode: mode, uid: uid}}, {:ok, %File.Stat{uid: uid}}} ->
+        Bitwise.band(mode, 0o777) == 0o600 and File.read(path) == {:ok, expected}
+
+      {{:error, :enoent}, _root} ->
+        false
+
+      _unsafe ->
+        true
+    end
+  end
+
+  defp degraded_snapshot do
+    {_status, snapshot} = Webby.RuntimeStatus.snapshot([])
+
+    {:error,
+     snapshot
+     |> Map.put(:status, "error")
+     |> Map.put(:database, %{status: "error", kind: "database_unavailable"})}
+  end
+end
+
+Application.put_env(:webby, :runtime_status_module, WebbyE2E.RuntimeStatus)
 
 {:ok, _} = Application.ensure_all_started(:telemetry)
 

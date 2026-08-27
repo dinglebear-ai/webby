@@ -15,6 +15,33 @@ function token(bytes = 32) { return randomBytes(bytes).toString("base64url") }
 function sha256(value) { return createHash("sha256").update(value).digest("hex") }
 function delay(ms) { return new Promise(resolveDelay => setTimeout(resolveDelay, ms)) }
 
+const sqliteMutation = String.raw`
+import json, sqlite3, sys
+payload = json.load(sys.stdin)
+connection = sqlite3.connect(sys.argv[1], timeout=5)
+try:
+    if payload["operation"] == "insert":
+        connection.execute("INSERT INTO mcp_credentials (id, display_name, token_hash, scopes, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", (payload["id"], payload["display_name"], bytes.fromhex(payload["token_hash"]), json.dumps(payload["scopes"], separators=(",", ":")), payload["now"], payload["now"]))
+    elif payload["operation"] == "revoke":
+        cursor = connection.execute("UPDATE mcp_credentials SET revoked_at = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL", (payload["now"], payload["now"], payload["id"]))
+        if cursor.rowcount != 1: raise RuntimeError("credential was missing or already revoked")
+    else: raise RuntimeError("unsupported mutation")
+    connection.commit()
+finally:
+    connection.close()
+`
+
+async function pythonSqlite(databasePath, payload) {
+  const child = spawn("python3", ["-c", sqliteMutation, databasePath], {stdio: ["pipe", "pipe", "pipe"]})
+  child.stdin.end(JSON.stringify(payload))
+  let stderr = ""
+  child.stderr.on("data", chunk => { stderr += chunk })
+  await new Promise((resolveExit, reject) => {
+    child.once("error", reject)
+    child.once("exit", code => code === 0 ? resolveExit() : reject(new Error(`isolated SQLite mutation failed: ${stderr.trim()}`)))
+  })
+}
+
 export async function reserveLoopbackPort() {
   const server = createServer()
   await new Promise((resolveListen, reject) => {
@@ -136,6 +163,7 @@ export class WebbyWorld {
     this.stderrPath = join(this.workspace.artifacts, "stderr.log")
     this.secretPath = join(this.workspace.config, "secret-key-base")
     this.telemetryCapabilityPath = join(this.workspace.config, "telemetry-capability")
+    this.healthFaultPath = join(this.workspace.config, "health-degraded")
     for (const path of [this.databasePath, this.runtimePath, this.manifestPath, this.telemetryPath, this.boundPortPath]) assertInside(this.root, path)
     this.secret = token(64)
     this.telemetryCapability = token()
@@ -160,6 +188,7 @@ export class WebbyWorld {
       WEBBY_E2E_INSTANCE_NONCE: this.instanceNonce,
       WEBBY_E2E_TELEMETRY_PATH: this.telemetryPath,
       WEBBY_E2E_TELEMETRY_CAPABILITY_HASH: sha256(this.telemetryCapability),
+      WEBBY_E2E_HEALTH_FAULT_FILE: this.healthFaultPath,
       WEBBY_PORT: "0",
       // Port zero delegates selection to RuntimeDiscovery's own listen call. The
       // authority socket is therefore acquired once and never handed off.
@@ -236,6 +265,37 @@ export class WebbyWorld {
 
   async releaseFixturePort() { await this.fixtureReservation?.release() }
 
+  async provisionCredential({scopes = ["read"]} = {}) {
+    if (!this.root || !this.databasePath) throw new Error("world is not prepared")
+    assertInside(this.root, this.databasePath)
+    if (!Array.isArray(scopes) || scopes.length === 0 || scopes.some(scope => !["read", "call"].includes(scope))) throw new Error("invalid credential scopes")
+    const credentialToken = `webby_${token()}`
+    const credential = {id: randomUUID(), token: credentialToken, scopes: [...new Set(scopes)]}
+    const now = new Date().toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "")
+    await pythonSqlite(this.databasePath, {operation: "insert", id: credential.id, display_name: "Isolated E2E client", token_hash: sha256(credentialToken), scopes: {values: credential.scopes}, now})
+    return credential
+  }
+
+  async revokeCredential(id) {
+    if (!this.root || !this.databasePath || !/^[0-9a-f-]{36}$/.test(id)) throw new Error("invalid isolated credential")
+    assertInside(this.root, this.databasePath)
+    const now = new Date().toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "")
+    await pythonSqlite(this.databasePath, {operation: "revoke", id, now})
+  }
+
+  async setHealthDegraded(active = true) {
+    assertInside(this.root, this.healthFaultPath)
+    if (active) {
+      await atomicPrivateWrite(this.healthFaultPath, `${this.instanceNonce}\n`)
+      await assertOwnedRegular(this.healthFaultPath, {mode: 0o600})
+    } else {
+      try {
+        await assertOwnedRegular(this.healthFaultPath, {mode: 0o600})
+        await unlink(this.healthFaultPath)
+      } catch (error) { if (error.code !== "ENOENT") throw error }
+    }
+  }
+
   async telemetry(capability) {
     if (sha256(capability) !== sha256(this.telemetryCapability)) throw new Error("invalid telemetry capability")
     const text = await readFile(this.telemetryPath, "utf8")
@@ -256,6 +316,7 @@ export class WebbyWorld {
   }
 
   async teardown({remove = !this.preserveArtifacts} = {}) {
+    await this.setHealthDegraded(false).catch(() => {})
     await this.fixtureReservation?.release().catch(() => {})
     if (this.identity) await reapProcessGroup(this.identity, this.instanceNonce)
     await this.logs?.stdout.close()
