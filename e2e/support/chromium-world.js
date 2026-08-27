@@ -105,22 +105,30 @@ export class ChromiumWorld {
   async close() {
     if (!this.context) return
     const context = this.context
-    let timeout
+    const errors = []
     try {
       await this.artifacts.drain()
       if (!this.traceCaptured) await this.captureTrace()
+    } catch (error) { errors.push(error) }
+    let timeout
+    try {
       await Promise.race([
         context.close(),
         new Promise((_, reject) => { timeout = setTimeout(() => reject(Object.assign(new Error("Chromium close timed out"), {code: "chromium_close_timeout"})), this.closeTimeoutMs) }),
       ])
+    } catch (error) { errors.push(error) }
+    finally { clearTimeout(timeout); this.context = undefined }
+    try {
       await this.artifacts.drain()
       this.artifacts.assertClean()
-    } catch (error) {
+    } catch (error) { errors.push(error) }
+    if (errors.length) {
+      const error = errors.length === 1 ? errors[0] : new AggregateError(errors, "Chromium close failed")
       await this.artifacts.producer.failure({summary: error.message, code: error.code ?? "chromium_close_failed"})
       if (typeof this.world?.reap === "function") await this.world.reap()
       else if (typeof this.world?.teardown === "function") await this.world.teardown({remove: false})
       throw error
-    } finally { clearTimeout(timeout); this.context = undefined }
+    }
     await this.artifacts.drain()
   }
 

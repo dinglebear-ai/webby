@@ -90,6 +90,9 @@ export class ExtensionDriver {
   async configure({baseUrl = this.binding.base_url, mode = "granted_sites", paused = false} = {}) {
     const popup = await this.popup()
     try {
+      // popup.js installs the save listener after its top-level permission await.
+      // Waiting for the stored/default value prevents a click racing module setup.
+      await popup.waitForFunction(() => document.querySelector("#base-url")?.value?.length > 0)
       await popup.locator("#base-url").fill(baseUrl)
       await popup.locator("#mode").selectOption(mode)
       await popup.locator("#paused").setChecked(paused)

@@ -180,15 +180,21 @@ async function executeToolCall(payload) {
       target: {tabId: payload.tab_id, documentIds: [payload.document_id]},
       world: "MAIN",
       func: invokeWebMcp,
-      args: [payload.tool_name, payload.arguments ?? {}, payload.call_id, expectedCatalog]
+      args: [payload.tool_name, payload.arguments ?? {}, payload.call_id, expectedCatalog, true]
     });
-    const result = execution?.result;
+    const boundary = execution?.result;
+    // A targeted document that is replaced while its injected promise is
+    // pending resolves without an InjectionResult payload in Chromium.
+    if (!boundary || boundary.__webby_execution_v1__ !== true) throw new Error("stale_document");
+    if (!boundary.ok) throw new Error(boundary.error ?? "tool_failed");
+    const result = boundary.value;
     if (encodedSize(result) > 131_072 || jsonDepth(result) > 32) throw new Error("result_too_large");
     await requireChannel().message("tool.result", {call_id: payload.call_id, result});
   } catch (error) {
     const message = error instanceof Error ? error.message : undefined;
-    const kind = knownToolError(message) ? /** @type {string} */ (message) : "tool_failed";
-    console.error("Webby tool call failed", {callId: payload.call_id, kind, error});
+    const kind = classifyToolError(error, message);
+    const log = ["renderer_crashed", "worker_crashed"].includes(kind) ? console.error : console.info;
+    log("Webby tool call failed", {callId: payload.call_id, kind, error});
     await sendToolError(payload.call_id, kind, "The page tool could not be completed");
   }
 }
@@ -249,7 +255,15 @@ function jsonDepth(value, depth = 0) {
  * @returns {boolean}
  */
 function knownToolError(kind) {
-  return kind !== undefined && ["webmcp_unavailable", "stale_catalog", "tool_not_found", "AbortError"].includes(kind);
+  return kind !== undefined && ["webmcp_unavailable", "stale_catalog", "stale_document", "tool_not_found", "result_too_large", "AbortError"].includes(kind);
+}
+
+function classifyToolError(error, message) {
+  if (expectedGoneDocumentError(error)) return "stale_document";
+  if (message && /render(?:er)? process (?:gone|crashed)|render frame.*crashed/i.test(message)) return "renderer_crashed";
+  if (message && /service worker.*(?:stopped|crashed|terminated)/i.test(message)) return "worker_crashed";
+  if (message && /signal is aborted/i.test(message)) return "AbortError";
+  return knownToolError(message) ? /** @type {string} */ (message) : "tool_failed";
 }
 
 function scanAll() {

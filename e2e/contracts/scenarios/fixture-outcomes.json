@@ -6,6 +6,7 @@
   "tier": "pr",
   "weight": 16,
   "drivers": [
+    "protocol",
     "chromium"
   ],
   "security": "ordinary",
@@ -155,6 +156,15 @@
     "exclusions": []
   },
   "parity": {
+    "protocol": {
+      "required_raw_keys": [
+        "protocol.catalog.sanitized",
+        "protocol.results.normalized",
+        "protocol.abort.observed",
+        "protocol.stale.rejected"
+      ],
+      "raw_exclusions": []
+    },
     "chromium": {
       "required_raw_keys": [
         "chromium.catalog.sanitized",

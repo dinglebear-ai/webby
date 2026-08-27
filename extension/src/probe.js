@@ -90,7 +90,8 @@ export async function probeWebMcp() {
  * @param {string} expectedCatalog
  * @returns {Promise<unknown>}
  */
-export async function invokeWebMcp(toolName, input, callId, expectedCatalog) {
+export async function invokeWebMcp(toolName, input, callId, expectedCatalog, transportEnvelope = false) {
+  try {
   const calls = globalThis.__webbyToolCalls ??= new Map();
   const prior = calls.get(callId);
   if (prior?.cancelled) {
@@ -170,10 +171,17 @@ export async function invokeWebMcp(toolName, input, callId, expectedCatalog) {
       JSON.stringify(input ?? {}),
       {signal: state.controller.signal}
     );
-    if (typeof result !== "string") return result;
-    try { return JSON.parse(result); } catch { return result; }
+    let value = result;
+    if (typeof result === "string") {
+      try { value = JSON.parse(result); } catch { value = result; }
+    }
+    return transportEnvelope ? {__webby_execution_v1__: true, ok: true, value} : value;
   } finally {
     if (calls.get(callId) === state) calls.delete(callId);
+  }
+  } catch (error) {
+    if (!transportEnvelope) throw error;
+    return {__webby_execution_v1__: true, ok: false, error: error instanceof Error ? error.message : "tool_failed"};
   }
 }
 

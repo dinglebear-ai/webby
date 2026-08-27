@@ -7,6 +7,7 @@ export function classifyBrowserError({kind, text}) {
   const url = typeof text === "object" ? text.url ?? "" : ""
   if (/\/assets\/(?:js|css)\/app\.(?:js|css)(?:\?|$)/.test(url) && /404|Failed to load resource/.test(message)) return {severity: "failure", code: "core_asset_missing"}
   if (/\/favicon\.ico(?:\?|$)/.test(url) && /^Failed to load resource: the server responded with a status of 404/.test(message)) return {severity: "expected", code: "favicon_missing"}
+  if (kind === "network_error" && /\/__fixture\/wait\?/.test(url) && /net::ERR_ABORTED/.test(message)) return {severity: "expected", code: "fixture_wait_cancelled"}
   if (ignoredConsole.some(pattern => pattern.test(message))) return {severity: "expected", code: "known_chromium_restriction"}
   if (kind === "console" && !["error", "assert"].includes(text.level)) return {severity: "diagnostic", code: "console"}
   if (kind === "service_worker") return {severity: "diagnostic", code: "service_worker"}

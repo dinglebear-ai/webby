@@ -6,7 +6,7 @@
   "scripts": {
     "validate": "node support/validate-contracts.js",
     "test": "node --test",
-    "test:chromium": "node --test --test-concurrency=1 test/chromium-bootstrap.test.js test/chromium/vertical-slice.test.js test/chromium/pairing-discovery.test.js test/chromium/popup-commands.test.js test/chromium/chrome-events.test.js test/chromium/dashboard-commands.test.js",
+    "test:chromium": "node --test --test-concurrency=1 test/chromium-bootstrap.test.js test/chromium/vertical-slice.test.js test/chromium/pairing-discovery.test.js test/chromium/popup-commands.test.js test/chromium/chrome-events.test.js test/chromium/dashboard-commands.test.js test/chromium/invocation-tools.test.js",
     "test:mcp-official": "MCP_TELEMETRY=0 MCP_UPDATE_CHECK=0 node --test --test-concurrency=1 test/mcp-official-client.test.js",
     "typecheck:chromium": "node --check support/chromium-world.js && node --check support/chromium-scenario-adapter.js && node --check support/chromium-command-matrix.js && node --check support/extension-driver.js && node --check support/test-manifest.js && node --check support/browser-artifacts.js",
     "parity": "node support/parity-report.js"

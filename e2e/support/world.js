@@ -137,15 +137,17 @@ export class WebbyWorld {
     return world
   }
 
-  constructor({scenarioId = "unspecified", seed = 0, startupTimeoutMs = 45_000, preserveArtifacts = false, workspace, authorityPort = 0} = {}) {
+  constructor({scenarioId = "unspecified", seed = 0, startupTimeoutMs = 45_000, preserveArtifacts = false, workspace, authorityPort = 0, invocationTimeoutMs = 120_000} = {}) {
     if (!/^[a-zA-Z0-9_-]+$/.test(scenarioId)) throw new Error("invalid scenario ID")
     if (!Number.isInteger(authorityPort) || authorityPort < 0 || authorityPort > 65_535) throw new Error("invalid authority port")
+    if (!Number.isInteger(invocationTimeoutMs) || invocationTimeoutMs < 100 || invocationTimeoutMs > 120_000) throw new Error("invalid invocation timeout")
     this.scenarioId = scenarioId
     this.seed = seed
     this.startupTimeoutMs = startupTimeoutMs
     this.preserveArtifacts = preserveArtifacts
     this.workspace = workspace
     this.authorityPort = authorityPort
+    this.invocationTimeoutMs = invocationTimeoutMs
     this.worldId = `world-${randomUUID()}`
     this.instanceNonce = token()
     this.metrics = {startup_kind: workspace ? "warm" : "cold", startup_ms: 0, migration_ms: 0, peak_rss_kb: 0, disk_bytes: 0}
@@ -189,6 +191,7 @@ export class WebbyWorld {
       WEBBY_E2E_TELEMETRY_PATH: this.telemetryPath,
       WEBBY_E2E_TELEMETRY_CAPABILITY_HASH: sha256(this.telemetryCapability),
       WEBBY_E2E_HEALTH_FAULT_FILE: this.healthFaultPath,
+      WEBBY_E2E_INVOCATION_TIMEOUT_MS: String(this.invocationTimeoutMs),
       WEBBY_PORT: "0",
       // Port zero delegates selection to RuntimeDiscovery's own listen call. The
       // authority socket is therefore acquired once and never handed off.
