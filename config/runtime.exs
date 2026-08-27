@@ -35,6 +35,16 @@ positive_integer = fn name, default ->
   end
 end
 
+bounded_positive_integer = fn name, default, maximum ->
+  value = positive_integer.(name, default)
+
+  if value <= maximum do
+    value
+  else
+    raise "#{name} must be at most #{maximum}"
+  end
+end
+
 config :webby, :retention,
   interval_ms: positive_integer.("WEBBY_RETENTION_INTERVAL_MS", :timer.hours(1)),
   abandoned_after_seconds: positive_integer.("WEBBY_ABANDONED_AFTER_SECONDS", 60),
@@ -42,7 +52,7 @@ config :webby, :retention,
   discovery_days: positive_integer.("WEBBY_DISCOVERY_RETENTION_DAYS", 30),
   session_days: positive_integer.("WEBBY_SESSION_RETENTION_DAYS", 7),
   pairing_days: positive_integer.("WEBBY_PAIRING_RETENTION_DAYS", 7),
-  batch_size: positive_integer.("WEBBY_RETENTION_BATCH_SIZE", 500)
+  batch_size: bounded_positive_integer.("WEBBY_RETENTION_BATCH_SIZE", 500, 5_000)
 
 if config_env() == :dev do
   # Reload browser tabs when matching files change.

@@ -75,7 +75,12 @@ settings below:
 | `WEBBY_DISCOVERY_RETENTION_DAYS` | `30` | Days to retain stale discoveries |
 | `WEBBY_SESSION_RETENTION_DAYS` | `7` | Days to retain closed document sessions |
 | `WEBBY_PAIRING_RETENTION_DAYS` | `7` | Days to retain resolved pairing requests |
-| `WEBBY_RETENTION_BATCH_SIZE` | `500` | Maximum rows pruned per category and run |
+| `WEBBY_RETENTION_BATCH_SIZE` | `500` | Rows pruned per category and batch (maximum `5000`) |
+
+When a maintenance batch reaches that limit, Webby immediately runs another
+batch. It briefly yields after every ten batches, then resumes until the backlog
+is drained. This lets old rows drain promptly without allowing retention work to
+monopolize the application indefinitely.
 
 ## Design
 

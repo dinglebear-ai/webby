@@ -123,6 +123,32 @@ defmodule WebbyWeb.BrowserChannelTest do
     refute WebbyWeb.BrowserOrigin.allowed?(%URI{scheme: "https", host: "evil.example"})
   end
 
+  test "a consumed Origin identity cannot authorize a later connection" do
+    extension_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    assert WebbyWeb.BrowserOrigin.allowed?(%URI{
+             scheme: "chrome-extension",
+             host: extension_id
+           })
+
+    assert {:ok, _socket} =
+             connect(WebbyWeb.BrowserSocket, %{"extension_id" => extension_id})
+
+    assert :error = connect(WebbyWeb.BrowserSocket, %{"extension_id" => extension_id})
+  end
+
+  test "a rejected Origin clears identity retained by a previous check" do
+    extension_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    assert WebbyWeb.BrowserOrigin.allowed?(%URI{
+             scheme: "chrome-extension",
+             host: extension_id
+           })
+
+    refute WebbyWeb.BrowserOrigin.allowed?(%URI{scheme: "https", host: "evil.example"})
+    assert :error = connect(WebbyWeb.BrowserSocket, %{"extension_id" => extension_id})
+  end
+
   test "a paired extension authenticates its channel with the issued challenge" do
     extension_id = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     {public_key, private_key} = :crypto.generate_key(:eddsa, :ed25519)

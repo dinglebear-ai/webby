@@ -117,40 +117,56 @@ defmodule Webby.Pages do
   end
 
   def attach(browser_id, registration, attrs) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-    result =
-      Repo.transaction(fn ->
-        {replaced_count, _} = replace_other_documents(browser_id, attrs, now)
-        existing = find_session(browser_id, attrs)
-        session = upsert_session(existing, browser_id, registration, attrs, now)
-
-        Logger.info("document session attached",
-          event: "page.session.attached",
-          browser_id: browser_id,
-          registration_id: registration.id,
-          session_id: session.id,
-          catalog_revision: session.catalog_revision,
-          replaced_count: replaced_count
-        )
-
-        session
-      end)
-
-    case result do
-      {:ok, session} = ok ->
-        BrowserConnections.cancel_stale_document(
-          browser_id,
-          session.tab_id,
-          session.document_id,
-          session.catalog_revision
-        )
-
-        ok
+    case attach_deferred(browser_id, registration, attrs) do
+      {:ok, {session, cancellations}} ->
+        run_cancellations(cancellations)
+        {:ok, session}
 
       error ->
         error
     end
+  end
+
+  @doc false
+  def attach_deferred(browser_id, registration, attrs) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    Repo.transaction(fn ->
+      {replaced_count, _} = replace_other_documents(browser_id, attrs, now)
+      existing = find_session(browser_id, attrs)
+      session = upsert_session(existing, browser_id, registration, attrs, now)
+
+      Logger.info("document session attached",
+        event: "page.session.attached",
+        browser_id: browser_id,
+        registration_id: registration.id,
+        session_id: session.id,
+        catalog_revision: session.catalog_revision,
+        replaced_count: replaced_count
+      )
+
+      {session,
+       [
+         {:stale_document, browser_id, session.tab_id, session.document_id,
+          session.catalog_revision}
+       ]}
+    end)
+  end
+
+  @doc false
+  def run_cancellations(cancellations) do
+    Enum.each(cancellations, fn
+      {:stale_document, browser_id, tab_id, document_id, catalog_revision} ->
+        BrowserConnections.cancel_stale_document(
+          browser_id,
+          tab_id,
+          document_id,
+          catalog_revision
+        )
+
+      {:document, browser_id, tab_id, document_id} ->
+        BrowserConnections.cancel_document(browser_id, tab_id, document_id)
+    end)
   end
 
   def close(browser_id, tab_id, document_id) do
@@ -172,6 +188,15 @@ defmodule Webby.Pages do
   end
 
   def reconcile(browser_id, observed_records) do
+    case reconcile_deferred(browser_id, observed_records) do
+      {:ok, {count, cancellations}} ->
+        run_cancellations(cancellations)
+        {:ok, count}
+    end
+  end
+
+  @doc false
+  def reconcile_deferred(browser_id, observed_records) do
     current =
       observed_records
       |> Enum.flat_map(fn
@@ -191,13 +216,15 @@ defmodule Webby.Pages do
       end)
 
     case close_sessions(Enum.map(stale_sessions, &elem(&1, 0))) do
-      {:ok, count} = result ->
-        Enum.each(stale_sessions, fn {_id, tab_id, document_id} ->
-          BrowserConnections.cancel_document(browser_id, tab_id, document_id)
-        end)
-
+      {:ok, count} ->
         log_closed(browser_id, count, "page.session.reconciled")
-        result
+
+        cancellations =
+          Enum.map(stale_sessions, fn {_id, tab_id, document_id} ->
+            {:document, browser_id, tab_id, document_id}
+          end)
+
+        {:ok, {count, cancellations}}
     end
   end
 

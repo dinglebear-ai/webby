@@ -4,6 +4,7 @@ defmodule Webby.PagesTest do
   alias Webby.Browsers.Browser
   alias Webby.{Discovery, Pages}
   alias Webby.MCP.Broker
+  alias Webby.Pages.PageRegistration
 
   setup do
     {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
@@ -273,6 +274,64 @@ defmodule Webby.PagesTest do
               "The browser document changed before the tool call completed"}
 
     assert_receive {:tool_cancel, %{"call_id" => ^navigation_call_id}}
+  end
+
+  test "rolled back observation batches do not cancel calls for still-valid documents", context do
+    assert {:ok, discovery} = Discovery.observe(context.browser.id, context.observation)
+    assert {:ok, _registration} = Pages.register_discovery(discovery.id)
+    assert :ok = Webby.BrowserConnections.register(context.browser.id, self())
+
+    observed = Map.merge(context.observation, %{"tab_id" => 42, "document_id" => "document-one"})
+    assert {:ok, session} = Discovery.observe(context.browser.id, observed)
+
+    call =
+      Task.async(fn ->
+        Webby.BrowserConnections.call(context.browser.id, %{
+          "tab_id" => session.tab_id,
+          "document_id" => session.document_id,
+          "catalog_revision" => session.catalog_revision
+        })
+      end)
+
+    assert_receive {:tool_call, %{"call_id" => call_id}}
+
+    for {slug, pattern} <- [{"ambiguous-prefix", "/ambiguous*"}, {"ambiguous-page", "/ambiguous"}] do
+      %PageRegistration{}
+      |> PageRegistration.changeset(%{
+        slug: slug,
+        display_name: slug,
+        origin: "https://ambiguous.example",
+        url_pattern: pattern,
+        auto_attach: true,
+        enabled: true,
+        exposure_mode: "broker"
+      })
+      |> Repo.insert!()
+    end
+
+    changed = put_in(observed, ["tools", Access.at(0), "description"], "Changed")
+
+    ambiguous = %{
+      "url" => "https://ambiguous.example/ambiguous",
+      "title" => "Ambiguous",
+      "tools" => [%{"name" => "find", "input_schema" => %{}}],
+      "tab_id" => 43,
+      "document_id" => "ambiguous-document"
+    }
+
+    assert {:error, :ambiguous_registration} =
+             Discovery.observe_many(context.browser.id, [changed, ambiguous])
+
+    assert Repo.get!(Webby.Pages.DocumentSession, session.id).catalog_revision == 1
+    refute_receive {:tool_cancel, %{"call_id" => ^call_id}}
+
+    Webby.BrowserConnections.complete(context.browser.id, %{
+      "type" => "tool.result",
+      "call_id" => call_id,
+      "result" => %{"still" => "valid"}
+    })
+
+    assert Task.await(call) == {:ok, %{"still" => "valid"}}
   end
 
   test "closing a document cancels its pending calls", context do

@@ -11,6 +11,12 @@ defmodule Webby.RetentionMaintenanceStub do
 
     send(test_pid, {:maintenance_run, run})
 
-    if run == 1, do: raise("simulated maintenance failure"), else: {:ok, %{}}
+    case Keyword.get(state, :behavior, :fail_first) do
+      :fail_first ->
+        if run == 1, do: raise("simulated maintenance failure"), else: {:ok, %{}}
+
+      responses when is_list(responses) ->
+        Enum.at(responses, run - 1, List.last(responses))
+    end
   end
 end

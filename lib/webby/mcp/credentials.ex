@@ -26,16 +26,19 @@ defmodule Webby.MCP.Credentials do
     end
   end
 
-  def authenticate(token) when is_binary(token) do
+  def authenticate(token) when is_binary(token), do: authenticate(token, [])
+  def authenticate(_token), do: {:error, :invalid_credential}
+
+  @doc false
+  def authenticate(token, options) when is_binary(token) and is_list(options) do
     token_hash = hash(token)
     now = now()
     cutoff = DateTime.add(now, -@last_used_write_interval_seconds, :second)
+    after_write = Keyword.get(options, :after_write, fn -> :ok end)
 
-    Repo.transaction(fn -> authenticate_in_transaction(token_hash, now, cutoff) end)
+    Repo.transaction(fn -> authenticate_in_transaction(token_hash, now, cutoff, after_write) end)
     |> normalize_authentication_result()
   end
-
-  def authenticate(_token), do: {:error, :invalid_credential}
 
   def scope?(%Credential{scopes: %{"values" => scopes}}, scope), do: scope in scopes
 
@@ -57,16 +60,16 @@ defmodule Webby.MCP.Credentials do
   defp hash(token), do: :crypto.hash(:sha256, token)
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 
-  defp authenticate_in_transaction(token_hash, now, cutoff) do
+  defp authenticate_in_transaction(token_hash, now, cutoff, after_write) do
     stale_query =
       from c in Credential,
         where:
           c.token_hash == ^token_hash and is_nil(c.revoked_at) and
             (is_nil(c.last_used_at) or c.last_used_at <= ^cutoff)
 
-    stale_query
-    |> Repo.update_all(set: [last_used_at: now])
-    |> fetch_authenticated_credential(token_hash)
+    update_result = Repo.update_all(stale_query, set: [last_used_at: now])
+    after_write.()
+    fetch_authenticated_credential(update_result, token_hash)
   end
 
   defp fetch_authenticated_credential({1, _}, token_hash),
