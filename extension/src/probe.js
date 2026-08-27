@@ -91,6 +91,16 @@ export async function probeWebMcp() {
  * @returns {Promise<unknown>}
  */
 export async function invokeWebMcp(toolName, input, callId, expectedCatalog) {
+  const calls = globalThis.__webbyToolCalls ??= new Map();
+  const prior = calls.get(callId);
+  if (prior?.cancelled) {
+    calls.delete(callId);
+    throw new Error("AbortError");
+  }
+  if (prior) throw new Error("duplicate_call_id");
+  const state = {cancelled: false, controller: new AbortController()};
+  calls.set(callId, state);
+  try {
   const context = document.modelContext;
   if (!context || typeof context.getTools !== "function") throw new Error("webmcp_unavailable");
 
@@ -114,6 +124,7 @@ export async function invokeWebMcp(toolName, input, callId, expectedCatalog) {
   // frame. They are carried, with their origin recorded, so the decision is
   // visible rather than made here.
   const tools = Array.from(await context.getTools() ?? []);
+  if (state.cancelled) throw new Error("AbortError");
 
   const normalized = tools.slice(0, 64).flatMap((tool) => {
     if (!tool || typeof tool.name !== "string") return [];
@@ -153,15 +164,11 @@ export async function invokeWebMcp(toolName, input, callId, expectedCatalog) {
   const tool = tools.find((candidate) => candidate?.name === toolName);
   if (!tool) throw new Error("tool_not_found");
 
-  const controllers = globalThis.__webbyToolCalls ??= new Map();
-  const controller = new AbortController();
-  controllers.set(callId, controller);
-  try {
-    const result = await executeTool.call(context, tool, JSON.stringify(input ?? {}), {signal: controller.signal});
+    const result = await executeTool.call(context, tool, JSON.stringify(input ?? {}), {signal: state.controller.signal});
     if (typeof result !== "string") return result;
     try { return JSON.parse(result); } catch { return result; }
   } finally {
-    controllers.delete(callId);
+    if (calls.get(callId) === state) calls.delete(callId);
   }
 }
 
@@ -170,8 +177,17 @@ export async function invokeWebMcp(toolName, input, callId, expectedCatalog) {
  * @returns {boolean}
  */
 export function cancelWebMcp(callId) {
-  const controller = globalThis.__webbyToolCalls?.get(callId);
-  if (!controller) return false;
-  controller.abort();
+  const calls = globalThis.__webbyToolCalls ??= new Map();
+  const state = calls.get(callId);
+  if (!state) {
+    calls.set(callId, {cancelled: true, controller: null});
+    return true;
+  }
+  if (state instanceof AbortController) {
+    state.abort();
+    return true;
+  }
+  state.cancelled = true;
+  state.controller?.abort();
   return true;
 }

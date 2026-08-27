@@ -71,3 +71,65 @@ test("a join timeout rejects readiness instead of leaving later messages pending
   assert.equal(channel.pending.size, 0);
   channel.close();
 });
+
+test("a socket that closes before joining rejects readiness", async () => {
+  class FakeWebSocket {
+    static OPEN = 1;
+    readyState = 0;
+    constructor() { queueMicrotask(() => this.onclose()); }
+    send() {}
+    close() { this.onclose?.(); }
+  }
+  globalThis.WebSocket = FakeWebSocket;
+  const channel = new WebbyChannel({baseUrl: "http://127.0.0.1:6477", extensionId: "a"});
+  channel.scheduleReconnect = () => {};
+  channel.connect();
+  await assert.rejects(channel.message("browser.hello", {}), /channel_disconnected/);
+  channel.close();
+});
+
+test("ignores callbacks from a superseded socket", async () => {
+  const sockets = [];
+  class FakeWebSocket {
+    static OPEN = 1;
+    readyState = 1;
+    constructor() { sockets.push(this); }
+    send() {}
+    close() { this.onclose?.(); }
+  }
+  globalThis.WebSocket = FakeWebSocket;
+  const channel = new WebbyChannel({baseUrl: "http://127.0.0.1:6477", extensionId: "a"});
+  channel.scheduleReconnect = () => {};
+  channel.connect();
+  const first = sockets[0];
+  channel.connect();
+  const second = sockets[1];
+  first.onclose();
+  assert.equal(channel.socket, second);
+  assert.equal(channel.pending.size, 0);
+  channel.close();
+});
+
+test("drops malformed and wrong-topic frames and contains async event failures", async () => {
+  const channel = new WebbyChannel({
+    baseUrl: "http://127.0.0.1:6477",
+    extensionId: "a",
+    onEvent: async () => { throw new Error("handler failed"); }
+  });
+  channel.topic = "browser:auth";
+  assert.doesNotThrow(() => channel.receive(null));
+  assert.doesNotThrow(() => channel.receive([null, "1", "other", "message", {}]));
+  assert.doesNotThrow(() => channel.receive([null, "1", "browser:auth", "message", {}]));
+  await new Promise((resolve) => setImmediate(resolve));
+});
+
+test("rejects a malformed reply without throwing from the frame handler", async () => {
+  const channel = new WebbyChannel({baseUrl: "http://127.0.0.1:6477", extensionId: "a"});
+  channel.socket = {readyState: 1, send() {}};
+  channel.topic = "browser:auth";
+  channel.joinRef = "1";
+  const pending = channel.sendFrame("message", {});
+  const ref = String(channel.ref);
+  assert.doesNotThrow(() => channel.receive(["1", ref, "browser:auth", "phx_reply", null]));
+  await assert.rejects(pending, /malformed_channel_reply/);
+});

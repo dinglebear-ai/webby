@@ -33,6 +33,38 @@ test("aborts the exact pending page call", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(cancelWebMcp("call-2"), true);
   await assert.rejects(pending, /aborted/);
-  assert.equal(cancelWebMcp("call-2"), false);
+  // Cancellation is idempotent and leaves a tombstone so a late execution
+  // carrying the same call id cannot start after cancellation was acknowledged.
+  assert.equal(cancelWebMcp("call-2"), true);
+  delete globalThis.document;
+});
+
+test("cancellation while getTools is pending prevents executeTool", async () => {
+  let release;
+  const toolsReady = new Promise((resolve) => { release = resolve; });
+  let executions = 0;
+  const tool = {name: "mutate", inputSchema: {}};
+  globalThis.document = {modelContext: {
+    getTools: () => toolsReady,
+    executeTool: async () => { executions += 1; }
+  }};
+
+  const pending = invokeWebMcp("mutate", {}, "call-before-tools", stableStringify(normalizeTools([tool])));
+  assert.equal(cancelWebMcp("call-before-tools"), true);
+  release([tool]);
+  await assert.rejects(pending, /AbortError/);
+  assert.equal(executions, 0);
+  delete globalThis.document;
+});
+
+test("a cancellation tombstone prevents a later invocation from starting", async () => {
+  let getToolsCalls = 0;
+  globalThis.document = {modelContext: {
+    getTools: async () => { getToolsCalls += 1; return []; },
+    executeTool: async () => { throw new Error("must not execute"); }
+  }};
+  cancelWebMcp("late-call");
+  await assert.rejects(invokeWebMcp("anything", {}, "late-call", "[]"), /AbortError/);
+  assert.equal(getToolsCalls, 0);
   delete globalThis.document;
 });

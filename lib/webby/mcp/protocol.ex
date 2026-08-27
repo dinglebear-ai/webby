@@ -19,7 +19,8 @@ defmodule Webby.MCP.Protocol do
       "capabilities" => %{"tools" => %{"listChanged" => false}},
       "serverInfo" => %{"name" => "webby", "version" => "0.1.0"},
       "instructions" =>
-        "Use the webby broker tool to inspect explicitly registered browser pages."
+        "Use page.list to find registered pages, page.tools to read the current catalog and " <>
+          "session, then page.call with that catalog_revision and optional session id."
     })
   end
 

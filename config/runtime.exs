@@ -28,6 +28,22 @@ config :webby,
 
 config :webby, WebbyWeb.Endpoint, http: [ip: {127, 0, 0, 1}, port: port]
 
+positive_integer = fn name, default ->
+  case Integer.parse(System.get_env(name, to_string(default))) do
+    {value, ""} when value > 0 -> value
+    _ -> raise "#{name} must be a positive integer"
+  end
+end
+
+config :webby, :retention,
+  interval_ms: positive_integer.("WEBBY_RETENTION_INTERVAL_MS", :timer.hours(1)),
+  abandoned_after_seconds: positive_integer.("WEBBY_ABANDONED_AFTER_SECONDS", 60),
+  invocation_days: positive_integer.("WEBBY_INVOCATION_RETENTION_DAYS", 30),
+  discovery_days: positive_integer.("WEBBY_DISCOVERY_RETENTION_DAYS", 30),
+  session_days: positive_integer.("WEBBY_SESSION_RETENTION_DAYS", 7),
+  pairing_days: positive_integer.("WEBBY_PAIRING_RETENTION_DAYS", 7),
+  batch_size: positive_integer.("WEBBY_RETENTION_BATCH_SIZE", 500)
+
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
   config :webby, WebbyWeb.Endpoint,

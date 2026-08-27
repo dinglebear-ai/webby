@@ -147,6 +147,28 @@ defmodule Webby.BrowsersTest do
     assert Repo.aggregate(AuthChallenge, :count) == 1
   end
 
+  test "pairing admission is bounded" do
+    previous = Application.get_env(:webby, :max_pending_pairings)
+    Application.put_env(:webby, :max_pending_pairings, 1)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:webby, :max_pending_pairings, previous),
+        else: Application.delete_env(:webby, :max_pending_pairings)
+    end)
+
+    {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
+    pairing_request(public_key)
+
+    assert {:error, :too_many_pending_pairings} =
+             Browsers.request_pairing(%{
+               "display_name" => "Second Chrome",
+               "extension_id" => "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+               "public_key" => Base.url_encode64(public_key, padding: false),
+               "scanning_mode" => "granted_sites"
+             })
+  end
+
   defp pairing_request(public_key, mode \\ "granted_sites") do
     {:ok, request} =
       Browsers.request_pairing(%{

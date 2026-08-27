@@ -10,4 +10,7 @@
  * In-flight WebMCP tool calls for this document, keyed by call id, so a
  * cancellation can abort the exact call it names.
  */
-declare var __webbyToolCalls: Map<string, AbortController> | undefined;
+declare var __webbyToolCalls: Map<string, AbortController | {
+  cancelled: boolean;
+  controller: AbortController | null;
+}> | undefined;

@@ -17,4 +17,34 @@ defmodule Webby.MCP.CredentialsTest do
     assert {:ok, _revoked} = Credentials.revoke(credential.id)
     assert {:error, :invalid_credential} = Credentials.authenticate(token)
   end
+
+  test "throttles last-used writes and revocation is idempotently terminal" do
+    assert {:ok, credential, token} = Credentials.create("Claude")
+    assert {:ok, first} = Credentials.authenticate(token)
+    assert %DateTime{} = first.last_used_at
+
+    assert {:ok, second} = Credentials.authenticate(token)
+    assert second.last_used_at == first.last_used_at
+
+    assert {:ok, revoked} = Credentials.revoke(credential.id)
+    assert %DateTime{} = revoked.revoked_at
+    assert {:error, :already_revoked} = Credentials.revoke(credential.id)
+    assert {:error, :invalid_credential} = Credentials.authenticate(token)
+  end
+
+  test "concurrent authentication cannot resurrect a revoked credential" do
+    assert {:ok, credential, token} = Credentials.create("Concurrent client")
+
+    authenticators =
+      for _ <- 1..8 do
+        Task.async(fn -> Credentials.authenticate(token) end)
+      end
+
+    assert {:ok, _revoked} = Credentials.revoke(credential.id)
+    Enum.each(authenticators, &Task.await/1)
+
+    for _ <- 1..8 do
+      assert {:error, :invalid_credential} = Credentials.authenticate(token)
+    end
+  end
 end

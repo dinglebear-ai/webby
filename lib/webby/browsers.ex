@@ -31,7 +31,8 @@ defmodule Webby.Browsers do
         |> Map.put("expires_at", DateTime.add(now(), @pairing_ttl, :second))
 
       Repo.transaction(fn ->
-        expire_stale_pairing(attrs["extension_id"])
+        expire_stale_pairings()
+        enforce_pairing_capacity!()
         ensure_not_paired!(attrs["extension_id"])
         insert_pairing!(attrs)
       end)
@@ -254,15 +255,22 @@ defmodule Webby.Browsers do
     do:
       Application.get_env(:webby, :instance_id_provider, &Webby.RuntimeDiscovery.instance_id/0).()
 
-  defp expire_stale_pairing(extension_id) do
+  defp expire_stale_pairings do
     now = now()
 
     Repo.update_all(
       from(p in PairingRequest,
-        where: p.extension_id == ^extension_id and p.status == "pending" and p.expires_at <= ^now
+        where: p.status == "pending" and p.expires_at <= ^now
       ),
       set: [status: "expired", resolved_at: now, updated_at: now]
     )
+  end
+
+  defp enforce_pairing_capacity! do
+    limit = Application.get_env(:webby, :max_pending_pairings, 100)
+    pending = Repo.aggregate(from(p in PairingRequest, where: p.status == "pending"), :count)
+
+    if pending >= limit, do: Repo.rollback(:too_many_pending_pairings)
   end
 
   defp live_challenge(browser_id) do

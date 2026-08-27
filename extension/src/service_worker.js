@@ -1,7 +1,8 @@
 import {WebbyChannel} from "./channel.js";
-import {buildObservation, canScanTab, stableStringify} from "./scanning.js";
+import {buildObservation, canScanTab, ignoredObservationTabIds, stableStringify} from "./scanning.js";
 import {cancelWebMcp, invokeWebMcp, probeWebMcp} from "./probe.js";
 import {reconcileModeAfterRemoval} from "./permissions.js";
+import {parseLoopbackBaseUrl} from "./base_url.js";
 
 /** @typedef {{url: string, title: string, tools: unknown[], tab_id: number, document_id: string}} Observation */
 
@@ -10,6 +11,12 @@ const DEFAULTS = {baseUrl: "http://127.0.0.1:6477", scanningMode: "granted_sites
 let channel;
 /** @type {Map<number | undefined, Observation>} */
 let observations = new Map();
+/** @type {Map<number, number>} */
+const scanGenerations = new Map();
+/** @type {Promise<void> | undefined} */
+let fullScanPromise;
+let fullScanAgain = false;
+const SCAN_CONCURRENCY = 8;
 
 /**
  * The channel is created by `initialize()`, which runs at worker start and
@@ -38,6 +45,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.permissions.onAdded.addListener(() => scanAll());
 chrome.permissions.onRemoved.addListener(async () => {
   await reconcileModeAfterRemoval(chrome.permissions, chrome.storage.local);
+  await closeIneligibleObservations();
   await scanAll();
 });
 chrome.storage.onChanged.addListener((changes) => {
@@ -59,6 +67,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 async function initialize() {
   await chrome.alarms.create("webby-periodic-scan", {periodInMinutes: 1});
   const settings = {...DEFAULTS, ...await chrome.storage.local.get(Object.keys(DEFAULTS))};
+  try { settings.baseUrl = parseLoopbackBaseUrl(settings.baseUrl); } catch {
+    settings.baseUrl = DEFAULTS.baseUrl;
+    await chrome.storage.local.set({baseUrl: settings.baseUrl});
+  }
   const identity = await ensureIdentity();
   if (!channel) {
     channel = new WebbyChannel({
@@ -74,7 +86,8 @@ async function initialize() {
   if (identity.browserId) {
     await channel.message("browser.settings", {scanning_mode: settings.scanningMode, scanning_paused: settings.scanningPaused}).catch(() => {});
   }
-  if (identity.browserId && !settings.scanningPaused) await scanAll();
+  if (settings.scanningPaused) await closeAllObservations();
+  else if (identity.browserId) await scanAll();
 }
 
 /**
@@ -137,6 +150,11 @@ async function executeToolCall(payload) {
   const observation = observations.get(payload.tab_id);
   if (!observation || observation.document_id !== payload.document_id) {
     return sendToolError(payload.call_id, "stale_document", "The requested document is no longer active");
+  }
+  const settings = {...DEFAULTS, ...await chrome.storage.local.get(["scanningPaused"])};
+  if (settings.scanningPaused || !(await canScanTab(await chrome.tabs.get(payload.tab_id).catch(() => undefined), chrome.permissions))) {
+    await closeObservation(payload.tab_id);
+    return sendToolError(payload.call_id, "permission_denied", "Browser access is paused or no longer granted");
   }
   const expectedCatalog = stableStringify(observation.tools);
   try {
@@ -204,15 +222,35 @@ function knownToolError(kind) {
   return kind !== undefined && ["webmcp_unavailable", "stale_catalog", "tool_not_found", "AbortError"].includes(kind);
 }
 
-async function scanAll() {
+function scanAll() {
+  if (fullScanPromise) {
+    fullScanAgain = true;
+    return fullScanPromise;
+  }
+  fullScanPromise = runFullScans().finally(() => { fullScanPromise = undefined; });
+  return fullScanPromise;
+}
+
+async function runFullScans() {
+  do {
+    fullScanAgain = false;
+    await scanAllOnce();
+  } while (fullScanAgain);
+}
+
+async function scanAllOnce() {
   const settings = {...DEFAULTS, ...await chrome.storage.local.get(Object.keys(DEFAULTS))};
-  if (settings.scanningPaused) return;
+  if (settings.scanningPaused) return closeAllObservations();
   const tabs = await chrome.tabs.query({});
   // Not `tabs.map(scanTab)`: map passes the index as the second argument, so
   // every tab after the first would arrive with allowActiveTab truthy and skip
   // the canScanTab check -- incognito, ineligible URLs, and origins the user
   // never granted included.
-  await Promise.allSettled(tabs.map((tab) => scanTab(tab)));
+  let next = 0;
+  const workers = Array.from({length: Math.min(SCAN_CONCURRENCY, tabs.length)}, async () => {
+    while (next < tabs.length) await scanTab(tabs[next++]);
+  });
+  await Promise.allSettled(workers);
 }
 
 /**
@@ -221,12 +259,21 @@ async function scanAll() {
  */
 async function scanTab(tab, allowActiveTab = false) {
   const settings = {...DEFAULTS, ...await chrome.storage.local.get(Object.keys(DEFAULTS))};
-  if (settings.scanningPaused || (!allowActiveTab && !(await canScanTab(tab, chrome.permissions)))) return;
   if (!tab?.id || !tab.url) return;
+  const generation = (scanGenerations.get(tab.id) ?? 0) + 1;
+  scanGenerations.set(tab.id, generation);
+  if (settings.scanningPaused || (!allowActiveTab && !(await canScanTab(tab, chrome.permissions)))) {
+    await closeObservation(tab.id);
+    return;
+  }
   const {ignoredOrigins = []} = /** @type {{ignoredOrigins?: string[]}} */ (await chrome.storage.local.get("ignoredOrigins"));
-  if (ignoredOrigins.includes(new URL(tab.url).origin)) return;
+  if (ignoredOrigins.includes(new URL(tab.url).origin)) {
+    await closeObservation(tab.id);
+    return;
+  }
   try {
     const [result] = await chrome.scripting.executeScript({target: {tabId: tab.id}, world: "MAIN", func: probeWebMcp});
+    if (scanGenerations.get(tab.id) !== generation) return;
     const observation = buildObservation(tab, result);
     if (!observation) {
       if (result?.documentId) await closeObservation(tab.id);
@@ -244,6 +291,7 @@ async function scanTab(tab, allowActiveTab = false) {
  * @param {number | undefined} tabId
  */
 async function closeObservation(tabId) {
+  if (tabId !== undefined) scanGenerations.set(tabId, (scanGenerations.get(tabId) ?? 0) + 1);
   const observation = observations.get(tabId);
   observations.delete(tabId);
   if (!observation?.document_id) return;
@@ -251,6 +299,17 @@ async function closeObservation(tabId) {
     tab_id: tabId,
     document_id: observation.document_id
   }).catch(() => {});
+}
+
+async function closeAllObservations() {
+  await Promise.allSettled([...observations.keys()].map(closeObservation));
+}
+
+async function closeIneligibleObservations() {
+  await Promise.allSettled([...observations.keys()].map(async (tabId) => {
+    const tab = tabId === undefined ? undefined : await chrome.tabs.get(tabId).catch(() => undefined);
+    if (!(await canScanTab(tab, chrome.permissions))) await closeObservation(tabId);
+  }));
 }
 
 async function resync() {
@@ -289,7 +348,11 @@ function encode(buffer) {
  */
 async function persistIgnoredOrigins(envelope) {
   const ignoredOrigins = envelope?.payload?.ignored_origins;
-  if (Array.isArray(ignoredOrigins)) await chrome.storage.local.set({ignoredOrigins});
+  if (!Array.isArray(ignoredOrigins)) return;
+  await chrome.storage.local.set({ignoredOrigins});
+  await Promise.allSettled(
+    ignoredObservationTabIds(observations.values(), ignoredOrigins).map(closeObservation)
+  );
 }
 
 initialize();

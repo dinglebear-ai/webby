@@ -5,8 +5,11 @@ defmodule WebbyWeb.BrowserSocket do
   channel "browser:auth", WebbyWeb.BrowserChannel
 
   @impl true
-  def connect(%{"extension_id" => extension_id} = params, socket, _connect_info) do
-    if valid_extension_id?(extension_id) do
+  def connect(%{"extension_id" => extension_id} = params, socket, connect_info) do
+    origin_extension_id =
+      connect_info[:origin_extension_id] || WebbyWeb.BrowserOrigin.take_extension_id()
+
+    if valid_extension_id?(extension_id) and extension_id == origin_extension_id do
       {:ok, assign(socket, extension_id: extension_id, browser_id: params["browser_id"])}
     else
       :error

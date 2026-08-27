@@ -38,6 +38,8 @@ defmodule Webby.InvocationAudit do
       :outcome,
       :duration_ms
     ])
-    |> validate_inclusion(:outcome, ["started", "succeeded", "failed"])
+    |> validate_inclusion(:outcome, ["started", "succeeded", "failed", "abandoned"])
+    |> validate_number(:catalog_revision, greater_than: 0)
+    |> validate_number(:duration_ms, greater_than_or_equal_to: 0)
   end
 end

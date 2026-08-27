@@ -55,31 +55,28 @@ defmodule Webby.Discovery do
   end
 
   def observe(browser_id, attrs) do
-    with {:ok, page} <- sanitize_page(attrs),
-         {:ok, catalog} <- sanitize_catalog(attrs["tools"]),
-         {:ok, fingerprint} <- fingerprint(catalog) do
-      route_observation(browser_id, attrs, page, catalog, fingerprint)
+    with {:ok, prepared} <- prepare_observation(attrs) do
+      persist_observation(browser_id, prepared)
     end
   end
 
   def observe_many(browser_id, observations)
       when is_list(observations) and length(observations) <= 128 do
-    Repo.transaction(fn ->
-      Enum.map(observations, &observe_or_rollback(browser_id, &1))
-    end)
+    with {:ok, prepared} <- prepare_many(observations) do
+      Repo.transaction(fn -> Enum.map(prepared, &persist_or_rollback(browser_id, &1)) end)
+    end
   end
 
   def observe_many(_browser_id, _observations), do: {:error, :invalid_observations}
 
   def resync(browser_id, observations) when is_list(observations) do
-    Repo.transaction(fn ->
-      with {:ok, observed} <- observe_many(browser_id, observations),
-           {:ok, _closed_count} <- Pages.reconcile(browser_id, observed) do
+    with {:ok, prepared} <- prepare_many(observations) do
+      Repo.transaction(fn ->
+        observed = Enum.map(prepared, &persist_or_rollback(browser_id, &1))
+        {:ok, _closed_count} = Pages.reconcile(browser_id, observed)
         observed
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+      end)
+    end
   end
 
   def resync(_browser_id, _observations), do: {:error, :invalid_observations}
@@ -123,11 +120,44 @@ defmodule Webby.Discovery do
 
   defp sanitize_page(_attrs), do: {:error, :invalid_page_url}
 
-  defp observe_or_rollback(browser_id, attrs) do
-    case observe(browser_id, attrs) do
+  defp prepare_observation(attrs) do
+    with {:ok, page} <- sanitize_page(attrs),
+         {:ok, catalog} <- sanitize_catalog(attrs["tools"]),
+         {:ok, fingerprint} <- fingerprint(catalog) do
+      {:ok, %{attrs: attrs, page: page, catalog: catalog, fingerprint: fingerprint}}
+    end
+  end
+
+  defp prepare_many(observations) when length(observations) <= 128 do
+    Enum.reduce_while(observations, {:ok, []}, fn attrs, {:ok, prepared} ->
+      case prepare_observation(attrs) do
+        {:ok, observation} -> {:cont, {:ok, [observation | prepared]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
+      error -> error
+    end
+  end
+
+  defp prepare_many(_observations), do: {:error, :invalid_observations}
+
+  defp persist_or_rollback(browser_id, prepared) do
+    case persist_observation(browser_id, prepared) do
       {:ok, discovery} -> discovery
       {:error, reason} -> Repo.rollback(reason)
     end
+  end
+
+  defp persist_observation(browser_id, prepared) do
+    route_observation(
+      browser_id,
+      prepared.attrs,
+      prepared.page,
+      prepared.catalog,
+      prepared.fingerprint
+    )
   end
 
   defp route_observation(browser_id, attrs, page, catalog, fingerprint) do

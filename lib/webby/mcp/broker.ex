@@ -18,7 +18,8 @@ defmodule Webby.MCP.Broker do
           "action" => %{"type" => "string", "enum" => @actions},
           "params" => %{"type" => "object"}
         },
-        "required" => ["action"]
+        "required" => ["action"],
+        "oneOf" => Enum.map(@actions, &action_schema/1)
       }
     }
   end
@@ -53,7 +54,10 @@ defmodule Webby.MCP.Broker do
   end
 
   defp dispatch("page.list", _params, _context) do
-    {:ok, Enum.map(Pages.list_registrations(), &registration_view/1)}
+    {:ok,
+     Enum.map(Pages.list_registrations_with_session_counts(), fn {registration, count} ->
+       registration_view(registration, count)
+     end)}
   end
 
   defp dispatch(action, %{"page" => identifier}, _context)
@@ -129,6 +133,10 @@ defmodule Webby.MCP.Broker do
   defp registration_view(registration) do
     sessions = Pages.sessions_for(registration.id)
 
+    registration_view(registration, length(sessions))
+  end
+
+  defp registration_view(registration, active_session_count) do
     %{
       "id" => registration.id,
       "slug" => registration.slug,
@@ -137,8 +145,8 @@ defmodule Webby.MCP.Broker do
       "url_pattern" => registration.url_pattern,
       "enabled" => registration.enabled,
       "exposure_mode" => registration.exposure_mode,
-      "available" => sessions != [],
-      "active_session_count" => length(sessions)
+      "available" => active_session_count > 0,
+      "active_session_count" => active_session_count
     }
   end
 
@@ -183,4 +191,54 @@ defmodule Webby.MCP.Broker do
       do: :ok,
       else: {:error, "tool_not_found", "The tool is absent from the selected catalog"}
   end
+
+  defp action_schema(action) when action in ~w(status browser.list discovery.list page.list) do
+    %{
+      "properties" => %{
+        "action" => %{"const" => action},
+        "params" => empty_params_schema()
+      }
+    }
+  end
+
+  defp action_schema("discovery.get"),
+    do: action_with_params("discovery.get", %{"id" => string_schema()}, ["id"])
+
+  defp action_schema(action) when action in ~w(page.get page.tools),
+    do: action_with_params(action, %{"page" => string_schema()}, ["page"])
+
+  defp action_schema("page.call") do
+    action_with_params(
+      "page.call",
+      %{
+        "page" => string_schema(),
+        "tool" => string_schema(),
+        "catalog_revision" => %{"type" => "integer", "minimum" => 1},
+        "session" => string_schema(),
+        "arguments" => %{"type" => "object"}
+      },
+      ["page", "tool", "catalog_revision"]
+    )
+  end
+
+  defp action_with_params(action, properties, required) do
+    %{
+      "properties" => %{
+        "action" => %{"const" => action},
+        "params" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "properties" => properties,
+          "required" => required
+        }
+      },
+      "required" => ["params"]
+    }
+  end
+
+  defp empty_params_schema do
+    %{"type" => "object", "additionalProperties" => false, "maxProperties" => 0}
+  end
+
+  defp string_schema, do: %{"type" => "string", "minLength" => 1}
 end

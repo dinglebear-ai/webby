@@ -98,6 +98,35 @@ defmodule Webby.PagesTest do
     assert Pages.list_active_sessions() == []
   end
 
+  test "resync cancels calls bound to documents no longer open", context do
+    assert {:ok, discovery} = Discovery.observe(context.browser.id, context.observation)
+    assert {:ok, _registration} = Pages.register_discovery(discovery.id)
+
+    observed =
+      Map.merge(context.observation, %{"tab_id" => 42, "document_id" => "document-one"})
+
+    assert {:ok, session} = Discovery.observe(context.browser.id, observed)
+    assert :ok = Webby.BrowserConnections.register(context.browser.id, self())
+
+    call =
+      Task.async(fn ->
+        Webby.BrowserConnections.call(context.browser.id, %{
+          "tab_id" => session.tab_id,
+          "document_id" => session.document_id,
+          "catalog_revision" => session.catalog_revision
+        })
+      end)
+
+    assert_receive {:tool_call, %{"call_id" => call_id}}
+    assert {:ok, []} = Discovery.resync(context.browser.id, [])
+
+    assert Task.await(call) ==
+             {:error, "stale_document",
+              "The browser document changed before the tool call completed"}
+
+    assert_receive {:tool_cancel, %{"call_id" => ^call_id}}
+  end
+
   test "resync closes sessions that no longer match an enabled registration", context do
     assert {:ok, discovery} = Discovery.observe(context.browser.id, context.observation)
     assert {:ok, registration} = Pages.register_discovery(discovery.id)
@@ -193,5 +222,137 @@ defmodule Webby.PagesTest do
     assert audit.outcome == "succeeded"
     refute Map.has_key?(Map.from_struct(audit), :arguments)
     refute Map.has_key?(Map.from_struct(audit), :result)
+  end
+
+  test "navigation and catalog revision changes cancel calls bound to stale documents", context do
+    assert {:ok, discovery} = Discovery.observe(context.browser.id, context.observation)
+    assert {:ok, _registration} = Pages.register_discovery(discovery.id)
+    assert :ok = Webby.BrowserConnections.register(context.browser.id, self())
+
+    observed = Map.merge(context.observation, %{"tab_id" => 42, "document_id" => "document-one"})
+    assert {:ok, first} = Discovery.observe(context.browser.id, observed)
+
+    revision_call =
+      Task.async(fn ->
+        Webby.BrowserConnections.call(context.browser.id, %{
+          "tab_id" => 42,
+          "document_id" => first.document_id,
+          "catalog_revision" => first.catalog_revision
+        })
+      end)
+
+    assert_receive {:tool_call, %{"call_id" => revision_call_id}}
+    changed = put_in(observed, ["tools", Access.at(0), "description"], "Changed")
+    assert {:ok, %{catalog_revision: 2}} = Discovery.observe(context.browser.id, changed)
+
+    assert Task.await(revision_call) ==
+             {:error, "stale_document",
+              "The browser document changed before the tool call completed"}
+
+    assert_receive {:tool_cancel, %{"call_id" => ^revision_call_id}}
+
+    navigation_call =
+      Task.async(fn ->
+        Webby.BrowserConnections.call(context.browser.id, %{
+          "tab_id" => 42,
+          "document_id" => "document-one",
+          "catalog_revision" => 2
+        })
+      end)
+
+    assert_receive {:tool_call, %{"call_id" => navigation_call_id}}
+
+    assert {:ok, %{document_id: "document-two"}} =
+             Discovery.observe(
+               context.browser.id,
+               Map.put(changed, "document_id", "document-two")
+             )
+
+    assert Task.await(navigation_call) ==
+             {:error, "stale_document",
+              "The browser document changed before the tool call completed"}
+
+    assert_receive {:tool_cancel, %{"call_id" => ^navigation_call_id}}
+  end
+
+  test "closing a document cancels its pending calls", context do
+    assert :ok = Webby.BrowserConnections.register(context.browser.id, self())
+
+    task =
+      Task.async(fn ->
+        Webby.BrowserConnections.call(context.browser.id, %{
+          "tab_id" => 7,
+          "document_id" => "closing",
+          "catalog_revision" => 1
+        })
+      end)
+
+    assert_receive {:tool_call, %{"call_id" => call_id}}
+    assert {:ok, 0} = Pages.close(context.browser.id, 7, "closing")
+
+    assert Task.await(task) ==
+             {:error, "stale_document",
+              "The browser document changed before the tool call completed"}
+
+    assert_receive {:tool_cancel, %{"call_id" => ^call_id}}
+  end
+
+  test "explicit erasure removes one browser's metadata and anonymizes retained audits",
+       context do
+    assert {:ok, discovery} = Discovery.observe(context.browser.id, context.observation)
+    assert {:ok, registration} = Pages.register_discovery(discovery.id)
+
+    observed =
+      Map.merge(context.observation, %{"tab_id" => 42, "document_id" => "document-one"})
+
+    assert {:ok, session} = Discovery.observe(context.browser.id, observed)
+
+    audit =
+      %Webby.InvocationAudit{}
+      |> Webby.InvocationAudit.changeset(%{
+        registration_id: registration.id,
+        session_id: session.id,
+        browser_id: context.browser.id,
+        tool_name: "find",
+        catalog_revision: 1,
+        outcome: "succeeded",
+        duration_ms: 4
+      })
+      |> Repo.insert!()
+
+    assert {:ok, %{audits: :anonymize}} = Webby.DataRetention.erase_browser(context.browser.id)
+    assert Repo.get(Webby.Browsers.Browser, context.browser.id) == nil
+    assert Repo.get(Webby.Pages.DocumentSession, session.id) == nil
+    assert Repo.get!(Webby.InvocationAudit, audit.id).browser_id == nil
+    assert Repo.get!(Webby.InvocationAudit, audit.id).session_id == nil
+    assert Repo.get!(Webby.Pages.PageRegistration, registration.id).preferred_browser_id == nil
+  end
+
+  test "reconciles abandoned invocation audits without rewriting completed rows", context do
+    assert {:ok, discovery} = Discovery.observe(context.browser.id, context.observation)
+    assert {:ok, registration} = Pages.register_discovery(discovery.id)
+
+    observed =
+      Map.merge(context.observation, %{"tab_id" => 42, "document_id" => "document-one"})
+
+    assert {:ok, session} = Discovery.observe(context.browser.id, observed)
+
+    started =
+      %Webby.InvocationAudit{}
+      |> Webby.InvocationAudit.changeset(%{
+        registration_id: registration.id,
+        session_id: session.id,
+        browser_id: context.browser.id,
+        tool_name: "find",
+        catalog_revision: 1,
+        outcome: "started",
+        duration_ms: 0
+      })
+      |> Repo.insert!()
+
+    cutoff = DateTime.add(started.inserted_at, 1, :second)
+    assert {:ok, 1} = Webby.Invocations.reconcile_abandoned(cutoff)
+    assert %{outcome: "abandoned", error_kind: "interrupted"} = Repo.reload!(started)
+    assert {:ok, 0} = Webby.Invocations.reconcile_abandoned(cutoff)
   end
 end

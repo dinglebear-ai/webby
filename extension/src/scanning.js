@@ -95,3 +95,21 @@ export function stableStringify(value) {
     item && typeof item === "object" ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, stable(/** @type {Record<string, unknown>} */ (item)[key])])) : item;
   return JSON.stringify(stable(value));
 }
+
+/**
+ * Return the tab ids whose active observations belong to a newly ignored
+ * origin. Keeping this selection pure makes the consent-reconciliation rule
+ * independently testable from the service worker's Chrome event wiring.
+ *
+ * @param {Iterable<{tab_id: number, url: string}>} observations
+ * @param {unknown} ignoredOrigins
+ * @returns {number[]}
+ */
+export function ignoredObservationTabIds(observations, ignoredOrigins) {
+  if (!Array.isArray(ignoredOrigins)) return [];
+  const ignored = new Set(ignoredOrigins.filter((origin) => typeof origin === "string"));
+  return [...observations].flatMap((observation) => {
+    try { return ignored.has(new URL(observation.url).origin) ? [observation.tab_id] : []; }
+    catch { return []; }
+  });
+}
