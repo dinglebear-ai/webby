@@ -107,8 +107,7 @@ export function selectCombinations(combinations, driver) {
     .filter((row) => !(combinations.exclusions ?? []).some((exclusion) => includesRow(row, exclusion.combination)));
   if (cartesian.length === 0) throw new Error("combination exclusions removed every row");
   if (driver === "protocol" && combinations.cartesian_driver === "protocol") return cartesian;
-  const uncovered = new Set();
-  for (let left = 0; left < entries.length; left++) for (let right = left + 1; right < entries.length; right++) for (const a of entries[left][1]) for (const b of entries[right][1]) uncovered.add(`${entries[left][0]}=${JSON.stringify(a)}|${entries[right][0]}=${JSON.stringify(b)}`);
+  const uncovered = new Set(cartesian.flatMap(pairKeys));
   const selected = [];
   while (uncovered.size > 0) {
     let best;
@@ -124,7 +123,11 @@ export function selectCombinations(combinations, driver) {
   }
   for (const triple of combinations.mandated_triples ?? []) {
     if ((combinations.exclusions ?? []).some((exclusion) => includesRow(triple, exclusion.combination))) throw new Error(`mandated triple is forbidden by an exclusion: ${JSON.stringify(triple)}`);
-    if (!selected.some((row) => includesRow(row, triple))) selected.push(triple);
+    if (!selected.some((row) => includesRow(row, triple))) {
+      const row = cartesian.find((candidate) => includesRow(candidate, triple));
+      if (!row) throw new Error(`mandated triple has no executable combination: ${JSON.stringify(triple)}`);
+      selected.push(row);
+    }
   }
   return selected;
 }

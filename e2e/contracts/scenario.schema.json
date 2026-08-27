@@ -40,6 +40,7 @@
     "outcomes": {"type": "array", "items": {"$ref": "#/$defs/outcome"}, "minItems": 1},
     "artifacts": {"type": "array", "items": {"enum": ["timeline", "server-log", "protocol-transcript", "dashboard-snapshot", "extension-log", "browser-trace", "persistence-diagnostics", "world-manifest"]}, "minItems": 1, "uniqueItems": true},
     "cleanup": {"type": "array", "items": {"$ref": "#/$defs/predicate"}, "minItems": 1},
+    "security_matrices": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/securityMatrix"}},
     "parity": {
       "type": "object", "additionalProperties": false, "minProperties": 1,
       "properties": {
@@ -60,6 +61,17 @@
     }
   },
   "$defs": {
+    "securityMatrix": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "dimensions", "pairwise", "mandated_triples", "exclusions"],
+      "properties": {
+        "id": {"enum": ["http-mcp", "browser-websocket-handshake", "browser-websocket-message", "cross-transport-call"]},
+        "dimensions": {"type": "object", "additionalProperties": {"type": "array", "minItems": 1, "uniqueItems": true}},
+        "pairwise": {"const": true},
+        "mandated_triples": {"type": "array", "items": {"type": "object", "minProperties": 3}},
+        "exclusions": {"type": "array", "items": {"$ref": "#/$defs/exclusion"}}
+      }
+    },
     "outcome": {
       "type": "object", "additionalProperties": false,
       "required": ["key", "predicate"],
