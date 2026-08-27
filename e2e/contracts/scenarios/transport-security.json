@@ -1,0 +1,147 @@
+{
+  "contract_version": 1,
+  "id": "e2e-transport-security",
+  "title": "Transport authentication and malformed input boundaries",
+  "description": "Exercises loopback, Origin, bearer scope, protocol version, payload size, malformed frame, and replay defenses.",
+  "tier": "pr",
+  "weight": 18,
+  "drivers": [
+    "protocol"
+  ],
+  "security": "security-boundary",
+  "handles": {
+    "world": "world",
+    "browser": "browser",
+    "credential": "credential",
+    "call": "call"
+  },
+  "preconditions": [
+    "A new isolated world is healthy",
+    "Valid and revoked identities are available as logical handles"
+  ],
+  "steps": [
+    {
+      "id": "http",
+      "action": {
+        "op": "transport.reject-matrix"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.transport-security.http"
+        },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "websocket",
+      "action": {
+        "op": "websocket.reject-matrix"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "rejected",
+          "subject": "wait.transport-security.websocket"
+        },
+        "timeout_ms": 10000
+      }
+    },
+    {
+      "id": "bounds",
+      "action": {
+        "op": "limits.exercise"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "closed",
+          "subject": "wait.transport-security.bounds"
+        },
+        "timeout_ms": 10000
+      }
+    }
+  ],
+  "outcomes": [
+    {
+      "key": "transport.denied",
+      "predicate": {
+        "kind": "rejected",
+        "subject": "transport.denied"
+      }
+    },
+    {
+      "key": "state.unchanged",
+      "predicate": {
+        "kind": "rejected",
+        "subject": "state.unchanged"
+      }
+    },
+    {
+      "key": "limits.enforced",
+      "predicate": {
+        "kind": "terminal",
+        "subject": "limits.enforced"
+      }
+    }
+  ],
+  "artifacts": [
+    "timeline",
+    "server-log",
+    "protocol-transcript",
+    "persistence-diagnostics",
+    "world-manifest"
+  ],
+  "cleanup": [
+    {
+      "kind": "closed",
+      "subject": "cleanup.attacker.sockets.are.closed"
+    },
+    {
+      "kind": "absent",
+      "subject": "cleanup.pending.call.capacity.is.zero"
+    },
+    {
+      "kind": "removable",
+      "subject": "cleanup.temporary.world.is.removable"
+    }
+  ],
+  "combinations": {
+    "dimensions": {
+      "boundary": [
+        "below",
+        "at",
+        "above"
+      ],
+      "surface": [
+        "observation",
+        "arguments",
+        "result",
+        "json-depth",
+        "frame"
+      ],
+      "connection": [
+        "current",
+        "late"
+      ]
+    },
+    "pairwise": true,
+    "mandated_triples": [
+      {
+        "boundary": "above",
+        "surface": "result",
+        "connection": "late"
+      }
+    ],
+    "cartesian_driver": "protocol",
+    "exclusions": []
+  },
+  "parity": {
+    "protocol": {
+      "required_raw_keys": [
+        "protocol.transport.denied",
+        "protocol.state.unchanged",
+        "protocol.limits.enforced"
+      ],
+      "raw_exclusions": []
+    }
+  }
+}

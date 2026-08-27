@@ -1,0 +1,214 @@
+{
+  "contract_version": 1,
+  "id": "e2e-lifecycle-removal",
+  "title": "Lifecycle removal terminal-state contract",
+  "description": "Applies the six mandatory terminal assertions to every lifecycle transition in the lifecycle matrix.",
+  "tier": "main",
+  "weight": 30,
+  "drivers": [
+    "protocol",
+    "chromium"
+  ],
+  "security": "security-boundary",
+  "handles": {
+    "world": "world",
+    "browser": "browser",
+    "credential": "credential",
+    "page": "page",
+    "session": "session",
+    "document": "document",
+    "call": "call",
+    "audit": "audit"
+  },
+  "preconditions": [
+    "A registered active page has an in-flight delayed tool call",
+    "The selected transition is supported by the driver"
+  ],
+  "steps": [
+    {
+      "id": "trigger",
+      "action": {
+        "op": "lifecycle.trigger"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.lifecycle-removal.trigger"
+        },
+        "timeout_ms": 10000
+      }
+    },
+    {
+      "id": "terminal",
+      "action": {
+        "op": "lifecycle.observe-terminal"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.lifecycle-removal.terminal"
+        },
+        "timeout_ms": 20000
+      }
+    },
+    {
+      "id": "recover",
+      "action": {
+        "op": "lifecycle.recover"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "recovered",
+          "subject": "wait.lifecycle-removal.recover"
+        },
+        "timeout_ms": 30000
+      }
+    }
+  ],
+  "outcomes": [
+    {
+      "key": "caller.terminal",
+      "predicate": {
+        "kind": "terminal",
+        "subject": "caller.terminal"
+      }
+    },
+    {
+      "key": "browser.aborted",
+      "predicate": {
+        "kind": "rejected",
+        "subject": "browser.aborted"
+      }
+    },
+    {
+      "key": "session.invalidated",
+      "predicate": {
+        "kind": "closed",
+        "subject": "session.invalidated"
+      }
+    },
+    {
+      "key": "late-result.rejected",
+      "predicate": {
+        "kind": "terminal",
+        "subject": "late-result.rejected"
+      }
+    },
+    {
+      "key": "capacity.released",
+      "predicate": {
+        "kind": "terminal",
+        "subject": "capacity.released"
+      }
+    },
+    {
+      "key": "audit.once",
+      "predicate": {
+        "kind": "terminal",
+        "subject": "audit.once"
+      }
+    }
+  ],
+  "artifacts": [
+    "timeline",
+    "server-log",
+    "protocol-transcript",
+    "extension-log",
+    "browser-trace",
+    "persistence-diagnostics",
+    "world-manifest"
+  ],
+  "cleanup": [
+    {
+      "kind": "absent",
+      "subject": "cleanup.no.calls.remain.pending"
+    },
+    {
+      "kind": "closed",
+      "subject": "cleanup.no.removed.session.remains.active"
+    },
+    {
+      "kind": "closed",
+      "subject": "cleanup.all.driver.resources.close"
+    },
+    {
+      "kind": "removable",
+      "subject": "cleanup.temporary.world.is.removable"
+    }
+  ],
+  "combinations": {
+    "dimensions": {
+      "transition": [
+        "close",
+        "replacement",
+        "catalog-change",
+        "ignore",
+        "pause",
+        "permission-revoke",
+        "browser-revoke",
+        "credential-revoke",
+        "disconnect",
+        "reconnect",
+        "resync-omission",
+        "server-restart",
+        "service-worker-restart",
+        "chromium-restart",
+        "retention"
+      ],
+      "call_phase": [
+        "before-dispatch",
+        "in-flight",
+        "after-terminal"
+      ],
+      "result": [
+        "normal",
+        "late",
+        "recovery"
+      ]
+    },
+    "pairwise": true,
+    "mandated_triples": [
+      {
+        "transition": "catalog-change",
+        "call_phase": "in-flight",
+        "result": "late"
+      },
+      {
+        "transition": "browser-revoke",
+        "call_phase": "in-flight",
+        "result": "late"
+      },
+      {
+        "transition": "server-restart",
+        "call_phase": "in-flight",
+        "result": "recovery"
+      }
+    ],
+    "cartesian_driver": "protocol",
+    "exclusions": []
+  },
+  "parity": {
+    "protocol": {
+      "required_raw_keys": [
+        "protocol.caller.terminal",
+        "protocol.browser.aborted",
+        "protocol.session.invalidated",
+        "protocol.late-result.rejected",
+        "protocol.capacity.released",
+        "protocol.audit.once"
+      ],
+      "raw_exclusions": []
+    },
+    "chromium": {
+      "required_raw_keys": [
+        "chromium.caller.terminal",
+        "chromium.browser.aborted",
+        "chromium.session.invalidated",
+        "chromium.late-result.rejected",
+        "chromium.capacity.released",
+        "chromium.audit.once"
+      ],
+      "raw_exclusions": []
+    }
+  }
+}

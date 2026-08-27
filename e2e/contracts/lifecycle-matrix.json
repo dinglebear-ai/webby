@@ -1,0 +1,29 @@
+{
+  "contract_version": 1,
+  "scenario": "e2e-lifecycle-removal",
+  "terminal_assertions": [
+    "caller.terminal",
+    "browser.aborted",
+    "session.invalidated",
+    "late-result.rejected",
+    "capacity.released",
+    "audit.once"
+  ],
+  "transitions": [
+    {"id": "close", "trigger": "session.closed for the active document", "drivers": ["protocol", "chromium"], "recovery": "scan-current-document"},
+    {"id": "replacement", "trigger": "same tab observes a new document id", "drivers": ["protocol", "chromium"], "recovery": "attach-new-document"},
+    {"id": "catalog-change", "trigger": "same document publishes a new catalog revision", "drivers": ["protocol", "chromium"], "recovery": "refresh-page-tools"},
+    {"id": "ignore", "trigger": "dashboard ignores the discovered origin", "drivers": ["protocol", "chromium"], "recovery": "none"},
+    {"id": "pause", "trigger": "browser.settings sets scanning_paused true", "drivers": ["protocol", "chromium"], "recovery": "unpause-and-rescan"},
+    {"id": "permission-revoke", "trigger": "Chrome removes fixture host permission", "drivers": ["chromium"], "recovery": "explicit-permission-grant"},
+    {"id": "browser-revoke", "trigger": "dashboard revokes the paired browser", "drivers": ["protocol", "chromium"], "recovery": "new-pairing"},
+    {"id": "credential-revoke", "trigger": "dashboard revokes the active MCP credential", "drivers": ["protocol", "chromium"], "recovery": "new-credential"},
+    {"id": "disconnect", "trigger": "authenticated browser transport closes", "drivers": ["protocol", "chromium"], "recovery": "reconnect-and-authenticate"},
+    {"id": "reconnect", "trigger": "browser reconnects with durable identity", "drivers": ["protocol", "chromium"], "recovery": "hello-and-resync"},
+    {"id": "resync-omission", "trigger": "browser resync omits the active document", "drivers": ["protocol", "chromium"], "recovery": "scan-current-document"},
+    {"id": "server-restart", "trigger": "live Webby process restarts against the same database", "drivers": ["protocol", "chromium"], "recovery": "reconnect-authenticate-resync"},
+    {"id": "service-worker-restart", "trigger": "MV3 service worker is terminated and reacquired", "drivers": ["chromium"], "recovery": "worker-reconnect-resync"},
+    {"id": "chromium-restart", "trigger": "persistent Chromium context restarts against the same profile", "drivers": ["chromium"], "recovery": "extension-reconnect-resync"},
+    {"id": "retention", "trigger": "retention removes eligible closed metadata", "drivers": ["protocol", "chromium"], "recovery": "none"}
+  ]
+}

@@ -1,0 +1,210 @@
+{
+  "contract_version": 1,
+  "id": "e2e-shared-vertical-slice",
+  "title": "Complete browser-to-MCP vertical slice",
+  "description": "Proves the public happy path through a live server, dashboard, browser adapter, SQLite, and MCP transport.",
+  "tier": "pr",
+  "weight": 20,
+  "drivers": [
+    "protocol",
+    "chromium"
+  ],
+  "security": "security-boundary",
+  "handles": {
+    "world": "world",
+    "browser": "browser",
+    "pairing": "pairing",
+    "credential": "credential",
+    "page": "page",
+    "session": "session",
+    "document": "document",
+    "call": "call",
+    "audit": "audit"
+  },
+  "preconditions": [
+    "A new isolated world is healthy",
+    "The adapter has no durable identity"
+  ],
+  "steps": [
+    {
+      "id": "health",
+      "action": {
+        "op": "health.request"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "ready",
+          "subject": "wait.shared-vertical-slice.health"
+        },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "pair",
+      "action": {
+        "op": "browser.pair"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.shared-vertical-slice.pair"
+        },
+        "timeout_ms": 15000
+      }
+    },
+    {
+      "id": "discover",
+      "action": {
+        "op": "discovery.publish"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "present",
+          "subject": "wait.shared-vertical-slice.discover"
+        },
+        "timeout_ms": 15000
+      }
+    },
+    {
+      "id": "credential",
+      "action": {
+        "op": "credential.create"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "present",
+          "subject": "wait.shared-vertical-slice.credential"
+        },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "invoke",
+      "action": {
+        "op": "mcp.invoke"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "present",
+          "subject": "wait.shared-vertical-slice.invoke"
+        },
+        "timeout_ms": 20000
+      }
+    },
+    {
+      "id": "audit",
+      "action": {
+        "op": "audit.observe"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "present",
+          "subject": "wait.shared-vertical-slice.audit"
+        },
+        "timeout_ms": 5000
+      }
+    }
+  ],
+  "outcomes": [
+    {
+      "key": "health.ready",
+      "predicate": {
+        "kind": "ready",
+        "subject": "health.ready"
+      }
+    },
+    {
+      "key": "browser.authenticated",
+      "predicate": {
+        "kind": "recovered",
+        "subject": "browser.authenticated"
+      }
+    },
+    {
+      "key": "page.available",
+      "predicate": {
+        "kind": "present",
+        "subject": "page.available"
+      }
+    },
+    {
+      "key": "call.succeeded",
+      "predicate": {
+        "kind": "terminal",
+        "subject": "call.succeeded"
+      }
+    },
+    {
+      "key": "audit.once",
+      "predicate": {
+        "kind": "present",
+        "subject": "audit.once"
+      }
+    }
+  ],
+  "artifacts": [
+    "timeline",
+    "server-log",
+    "protocol-transcript",
+    "dashboard-snapshot",
+    "world-manifest"
+  ],
+  "cleanup": [
+    {
+      "kind": "closed",
+      "subject": "cleanup.all.child.processes.exit"
+    },
+    {
+      "kind": "closed",
+      "subject": "cleanup.all.listeners.close"
+    },
+    {
+      "kind": "removable",
+      "subject": "cleanup.temporary.database.and.profile.are.removable"
+    },
+    {
+      "kind": "absent",
+      "subject": "cleanup.no.active.sessions.remain.after.shutdown"
+    }
+  ],
+  "combinations": {
+    "dimensions": {
+      "mcp_version": [
+        "2026-07-28",
+        "2025-11-25",
+        "2025-06-18",
+        "2025-03-26"
+      ],
+      "driver": [
+        "protocol",
+        "chromium"
+      ]
+    },
+    "pairwise": true,
+    "mandated_triples": [],
+    "cartesian_driver": "protocol",
+    "exclusions": []
+  },
+  "parity": {
+    "protocol": {
+      "required_raw_keys": [
+        "protocol.health.ready",
+        "protocol.browser.authenticated",
+        "protocol.page.available",
+        "protocol.call.succeeded",
+        "protocol.audit.once"
+      ],
+      "raw_exclusions": []
+    },
+    "chromium": {
+      "required_raw_keys": [
+        "chromium.health.ready",
+        "chromium.browser.authenticated",
+        "chromium.page.available",
+        "chromium.call.succeeded",
+        "chromium.audit.once"
+      ],
+      "raw_exclusions": []
+    }
+  }
+}

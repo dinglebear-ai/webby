@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://webby.local/e2e/world-manifest.schema.json",
+  "title": "Webby live-world IPC manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifest_version", "world_id", "instance_nonce", "pid", "base_url", "database_path", "artifact_directory", "started_at"],
+  "properties": {
+    "manifest_version": {"const": 1},
+    "world_id": {"type": "string", "pattern": "^[a-zA-Z0-9_-]+$"},
+    "instance_nonce": {"type": "string", "minLength": 32},
+    "pid": {"type": "integer", "minimum": 1},
+    "base_url": {"type": "string", "pattern": "^http://127\\.0\\.0\\.1:[0-9]+$"},
+    "fixture_url": {"type": "string", "pattern": "^http://127\\.0\\.0\\.1:[0-9]+$"},
+    "database_path": {"type": "string", "minLength": 1},
+    "browser_profile_path": {"type": "string", "minLength": 1},
+    "artifact_directory": {"type": "string", "minLength": 1},
+    "started_at": {"type": "string", "format": "date-time"},
+    "versions": {"type": "object", "additionalProperties": {"type": "string"}}
+  }
+}

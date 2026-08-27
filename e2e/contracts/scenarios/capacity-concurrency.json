@@ -1,0 +1,171 @@
+{
+  "contract_version": 1,
+  "id": "e2e-capacity-concurrency",
+  "title": "Bounded calls pairing and concurrent identities",
+  "description": "Proves pending-call and pairing limits, duplicate identities, concurrent callers, cancellation races, and capacity recovery.",
+  "tier": "nightly",
+  "weight": 22,
+  "drivers": [
+    "protocol"
+  ],
+  "security": "sensitive",
+  "handles": {
+    "world": "world",
+    "browser": "browser",
+    "credential": "credential",
+    "page": "page",
+    "session": "session",
+    "call": "call",
+    "audit": "audit"
+  },
+  "preconditions": [
+    "An authenticated browser and callable page are available",
+    "Recorded seed controls operation ordering"
+  ],
+  "steps": [
+    {
+      "id": "fill",
+      "action": {
+        "op": "capacity.fill"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.capacity-concurrency.fill"
+        },
+        "timeout_ms": 20000
+      }
+    },
+    {
+      "id": "overflow",
+      "action": {
+        "op": "capacity.overflow"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "rejected",
+          "subject": "wait.capacity-concurrency.overflow"
+        },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "race",
+      "action": {
+        "op": "race.execute"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.capacity-concurrency.race"
+        },
+        "timeout_ms": 30000
+      }
+    },
+    {
+      "id": "reuse",
+      "action": {
+        "op": "capacity.reuse"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "released",
+          "subject": "wait.capacity-concurrency.reuse"
+        },
+        "timeout_ms": 5000
+      }
+    }
+  ],
+  "outcomes": [
+    {
+      "key": "overflow.bounded",
+      "predicate": {
+        "kind": "absent",
+        "subject": "overflow.bounded"
+      }
+    },
+    {
+      "key": "caller.once",
+      "predicate": {
+        "kind": "terminal",
+        "subject": "caller.once"
+      }
+    },
+    {
+      "key": "capacity.released",
+      "predicate": {
+        "kind": "released",
+        "subject": "capacity.released"
+      }
+    },
+    {
+      "key": "audit.once",
+      "predicate": {
+        "kind": "terminal",
+        "subject": "audit.once"
+      }
+    }
+  ],
+  "artifacts": [
+    "timeline",
+    "server-log",
+    "protocol-transcript",
+    "persistence-diagnostics",
+    "world-manifest"
+  ],
+  "cleanup": [
+    {
+      "kind": "terminal",
+      "subject": "cleanup.pending.calls.and.pairings.return.to.baseline"
+    },
+    {
+      "kind": "terminal",
+      "subject": "cleanup.all.race.tasks.terminate"
+    },
+    {
+      "kind": "removable",
+      "subject": "cleanup.temporary.world.is.removable"
+    }
+  ],
+  "combinations": {
+    "dimensions": {
+      "terminal_event": [
+        "result",
+        "error",
+        "cancel",
+        "disconnect",
+        "caller-death"
+      ],
+      "order": [
+        "first",
+        "simultaneous",
+        "last"
+      ],
+      "late_result": [
+        true,
+        false
+      ]
+    },
+    "pairwise": true,
+    "mandated_triples": [
+      {
+        "terminal_event": "cancel",
+        "order": "simultaneous",
+        "late_result": true
+      }
+    ],
+    "cartesian_driver": "protocol",
+    "exclusions": []
+  },
+  "parity": {
+    "protocol": {
+      "required_raw_keys": [
+        "protocol.overflow.bounded",
+        "protocol.caller.once",
+        "protocol.capacity.released",
+        "protocol.audit.once"
+      ],
+      "raw_exclusions": []
+    }
+  }
+}
