@@ -9,10 +9,13 @@ import {ArtifactRecorder} from "../support/artifacts.js"
 const root = resolve(import.meta.dirname, "../..")
 const requiredE2EPaths = ["lib/**", "test/**", "config/**", "priv/**", "assets/**", "e2e/**", "extension/**", "scripts/e2e*", "mix.exs", "mix.lock", ".mise.toml", ".github/workflows/e2e.yml", ".github/workflows/e2e-stress.yml"]
 const requiredStressEntries = ["schedule:", "workflow_dispatch:", "npm --prefix e2e run typecheck:stress", "npm --prefix e2e run test:stress", "npm --prefix e2e run test:stress:live", "./scripts/e2e-repeat", "if: always()", "npm --prefix e2e run cleanup"]
+const contractsJobBeamSetup = "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
 
 function assertTriggerAndStressContracts(primary, stress) {
   for (const path of requiredE2EPaths) assert.ok(primary.includes(`\"${path}\"`), `missing E2E trigger path ${path}`)
   for (const entry of requiredStressEntries) assert.ok(stress.includes(entry), `missing stress workflow entry ${entry}`)
+  const contractsJob = primary.slice(primary.indexOf("  contracts:"), primary.indexOf("  protocol-pr:"))
+  assert.ok(contractsJob.includes(contractsJobBeamSetup), "contracts job must install pinned Elixir for AST extraction")
 }
 
 test("weighted manifests prove complete disjoint scenario assignment", async t => {
@@ -44,6 +47,7 @@ test("every E2E trigger path and deterministic, seam, live, and cleanup command 
   const stress = await readFile(join(root, ".github/workflows/e2e-stress.yml"), "utf8")
   for (const path of requiredE2EPaths) assert.throws(() => assertTriggerAndStressContracts(primary.replace(`\"${path}\"`, "\"removed/**\""), stress), /missing E2E trigger path/)
   for (const entry of requiredStressEntries) assert.throws(() => assertTriggerAndStressContracts(primary, stress.replaceAll(entry, "removed-entry")), /missing stress workflow entry/)
+  assert.throws(() => assertTriggerAndStressContracts(primary.replace(contractsJobBeamSetup, "removed/setup-beam@0000000000000000000000000000000000000000"), stress), /contracts job must install pinned Elixir/)
 })
 
 test("failure staging copies only candidates verified by the sanitizer attestation", async t => {
