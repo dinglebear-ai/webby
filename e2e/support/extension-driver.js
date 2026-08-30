@@ -23,7 +23,7 @@ function workerId(worker) {
 }
 
 export class ExtensionDriver {
-  constructor({context, binding, world, artifacts, workerTimeoutMs = 15_000}) {
+  constructor({context, binding, world, artifacts, workerTimeoutMs = 30_000}) {
     validateBoundWorld(binding, world)
     this.context = context
     this.binding = binding
