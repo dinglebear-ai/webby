@@ -61,9 +61,9 @@ test("runtime contract validation rejects duplicate semantics and non-scalar sec
   assert.throws(() => assertScenarioContract(invalidTriple), /undeclared dimension/);
 });
 
-test("every registered extractor has a positive golden and unmapped mutation guard", (context) => {
+test("every registered extractor has a positive golden and unmapped mutation guard", async (context) => {
   for (const registry of inventory.extractor_registry) {
-    context.test(registry.category, () => {
+    await context.test(registry.category, () => {
       const expected = inventory.snapshots[registry.category];
       const sourcePath = path.join(repoRoot, registry.source);
       const stat = fs.statSync(sourcePath);
