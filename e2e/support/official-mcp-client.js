@@ -75,7 +75,7 @@ export class OfficialMCPClient {
     try {
       await Promise.race([shutdown, new Promise((_, reject) => {
         timer = setTimeout(() => reject(Object.assign(new Error("official MCP shutdown deadline exceeded"), {code: "official_mcp_shutdown_timeout"})), this.deadlines.shutdown)
-        timer.unref?.(); this.timers.add(timer)
+        this.timers.add(timer)
       })])
     } catch (error) {
       await this.transport.close?.()
