@@ -16,6 +16,10 @@ import {WebbyWorld} from "../../support/world.js"
 
 const execFileAsync = promisify(execFile)
 const contractPath = new URL("../../contracts/scenarios/shared-vertical-slice.json", import.meta.url)
+const scenarioTemplate = JSON.parse(await readFile(contractPath, "utf8"))
+function syntheticScenario(id, {steps, outcomes = [{key: "test.outcome", predicate: {kind: "present", subject: "test.outcome"}}], cleanup = [{kind: "closed", subject: "cleanup.done"}], artifacts = ["timeline", "world-manifest"]} = {}) {
+  return {...structuredClone(scenarioTemplate), id, title: `Synthetic runner contract for ${id}`, description: `Runtime-valid synthetic contract used to exercise ${id}.`, drivers: ["protocol"], handles: {}, steps, outcomes, cleanup, artifacts, parity: {protocol: {required_raw_keys: outcomes.map(outcome => outcome.key), raw_exclusions: []}}}
+}
 async function sqlite(database, sql) { return JSON.parse((await execFileAsync("sqlite3", ["-json", database, sql])).stdout || "[]") }
 
 test("matrix expansion is shared, tagged, and maps every deferred simulated row", async () => {
@@ -37,7 +41,7 @@ test("handles reject cross-world and cross-contract reuse", () => {
 })
 
 test("runner rejects ineligible drivers and incomplete artifact contracts", () => {
-  const scenario = {id: "e2e-test", drivers: ["protocol"], artifacts: ["timeline", "world-manifest"], steps: [], outcomes: [], cleanup: []}
+  const scenario = syntheticScenario("e2e-test", {steps: [{id: "probe", action: {op: "health.request"}, wait: {predicate: {kind: "present", subject: "test.outcome"}, timeout_ms: 100}}]})
   const world = {worldId: "world", instanceNonce: "nonce"}; const recorder = {journal: {sequence: 0}, producers: {world: {}}}; const options = {scenario, world, recorder, actions: {}, observe: async () => ({}), cleanup: async () => ({})}
   assert.throws(() => new ScenarioRunner({...options, driver: "chromium"}), error => error.code === "ineligible_driver")
   assert.throws(() => new ScenarioRunner({...options, driver: "protocol", scenario: {...scenario, artifacts: ["timeline"]}}), error => error.code === "missing_artifact_requirement")
@@ -50,24 +54,24 @@ async function syntheticRecorder(t, scenarioId) {
 
 test("runner fails closed for a dropped observation and still cleans up", async t => {
   const recorder = await syntheticRecorder(t, "e2e-missing-observation"); let cleaned = false
-  const scenario = {id: "e2e-missing-observation", drivers: ["protocol"], artifacts: ["timeline", "world-manifest"], handles: {}, steps: [{id: "one", action: {op: "probe"}, wait: {predicate: {kind: "present", subject: "probe.actual"}, timeout_ms: 100}}], outcomes: [], cleanup: [{kind: "closed", subject: "cleanup.done"}]}
-  const runner = new ScenarioRunner({scenario, driver: "protocol", world: {worldId: "world-unit", instanceNonce: "nonce", seed: 1}, recorder, actions: {probe: async () => ({})}, observe: async () => ({}), cleanup: async () => { cleaned = true; return {"cleanup.done": {state: "closed"}} }})
+  const scenario = syntheticScenario("e2e-missing-observation", {steps: [{id: "one", action: {op: "health.request"}, wait: {predicate: {kind: "present", subject: "probe.actual"}, timeout_ms: 100}}]})
+  const runner = new ScenarioRunner({scenario, driver: "protocol", world: {worldId: "world-unit", instanceNonce: "nonce", seed: 1}, recorder, actions: {"health.request": async () => ({})}, observe: async () => ({}), cleanup: async () => { cleaned = true; return {"cleanup.done": {state: "closed"}} }})
   await assert.rejects(runner.run(), error => error.code === "missing_observation"); assert.equal(cleaned, true); await recorder.finalize()
 })
 
 test("runner enforces declared action order rather than parallelizing dependent steps", async t => {
   const recorder = await syntheticRecorder(t, "e2e-action-order"); const order = []
-  const step = id => ({id, action: {op: id}, wait: {predicate: {kind: "present", subject: `${id}.done`}, timeout_ms: 100}})
-  const scenario = {id: "e2e-action-order", drivers: ["protocol"], artifacts: ["timeline", "world-manifest"], handles: {}, steps: [step("first"), step("second")], outcomes: [], cleanup: [{kind: "closed", subject: "cleanup.done"}]}
-  const actions = {first: async () => { order.push("first:start"); await Promise.resolve(); order.push("first:end"); return {observations: {"first.done": true}} }, second: async () => { order.push("second"); return {observations: {"second.done": true}} }}
+  const step = id => ({id, action: {op: "health.request", params: {id}}, wait: {predicate: {kind: "present", subject: `${id}.done`}, timeout_ms: 100}})
+  const scenario = syntheticScenario("e2e-action-order", {steps: [step("first"), step("second")], outcomes: [{key: "test.outcome", predicate: {kind: "present", subject: "second.done"}}]})
+  const actions = {"health.request": async ({params}) => { if (params.id === "first") { order.push("first:start"); await Promise.resolve(); order.push("first:end") } else order.push("second"); return {observations: {[`${params.id}.done`]: true}} }}
   await new ScenarioRunner({scenario, driver: "protocol", world: {worldId: "world-unit", instanceNonce: "nonce", seed: 1}, recorder, actions, observe: async () => ({}), cleanup: async () => ({"cleanup.done": {state: "closed"}})}).run()
   assert.deepEqual(order, ["first:start", "first:end", "second"]); await recorder.finalize()
 })
 
 test("runner aborts and drains a timed-out action before cleanup", async t => {
   const recorder = await syntheticRecorder(t, "e2e-action-timeout"); const order = []
-  const scenario = {id: "e2e-action-timeout", drivers: ["protocol"], artifacts: ["timeline", "world-manifest"], handles: {}, steps: [{id: "slow", action: {op: "slow"}, wait: {predicate: {kind: "present", subject: "slow.done"}, timeout_ms: 10}}], outcomes: [], cleanup: [{kind: "closed", subject: "cleanup.done"}]}
-  const actions = {slow: ({signal}) => new Promise(resolve => signal.addEventListener("abort", () => { order.push("action:drained"); resolve({}) }, {once: true}))}
+  const scenario = syntheticScenario("e2e-action-timeout", {steps: [{id: "slow", action: {op: "health.request"}, wait: {predicate: {kind: "present", subject: "slow.done"}, timeout_ms: 10}}]})
+  const actions = {"health.request": ({signal}) => new Promise(resolve => signal.addEventListener("abort", () => { order.push("action:drained"); resolve({}) }, {once: true}))}
   const runner = new ScenarioRunner({scenario, driver: "protocol", world: {worldId: "world-unit", instanceNonce: "nonce", seed: 1}, recorder, actions, observe: async () => ({}), cleanup: async () => { order.push("cleanup"); return {"cleanup.done": {state: "closed"}} }, defaultTimeoutMs: 100})
   await assert.rejects(runner.run(), error => error.code === "scenario_timeout")
   assert.deepEqual(order, ["action:drained", "cleanup"]); await recorder.finalize()
@@ -75,10 +79,19 @@ test("runner aborts and drains a timed-out action before cleanup", async t => {
 
 test("runner preserves primary and cleanup failures", async t => {
   const recorder = await syntheticRecorder(t, "e2e-dual-failure")
-  const scenario = {id: "e2e-dual-failure", drivers: ["protocol"], artifacts: ["timeline", "world-manifest"], handles: {}, steps: [{id: "fail", action: {op: "fail"}, wait: {predicate: {kind: "present", subject: "fail.done"}, timeout_ms: 100}}], outcomes: [], cleanup: []}
-  const runner = new ScenarioRunner({scenario, driver: "protocol", world: {worldId: "world-unit", instanceNonce: "nonce", seed: 1}, recorder, actions: {fail: async () => { throw new Error("primary") }}, observe: async () => ({}), cleanup: async () => { throw new Error("cleanup") }})
+  const scenario = syntheticScenario("e2e-dual-failure", {steps: [{id: "fail", action: {op: "health.request"}, wait: {predicate: {kind: "present", subject: "fail.done"}, timeout_ms: 100}}]})
+  const runner = new ScenarioRunner({scenario, driver: "protocol", world: {worldId: "world-unit", instanceNonce: "nonce", seed: 1}, recorder, actions: {"health.request": async () => { throw new Error("primary") }}, observe: async () => ({}), cleanup: async () => { throw new Error("cleanup") }})
   await assert.rejects(runner.run(), error => error instanceof AggregateError && error.errors.map(item => item.message).join(",") === "primary,cleanup")
   await recorder.finalize()
+})
+
+test("runner preserves a primary failure plus journal and cleanup failures", async t => {
+  const recorder = await syntheticRecorder(t, "e2e-three-failures")
+  recorder.producers.world.failure = async () => { throw new Error("journal") }
+  const scenario = syntheticScenario("e2e-three-failures", {steps: [{id: "fail", action: {op: "health.request"}, wait: {predicate: {kind: "present", subject: "fail.done"}, timeout_ms: 100}}]})
+  const runner = new ScenarioRunner({scenario, driver: "protocol", world: {worldId: "world-unit", instanceNonce: "nonce", seed: 1}, recorder, actions: {"health.request": async () => { throw new Error("primary") }}, observe: async () => ({}), cleanup: async () => { throw new Error("cleanup") }})
+  await assert.rejects(runner.run(), error => error instanceof AggregateError && error.errors[0] instanceof AggregateError && error.errors[0].errors.map(item => item.message).join(",") === "primary,journal" && error.errors[1].message === "cleanup")
+  await recorder.journal.close()
 })
 
 test("synthetic lifecycle vocabulary covers every locked terminal state", () => {

@@ -78,7 +78,8 @@ defmodule Webby.BrowserConnectionsTest do
     browser_id = Ecto.UUID.generate()
     credential_id = Ecto.UUID.generate()
     assert :ok = BrowserConnections.register(browser_id, self())
-    assert {:ok, nil} = BrowserConnections.begin_credential_revocation(credential_id)
+    assert {:ok, barrier_token} = BrowserConnections.begin_credential_revocation(credential_id)
+    assert is_reference(barrier_token)
 
     assert {:error, "revoked", _message} =
              BrowserConnections.call(

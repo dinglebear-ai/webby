@@ -122,15 +122,9 @@ defmodule Webby.Browsers do
 
   def issue_challenge(browser_id, extension_id) do
     with :ok <- Webby.BrowserConnections.browser_admissible?(browser_id) do
-      case Repo.get(Browser, browser_id) do
-        %Browser{revoked_at: nil, extension_id: ^extension_id} = browser ->
-          instance_id = instance_id()
-
-          Repo.transaction(fn -> issue_or_reuse_challenge(browser.id, instance_id) end)
-
-        _browser ->
-          {:error, :browser_unavailable}
-      end
+      Browser
+      |> Repo.get(browser_id)
+      |> issue_challenge_for_browser(extension_id)
     end
   end
 
@@ -140,35 +134,54 @@ defmodule Webby.Browsers do
 
     with :ok <- Webby.BrowserConnections.browser_admissible?(browser_id) do
       Repo.transaction(fn ->
-        challenge =
-          Repo.one(
-            from c in AuthChallenge,
-              join: b in assoc(c, :browser),
-              where:
-                c.id == ^challenge_id and c.browser_id == ^browser_id and is_nil(c.used_at) and
-                  c.expires_at > ^now and is_nil(b.revoked_at),
-              preload: [browser: b]
-          )
-
-        with %AuthChallenge{instance_id: ^instance_id} <- challenge,
-             {:ok, signature} <- Base.url_decode64(encoded_signature, padding: false),
-             true <- verify_signature(challenge, signature),
-             {1, _rows} <-
-               Repo.delete_all(
-                 from c in AuthChallenge, where: c.id == ^challenge.id and is_nil(c.used_at)
-               ) do
-          challenge.browser |> Browser.changeset(%{last_seen_at: now}) |> Repo.update!()
-        else
-          %AuthChallenge{} = stale_challenge ->
-            Repo.delete!(stale_challenge)
-            {:error, :authentication_failed}
-
-          _ ->
-            Repo.rollback(:authentication_failed)
-        end
+        authenticate_challenge(browser_id, challenge_id, encoded_signature, now, instance_id)
       end)
       |> normalize_authentication()
     end
+  end
+
+  defp issue_challenge_for_browser(
+         %Browser{revoked_at: nil, extension_id: extension_id} = browser,
+         extension_id
+       ) do
+    Repo.transaction(fn -> issue_or_reuse_challenge(browser.id, instance_id()) end)
+  end
+
+  defp issue_challenge_for_browser(_browser, _extension_id),
+    do: {:error, :browser_unavailable}
+
+  defp authenticate_challenge(browser_id, challenge_id, signature, now, instance_id) do
+    challenge = find_active_challenge(browser_id, challenge_id, now)
+
+    with %AuthChallenge{instance_id: ^instance_id} <- challenge,
+         {:ok, decoded} <- Base.url_decode64(signature, padding: false),
+         true <- verify_signature(challenge, decoded),
+         {1, _rows} <- consume_challenge(challenge.id) do
+      challenge.browser |> Browser.changeset(%{last_seen_at: now}) |> Repo.update!()
+    else
+      %AuthChallenge{} = stale_challenge -> reject_stale_challenge(stale_challenge)
+      _invalid -> Repo.rollback(:authentication_failed)
+    end
+  end
+
+  defp find_active_challenge(browser_id, challenge_id, now) do
+    Repo.one(
+      from c in AuthChallenge,
+        join: b in assoc(c, :browser),
+        where:
+          c.id == ^challenge_id and c.browser_id == ^browser_id and is_nil(c.used_at) and
+            c.expires_at > ^now and is_nil(b.revoked_at),
+        preload: [browser: b]
+    )
+  end
+
+  defp consume_challenge(challenge_id) do
+    Repo.delete_all(from c in AuthChallenge, where: c.id == ^challenge_id and is_nil(c.used_at))
+  end
+
+  defp reject_stale_challenge(challenge) do
+    Repo.delete!(challenge)
+    {:error, :authentication_failed}
   end
 
   defp normalize_authentication({:ok, {:error, :authentication_failed}}),

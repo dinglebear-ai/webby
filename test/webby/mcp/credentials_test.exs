@@ -148,4 +148,65 @@ defmodule Webby.MCP.CredentialsTest do
     assert Process.alive?(Process.whereis(Webby.BrowserConnections))
     assert :ok = Webby.BrowserConnections.register(first_browser, self())
   end
+
+  test "a committed revocation cannot be undone by a concurrent revoker aborting" do
+    browser_id = Ecto.UUID.generate()
+    credential_id = Ecto.UUID.generate()
+    parent = self()
+    assert :ok = Webby.BrowserConnections.register(browser_id, self())
+
+    first =
+      Task.async(fn ->
+        Credentials.revoke(credential_id,
+          persist: fn ^credential_id ->
+            send(parent, {:revoker_ready, :committing})
+            assert_receive :commit, 5_000
+            {:ok, %{id: credential_id}}
+          end
+        )
+      end)
+
+    assert_receive {:revoker_ready, :committing}
+
+    second =
+      Task.async(fn ->
+        Credentials.revoke(credential_id,
+          persist: fn ^credential_id ->
+            send(parent, {:revoker_ready, :aborting})
+            assert_receive :abort, 5_000
+            {:error, :already_revoked}
+          end
+        )
+      end)
+
+    assert_receive {:revoker_ready, :aborting}
+
+    assert {:error, "revoked", _message} =
+             Webby.BrowserConnections.call(
+               browser_id,
+               %{"tool_name" => "blocked-during-revocation"},
+               100,
+               {credential_id, "paused-call"},
+               nil,
+               credential_id
+             )
+
+    refute_receive {:tool_call, %{"tool_name" => "blocked-during-revocation"}}
+    send(first.pid, :commit)
+    assert {:ok, %{id: ^credential_id}} = Task.await(first)
+    send(second.pid, :abort)
+    assert {:error, :already_revoked} = Task.await(second)
+
+    assert {:error, "revoked", _message} =
+             Webby.BrowserConnections.call(
+               browser_id,
+               %{"tool_name" => "blocked-after-abort"},
+               100,
+               {credential_id, "late-call"},
+               nil,
+               credential_id
+             )
+
+    refute_receive {:tool_call, %{"tool_name" => "blocked-after-abort"}}
+  end
 end

@@ -37,8 +37,8 @@ defmodule Webby.BrowserConnections do
   def begin_credential_revocation(credential_id),
     do: GenServer.call(__MODULE__, {:begin_credential_revocation, credential_id})
 
-  def finish_credential_revocation(credential_id, outcome),
-    do: GenServer.call(__MODULE__, {:finish_credential_revocation, credential_id, outcome})
+  def finish_credential_revocation(credential_id, token, outcome),
+    do: GenServer.call(__MODULE__, {:finish_credential_revocation, credential_id, token, outcome})
 
   def begin_browser_erasure(browser_id),
     do: GenServer.call(__MODULE__, {:begin_browser_erasure, browser_id})
@@ -145,32 +145,35 @@ defmodule Webby.BrowserConnections do
   end
 
   def handle_call({:begin_credential_revocation, credential_id}, _from, state) do
-    previous = Map.get(state.credential_barriers, credential_id)
-    barriers = Map.put_new(state.credential_barriers, credential_id, :revoking)
-    {:reply, {:ok, previous}, %{state | credential_barriers: barriers}}
+    token = make_ref()
+
+    barrier =
+      Map.get(state.credential_barriers, credential_id, %{status: :revoking, owners: MapSet.new()})
+
+    barrier = %{barrier | owners: MapSet.put(barrier.owners, token)}
+    barriers = Map.put(state.credential_barriers, credential_id, barrier)
+    {:reply, {:ok, token}, %{state | credential_barriers: barriers}}
   end
 
-  def handle_call({:finish_credential_revocation, credential_id, :committed}, _from, state) do
+  def handle_call({:finish_credential_revocation, credential_id, token, :committed}, _from, state) do
     ids = matching_calls(state, &match?({^credential_id, _request_id}, &1.external_key))
-
-    state = %{
-      state
-      | credential_barriers: Map.put(state.credential_barriers, credential_id, :revoked)
-    }
+    barrier = barrier_without_owner(state, credential_id, token, :revoked)
+    state = put_in(state, [:credential_barriers, credential_id], barrier)
 
     {:reply, :ok, finish_calls(state, ids, :credential_revoked)}
   end
 
   def handle_call(
-        {:finish_credential_revocation, credential_id, {:aborted, previous}},
+        {:finish_credential_revocation, credential_id, token, :aborted},
         _from,
         state
       ) do
+    barrier = barrier_without_owner(state, credential_id, token, :revoking)
+
     barriers =
-      case previous do
-        nil -> Map.delete(state.credential_barriers, credential_id)
-        prior_state -> Map.put(state.credential_barriers, credential_id, prior_state)
-      end
+      if barrier.status == :revoking and MapSet.size(barrier.owners) == 0,
+        do: Map.delete(state.credential_barriers, credential_id),
+        else: Map.put(state.credential_barriers, credential_id, barrier)
 
     {:reply, :ok, %{state | credential_barriers: barriers}}
   end
@@ -256,16 +259,8 @@ defmodule Webby.BrowserConnections do
         {:noreply, drop_connection(state, browser_id, "browser_offline")}
 
       nil ->
-        ids = matching_calls(state, &(&1.caller_monitor == monitor))
-
-        Enum.each(ids, fn id ->
-          if audit_id = state.calls[id].audit_id do
-            Task.Supervisor.start_child(Webby.ProbeSupervisor, fn ->
-              Webby.Invocations.complete_audit(audit_id, "failed", "caller_down", 0)
-            end)
-          end
-        end)
-
+        ids = calls_for_monitor(state, monitor)
+        complete_caller_down_audits(state, ids)
         {:noreply, finish_calls(state, ids, :caller_down)}
     end
   end
@@ -364,6 +359,27 @@ defmodule Webby.BrowserConnections do
 
   defp matching_calls(state, predicate),
     do: for({id, call} <- state.calls, predicate.(call), do: id)
+
+  defp barrier_without_owner(state, credential_id, token, requested_status) do
+    barrier = Map.fetch!(state.credential_barriers, credential_id)
+    status = if barrier.status == :revoked, do: :revoked, else: requested_status
+    %{barrier | status: status, owners: MapSet.delete(barrier.owners, token)}
+  end
+
+  defp calls_for_monitor(state, monitor),
+    do: matching_calls(state, &(&1.caller_monitor == monitor))
+
+  defp complete_caller_down_audits(state, ids) do
+    Enum.each(ids, fn id -> complete_caller_down_audit(state.calls[id].audit_id) end)
+  end
+
+  defp complete_caller_down_audit(nil), do: :ok
+
+  defp complete_caller_down_audit(audit_id) do
+    Task.Supervisor.start_child(Webby.ProbeSupervisor, fn ->
+      Webby.Invocations.complete_audit(audit_id, "failed", "caller_down", 0)
+    end)
+  end
 
   defp drop_connection(state, browser_id, kind) do
     case Map.pop(state.connections, browser_id) do

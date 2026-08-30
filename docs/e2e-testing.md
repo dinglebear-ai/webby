@@ -38,7 +38,7 @@ forwarders.
 | Official MCP client compatibility | `./scripts/e2e mcp:compat` | 30 min |
 | Inspect a sanitized replay | `./scripts/e2e replay PATH` | 1 min |
 | Reap manifests and audit leaks | `./scripts/e2e cleanup` | 5 min |
-| Bounded stress qualification | `./scripts/e2e-repeat --seed=local-1 --repetitions=2 --concurrency=2` | 105 min |
+| Bounded stress qualification | `./scripts/e2e-repeat --seed=local-1 --repetitions=2 --concurrency=2` | configuration dependent; CI cancels at 105 min |
 | Exact stress replay | `./scripts/e2e-repeat --replay=PATH/replay-manifest.json` | scenario dependent |
 
 PR lanes have one test worker and zero retries. A retry is never used to turn a
@@ -53,9 +53,9 @@ retry must report the first pass as a flake rather than silently passing.
   credential, and receives no repository secrets from forks.
 - Main and manual `main` runs execute the complete protocol and Chromium suites.
 - Main and dependency-bearing pull requests run the pinned official MCP client.
-- Nightly/manual stress qualification is initially nonblocking. Exhaustive
-  functional and parity lanes remain blocking. Promote a stress lane only after
-  its measured flake and runtime budgets are established by the stress epic.
+- Nightly/manual stress qualification is nonblocking. Exhaustive functional and
+  parity lanes remain blocking. Promote a stress lane only after measured flake
+  and runtime budgets are established from retained CI samples.
 
 Every job has an explicit timeout and concurrency policy. Cancellation is
 followed by an `always()` external reaper and leak audit. Toolchain paths,
@@ -71,8 +71,9 @@ not depend on operating system or job order.
 ## Failure evidence and secrets
 
 The command runner keeps at most 8 MiB of test output, passes it through the
-central sanitizer, and creates a signed-by-digest upload attestation. CI uploads
-only `e2e/artifacts/upload`, only on failure, and only when
+central sanitizer, and creates a digest-bound upload attestation. Functional CI
+uploads only `e2e/artifacts/upload`; stress CI uses
+`e2e/artifacts/stress/upload`. Both upload only on failure and only when an
 `upload-attestation.json` exists. A sanitizer failure, missing attestation, or
 post-attestation change produces no upload. There is no raw-artifact fallback.
 
@@ -110,10 +111,15 @@ second behavior matrix. Each worker receives its own `TMPDIR`, database, browser
 profile, and dynamically bound ports. The scheduled lane includes lifecycle and
 removal ordering, the 100-call limit, 10/100/1000-tab scan ceilings, concurrent
 resync/auth/audit/retention behavior, Webby restarts, Chromium context and MV3
-worker reconnect loops, and artifact redaction. Deterministic fault qualification
-covers SIGTERM, SIGINT, controller death, hung browser close, disk pressure and
-recorder overflow by executing each fault through owned process, timeout, and
-recorder quota seams. External cleanup must leave zero processes, listeners,
+worker reconnect loops, and artifact redaction. The blocking `test:stress` lane
+qualifies deterministic process-tree, timeout, disk-pressure, recorder-overflow,
+and redaction seams; those fast seam tests do not claim live-service termination
+or real-browser cleanup. The scheduled `test:stress:live` lane separately sends
+SIGTERM and SIGINT to nonce-verified process groups running real isolated Webby
+worlds, preserves termination evidence, and proves external reaping leaves no
+residue. It also launches a real persistent Chromium context, injects a hanging
+`context.close`, forces bounded shutdown through the Chromium DevTools protocol,
+and proves the browser processes and isolated profile are removed. External cleanup must leave zero processes, listeners,
 profiles, databases, open handles, pending calls, or active stale sessions.
 The external reaper accepts only a canonical private temporary root carrying a
 run nonce marker and removes individually attested world directories; broad,
@@ -127,12 +133,13 @@ seed and scenario order verbatim and rejects seed/scenario/concurrency overrides
 Only sanitized, hash-attested upload bundles are eligible for CI retention;
 cleanup and evidence-integrity failures remain blocking.
 
-The initial local harness qualification (six synthetic orchestrator repetitions,
-three concurrent isolated workers) measured 0/6 initial failures, 0 retry-passes,
-and sub-10 ms p50/p95 orchestration overhead. These figures qualify the harness,
-not live-service performance. The nightly report publishes live flake rate,
-p50/p95/max duration, first failing seed, 100 pending-call and 10/100/1000 scan
-ceilings, and worker concurrency. Promotion policy is:
+Each stress report publishes the observed flake rate, p50/p95/max duration,
+first failing seed, exercised pending-call and scan ceilings, and worker
+concurrency. Pending-call and scan ceilings come from structured measurement
+records emitted by the live capacity/concurrency scenarios and are compared
+byte-for-byte with the finalized sanitized logs; registry declarations cannot
+award ceiling credit. These values describe that recorded run; they are not
+permanent performance baselines. Promotion policy is:
 
 - Deterministic stress contract and leak-detector tests: blocking now.
 - Single-seed live replay: blocking candidate only after 30 consecutive clean

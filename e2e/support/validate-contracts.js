@@ -4,6 +4,7 @@ import {fileURLToPath} from "node:url";
 import {spawnSync} from "node:child_process";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
+import {assertScenarioContract} from "./runtime-contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const e2eRoot = path.resolve(here, "..");
@@ -171,7 +172,8 @@ function independent(category, symbols) {
     {:ok, ast} = Code.string_to_quoted(File.read!("lib/webby_web/router.ex"))
     ast |> E2ERoutes.walk("") |> Enum.uniq() |> Enum.sort() |> Enum.each(&IO.puts("E2E_ROUTE=" <> &1))`;
     const run = spawnSync("elixir", ["-e", script], {cwd: repoRoot, encoding: "utf8", timeout: 30000});
-    if (run.status !== 0) throw new Error(`Elixir AST route extraction failed: ${run.stderr.trim()}`);
+    if (run.error) throw new Error(`Elixir AST route extraction failed to start: ${run.error.message}`);
+    if (run.status !== 0) throw new Error(`Elixir AST route extraction failed: ${String(run.stderr ?? run.stdout ?? "no subprocess diagnostics").trim()}`);
     const astRoutes = sorted([...run.stdout.matchAll(/^E2E_ROUTE=(.+)$/gm)].map((match) => match[1]));
     if (astRoutes.length === 0) throw new Error("Elixir AST route extraction produced zero routes");
     return astRoutes;
@@ -218,6 +220,7 @@ export function validateContracts({root = repoRoot, inventory = readJson(path.jo
   for (const name of scenarioFiles) {
     const scenario = readJson(path.join(scenarioDirectory, name));
     if (!validateScenario(scenario)) errors.push(`${name}: ${ajv.errorsText(validateScenario.errors)}`);
+    try { assertScenarioContract(scenario, {source: name}); } catch (error) { errors.push(error.message); }
     if (Boolean(scenario.owner) !== Boolean(scenario.deferred_to)) errors.push(`${scenario.id}: owner and deferred_to must be declared together`);
     if (scenario.deferred_to && scenario.owner !== scenario.deferred_to) errors.push(`${scenario.id}: deferred scenario owner must match deferred_to`);
     if (scenarios.has(scenario.id)) errors.push(`duplicate scenario id: ${scenario.id}`);

@@ -23,7 +23,7 @@ test("replay preserves the recorded seed and order verbatim", async () => {
   await writeReplayManifest(path, {seed: "exact-seed", scenario_ids: order})
   const options = await parseStressOptions([`--replay=${path}`], {})
   let seen
-  await runStress({...options, artifactRoot: join(root, "artifacts"), execute: async input => { seen = input }, leakProbe: async () => ({processes: [], listeners: [], handles: [], workspaces: [], profiles: [], databases: [], pending_calls: [], stale_sessions: []})})
+  await runStress({...options, artifactRoot: join(root, "artifacts"), execute: async input => { seen = input; return input.scenarioIds.map(scenario_id => ({scenario_id, status: "passed"})) }, leakProbe: async () => ({processes: [], listeners: [], handles: [], workspaces: [], profiles: [], databases: [], pending_calls: [], stale_sessions: []})})
   assert.equal(seen.seed, "exact-seed"); assert.deepEqual(seen.scenarioIds, order)
   await assert.rejects(parseStressOptions([`--replay=${path}`, "--seed=other"], {}), /conflicts/)
 })

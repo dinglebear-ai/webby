@@ -52,7 +52,7 @@
     "mix_alias": ["assets.build", "assets.deploy", "assets.setup", "e2e.chromium", "e2e.mcp", "e2e.protocol", "e2e.validate", "ecto.reset", "ecto.setup", "precommit", "setup", "test"],
     "mix_task": ["webby.contracts.check"],
     "extension_npm_script": ["test", "typecheck"],
-    "e2e_npm_script": ["chromium:full", "chromium:smoke", "ci:contract", "cleanup", "manifest", "mcp:compat", "parity", "protocol:full", "protocol:pr", "replay", "stress", "test", "test:chromium", "test:mcp-official", "test:stress", "toolchains", "typecheck:chromium", "typecheck:stress", "validate"],
+    "e2e_npm_script": ["chromium:full", "chromium:smoke", "ci:contract", "cleanup", "manifest", "mcp:compat", "parity", "protocol:full", "protocol:pr", "replay", "stress", "test", "test:chromium", "test:mcp-official", "test:stress", "test:stress:live", "toolchains", "typecheck:chromium", "typecheck:stress", "validate"],
     "ci_entrypoint": ["ci:elixir", "ci:extension", "e2e-stress:nightly", "e2e:chromium-pr", "e2e:compatibility", "e2e:contracts", "e2e:full", "e2e:protocol-pr", "upstream-contracts:check"],
     "world_manifest_field": ["artifact_directory", "base_url", "browser_profile_path", "database_path", "environment_marker", "fixture_url", "instance_nonce", "manifest_version", "metrics", "pid", "process_cwd", "process_executable", "process_group_id", "process_started", "scenario_id", "seed", "started_at", "stderr_path", "stdout_path", "telemetry_capability_path", "telemetry_path", "versions", "world_id"]
   },
@@ -240,6 +240,7 @@
     {"id": "command:e2e-replay", "category": "e2e_npm_script", "symbol": "replay", "source": "e2e/package.json", "scenarios": ["e2e-command-ci-entrypoints"]},
     {"id": "command:e2e-stress", "category": "e2e_npm_script", "symbol": "stress", "source": "e2e/package.json", "scenarios": ["e2e-command-ci-entrypoints"]},
     {"id": "command:e2e-test-stress", "category": "e2e_npm_script", "symbol": "test:stress", "source": "e2e/package.json", "scenarios": ["e2e-command-ci-entrypoints"]},
+    {"id": "command:e2e-test-stress-live", "category": "e2e_npm_script", "symbol": "test:stress:live", "source": "e2e/package.json", "scenarios": ["e2e-command-ci-entrypoints"]},
     {"id": "command:e2e-typecheck-stress", "category": "e2e_npm_script", "symbol": "typecheck:stress", "source": "e2e/package.json", "scenarios": ["e2e-command-ci-entrypoints"]},
     {"id": "ci:elixir", "category": "ci_entrypoint", "symbol": "ci:elixir", "source": ".github/workflows/ci.yml:23", "scenarios": ["e2e-command-ci-entrypoints"]},
     {"id": "ci:extension", "category": "ci_entrypoint", "symbol": "ci:extension", "source": ".github/workflows/ci.yml:63", "scenarios": ["e2e-command-ci-entrypoints"]},

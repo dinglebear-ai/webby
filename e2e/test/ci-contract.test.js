@@ -7,6 +7,13 @@ import {cleanupWorlds, initializeOwnedTempRoot, stageAttested, writeShardManifes
 import {ArtifactRecorder} from "../support/artifacts.js"
 
 const root = resolve(import.meta.dirname, "../..")
+const requiredE2EPaths = ["lib/**", "test/**", "config/**", "priv/**", "assets/**", "e2e/**", "extension/**", "scripts/e2e*", "mix.exs", "mix.lock", ".mise.toml", ".github/workflows/e2e.yml", ".github/workflows/e2e-stress.yml"]
+const requiredStressEntries = ["schedule:", "workflow_dispatch:", "npm --prefix e2e run typecheck:stress", "npm --prefix e2e run test:stress", "npm --prefix e2e run test:stress:live", "./scripts/e2e-repeat", "if: always()", "npm --prefix e2e run cleanup"]
+
+function assertTriggerAndStressContracts(primary, stress) {
+  for (const path of requiredE2EPaths) assert.ok(primary.includes(`\"${path}\"`), `missing E2E trigger path ${path}`)
+  for (const entry of requiredStressEntries) assert.ok(stress.includes(entry), `missing stress workflow entry ${entry}`)
+}
 
 test("weighted manifests prove complete disjoint scenario assignment", async t => {
   const directory = await mkdtemp(join(tmpdir(), "webby-ci-contract-")); t.after(() => rm(directory, {recursive: true, force: true}))
@@ -26,8 +33,17 @@ test("workflows pin actions and enforce failure-only attested uploads plus alway
     assert.match(workflow, /npm --prefix e2e run cleanup/)
   }
   const primary = await readFile(join(root, ".github/workflows/e2e.yml"), "utf8")
+  const stress = await readFile(join(root, ".github/workflows/e2e-stress.yml"), "utf8")
+  assertTriggerAndStressContracts(primary, stress)
   assert.match(primary, /if: failure\(\) && hashFiles\('e2e\/artifacts\/upload\/upload-attestation\.json'\) != ''/)
   assert.doesNotMatch(primary, /pull_request_target|secrets\./)
+})
+
+test("every E2E trigger path and deterministic, seam, live, and cleanup command is mutation guarded", async () => {
+  const primary = await readFile(join(root, ".github/workflows/e2e.yml"), "utf8")
+  const stress = await readFile(join(root, ".github/workflows/e2e-stress.yml"), "utf8")
+  for (const path of requiredE2EPaths) assert.throws(() => assertTriggerAndStressContracts(primary.replace(`\"${path}\"`, "\"removed/**\""), stress), /missing E2E trigger path/)
+  for (const entry of requiredStressEntries) assert.throws(() => assertTriggerAndStressContracts(primary, stress.replaceAll(entry, "removed-entry")), /missing stress workflow entry/)
 })
 
 test("failure staging copies only candidates verified by the sanitizer attestation", async t => {
@@ -49,6 +65,16 @@ test("external cleanup refuses arbitrary and unowned roots and removes an empty 
   assert.equal(await readFile(join(arbitrary, "keep.txt"), "utf8"), "keep")
   const owned = await initializeOwnedTempRoot(); assert.equal(await cleanupWorlds({temporaryRoot: owned}), 0)
   await assert.rejects(stat(owned), error => error.code === "ENOENT")
+})
+
+test("contracts-only and already-removed recorded roots produce a successful empty cleanup audit", async t => {
+  const artifactDirectory = join(root, "e2e", "artifacts"); await rm(artifactDirectory, {recursive: true, force: true})
+  assert.equal(await cleanupWorlds(), 0)
+  let report = JSON.parse(await readFile(join(artifactDirectory, "cleanup-report.json"), "utf8")); assert.equal(report.empty_audit, true)
+  const removed = await initializeOwnedTempRoot(); await rm(removed, {recursive: true, force: true})
+  assert.equal(await cleanupWorlds({recordedRoot: removed}), 0)
+  report = JSON.parse(await readFile(join(artifactDirectory, "cleanup-report.json"), "utf8")); assert.equal(report.recorded_root_absent, true)
+  t.after(() => rm(artifactDirectory, {recursive: true, force: true}))
 })
 
 test("cleanup narrowly removes inert run-owned Mix residue", async () => {

@@ -116,7 +116,8 @@ export class ArtifactRecorder {
     } catch (error) {
       this.failedClosed = true
       await unlink(staged).catch(() => {})
-      await this.journal.record(producer, "artifact.rejected", {kind, name, code: error.code ?? "sanitizer_failure"}).catch(() => {})
+      try { await this.journal.record(producer, "artifact.rejected", {kind, name, code: error.code ?? "sanitizer_failure"}) }
+      catch (journalError) { throw new AggregateError([error, journalError], "Artifact rejection and rejection journal both failed", {cause: error}) }
       throw error
     }
   }
@@ -201,7 +202,12 @@ export class ArtifactRecorder {
     } catch (error) {
       this.failedClosed = true
       this.attestation = undefined
-      if (this.attestationPath) await unlink(this.attestationPath).catch(() => {})
+      if (this.attestationPath) {
+        try { await unlink(this.attestationPath) }
+        catch (cleanupError) {
+          if (cleanupError.code !== "ENOENT") throw new AggregateError([error, cleanupError], "Attestation failed and partial attestation cleanup failed", {cause: error})
+        }
+      }
       throw error
     }
   }

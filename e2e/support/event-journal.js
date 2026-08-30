@@ -80,14 +80,22 @@ export class EventJournal {
   async withSecretZone(label, operation) {
     if (typeof operation !== "function") throw new Error("secret-zone operation is required")
     this.secretDepth += 1
+    let result
+    let primaryError
     try {
       await this.record("harness", "secret_zone.entered", {label, capture_suspended: true})
-      return await operation()
+      result = await operation()
     }
+    catch (error) { primaryError = error }
     finally {
-      await this.record("harness", "secret_zone.exited", {label, capture_suspended: true}).catch(() => {})
+      let exitError
+      try { await this.record("harness", "secret_zone.exited", {label, capture_suspended: true}) } catch (error) { exitError = error }
       this.secretDepth -= 1
+      if (primaryError && exitError) throw new AggregateError([primaryError, exitError], "Secret-zone operation and exit journal both failed", {cause: primaryError})
+      if (primaryError) throw primaryError
+      if (exitError) throw exitError
     }
+    return result
   }
 
   async capture(kind, operation, producer = "harness") {

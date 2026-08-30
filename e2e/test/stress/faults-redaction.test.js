@@ -8,8 +8,8 @@ const faults = ["SIGTERM", "SIGINT", "controller-death", "hung-browser-close", "
 test("documented termination, controller, hung-close and recorder faults execute", async () => {
   for (const signal of ["SIGTERM", "SIGINT", "SIGKILL"]) assert.ok((await injectTermination(signal)).signal)
   assert.equal(await injectHungClose(), "forced")
-  assert.equal(await injectRecorderPressure("disk-pressure"), "free_space")
-  assert.equal(await injectRecorderPressure("recorder-overflow"), "file_quota")
+  const disk = await injectRecorderPressure("disk-pressure"); assert.equal(disk.code, "free_space"); await assert.rejects(import("node:fs/promises").then(({stat}) => stat(disk.removed_root)), error => error.code === "ENOENT")
+  const overflow = await injectRecorderPressure("recorder-overflow"); assert.equal(overflow.code, "file_quota"); await assert.rejects(import("node:fs/promises").then(({stat}) => stat(overflow.removed_root)), error => error.code === "ENOENT")
   assert.deepEqual(faults, ["SIGTERM", "SIGINT", "controller-death", "hung-browser-close", "disk-pressure", "recorder-overflow"])
 })
 

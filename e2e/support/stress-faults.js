@@ -1,5 +1,5 @@
 import {spawn} from "node:child_process"
-import {mkdtemp, writeFile} from "node:fs/promises"
+import {mkdtemp, rm, stat, writeFile} from "node:fs/promises"
 import {tmpdir} from "node:os"
 import {join} from "node:path"
 import {ArtifactRecorder} from "./artifacts.js"
@@ -29,6 +29,10 @@ export async function injectRecorderPressure(kind) {
   const root = await mkdtemp(join(tmpdir(), `webby-stress-${kind}-`)); const input = join(root, "payload.log"); await writeFile(input, "x".repeat(256))
   const limits = kind === "disk-pressure" ? {reserveBytes: Number.MAX_SAFE_INTEGER} : {fileBytes: 32}
   const recorder = await new ArtifactRecorder({root: join(root, "recorder"), scenarioId: kind, worldId: "fault", limits}).open()
+  let code
   try { await recorder.ingest(input, {kind: "log", essential: true}); throw new Error(`${kind} injection did not fail closed`) }
-  catch (error) { if (error.message.includes("did not fail closed")) throw error; await recorder.journal.close(); return error.code }
+  catch (error) { if (error.message.includes("did not fail closed")) throw error; await recorder.journal.close(); code = error.code }
+  finally { await rm(root, {recursive: true, force: true}) }
+  await stat(root).then(() => { throw new Error(`${kind} recorder root survived cleanup`) }, error => { if (error.code !== "ENOENT") throw error })
+  return {code, removed_root: root}
 }

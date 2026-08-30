@@ -2,7 +2,7 @@ name: Live E2E
 
 on:
   pull_request:
-    paths: ["lib/**", "test/**", "e2e/**", "extension/**", "mix.exs", "mix.lock", ".mise.toml", ".github/workflows/e2e.yml"]
+    paths: ["lib/**", "test/**", "config/**", "priv/**", "assets/**", "e2e/**", "extension/**", "scripts/e2e*", "mix.exs", "mix.lock", ".mise.toml", ".github/workflows/e2e.yml", ".github/workflows/e2e-stress.yml"]
   push:
     branches: [main]
   workflow_dispatch:
@@ -42,6 +42,8 @@ jobs:
       - run: npm --prefix e2e run toolchains
       - run: npm --prefix e2e run validate
       - run: npm --prefix e2e run ci:contract
+      - run: npm --prefix e2e run typecheck:stress
+      - run: npm --prefix e2e run test:stress
       - name: External reaper and leak audit
         if: always()
         run: npm --prefix e2e run cleanup

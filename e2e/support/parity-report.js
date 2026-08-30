@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import {assertScenarioContract} from "./runtime-contracts.js";
 import {fileURLToPath} from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
@@ -90,7 +91,7 @@ export function contractHash() {
 }
 
 function loadScenarios() {
-  return fs.readdirSync(scenarioDirectory).filter((name) => name.endsWith(".json")).sort().map((name) => JSON.parse(fs.readFileSync(path.join(scenarioDirectory, name), "utf8")));
+  return fs.readdirSync(scenarioDirectory).filter((name) => name.endsWith(".json")).sort().map((name) => assertScenarioContract(JSON.parse(fs.readFileSync(path.join(scenarioDirectory, name), "utf8")), {source: name}));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

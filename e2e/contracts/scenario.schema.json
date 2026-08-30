@@ -66,9 +66,9 @@
       "required": ["id", "dimensions", "pairwise", "mandated_triples", "exclusions"],
       "properties": {
         "id": {"enum": ["http-mcp", "browser-websocket-handshake", "browser-websocket-message", "cross-transport-call"]},
-        "dimensions": {"type": "object", "additionalProperties": {"type": "array", "minItems": 1, "uniqueItems": true}},
+        "dimensions": {"type": "object", "minProperties": 3, "additionalProperties": {"type": "array", "items": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "boolean"}]}, "minItems": 1, "uniqueItems": true}},
         "pairwise": {"const": true},
-        "mandated_triples": {"type": "array", "items": {"type": "object", "minProperties": 3}},
+        "mandated_triples": {"type": "array", "items": {"type": "object", "minProperties": 3, "additionalProperties": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "boolean"}]}}},
         "exclusions": {"type": "array", "items": {"$ref": "#/$defs/exclusion"}}
       }
     },

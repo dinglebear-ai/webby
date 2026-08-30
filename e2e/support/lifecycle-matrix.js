@@ -1,5 +1,6 @@
 import {readFile, writeFile} from "node:fs/promises"
 import {assertLifecycleVocabulary} from "./assertions.js"
+import {readScenarioContract} from "./runtime-contracts.js"
 
 const lifecyclePath = new URL("../contracts/lifecycle-matrix.json", import.meta.url)
 const scenarioPath = new URL("../contracts/scenarios/lifecycle-removal.json", import.meta.url)
@@ -9,7 +10,7 @@ export const LIFECYCLE_EVIDENCE = Object.freeze(["caller", "browser_work", "sess
 export async function protocolLifecycleRows({lifecycle = lifecyclePath, scenario = scenarioPath, owner = "webby-ihb.16"} = {}) {
   const [matrix, contract] = await Promise.all([
     readFile(lifecycle, "utf8").then(JSON.parse),
-    readFile(scenario, "utf8").then(JSON.parse),
+    readScenarioContract(scenario),
   ])
   const declared = new Set(contract.combinations.dimensions.transition)
   const transitions = matrix.transitions.filter(row => row.drivers.includes("protocol") && row.owner === owner)

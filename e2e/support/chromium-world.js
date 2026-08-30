@@ -6,6 +6,7 @@ import {chromium} from "playwright"
 import {BrowserArtifacts} from "./browser-artifacts.js"
 import {ExtensionDriver, validateBoundWorld} from "./extension-driver.js"
 import {generateTestExtension} from "./test-manifest.js"
+import {assertWorldManifest, readWorldManifest} from "./runtime-contracts.js"
 
 const repositoryRoot = resolve(new URL("../..", import.meta.url).pathname)
 const execFileAsync = promisify(execFile)
@@ -16,6 +17,20 @@ async function validateAssets(root = repositoryRoot) {
     const path = join(root, "priv", "static", "assets", name)
     const info = await stat(path)
     if (!info.isFile() || info.size === 0) throw new Error(`Phoenix asset is absent or empty: assets/${name}`)
+  }
+}
+
+async function forceCloseBrowser(context, timeoutMs) {
+  const page = context.pages()[0] ?? await context.newPage()
+  const session = await context.newCDPSession(page)
+  const closed = new Promise(resolveClose => context.once("close", resolveClose))
+  let timer
+  try {
+    await session.send("Browser.close")
+    await Promise.race([closed, new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("forced Chromium close timed out"), {code: "chromium_force_close_timeout"})), timeoutMs); timer.unref?.() })])
+  } finally {
+    clearTimeout(timer)
+    await session.detach().catch(() => {})
   }
 }
 
@@ -46,8 +61,8 @@ export async function prepareChromiumAssets({producer, root = repositoryRoot, ti
 
 export class ChromiumWorld {
   static async launch({world, recorder, extensionSource = join(repositoryRoot, "extension"), closeTimeoutMs = 10_000, chromiumApi = chromium, broadHostPermissions = false} = {}) {
-    if (!world?.manifest && world?.manifestPath) world.manifest = JSON.parse(await readFile(world.manifestPath, "utf8"))
-    const manifest = world?.manifest ?? world
+    if (!world?.manifest && world?.manifestPath) world.manifest = await readWorldManifest(world.manifestPath)
+    const manifest = assertWorldManifest(world?.manifest ?? world, {source: "Chromium world manifest"})
     if (!manifest?.browser_profile_path || !manifest?.artifact_directory) throw new Error("live world manifest is required")
     if (!recorder?.producers?.chromium) throw new Error("central ArtifactRecorder Chromium producer is required")
     await prepareChromiumAssets({producer: recorder.producers.chromium})
@@ -72,7 +87,7 @@ export class ChromiumWorld {
       artifacts.attach(context)
       const driver = new ExtensionDriver({context, binding: generated.binding, world: manifest, artifacts})
       await driver.worker()
-      const instance = new ChromiumWorld({world, manifest, context, driver, artifacts, generated, closeTimeoutMs})
+      const instance = new ChromiumWorld({world, manifest, context, driver, artifacts, generated, closeTimeoutMs, closeContext: value => value.close()})
       await recorder.producers.chromium.event("browser.launched", {extension_id: generated.binding.expected_extension_id, profile: "isolated", channel: "chromium"})
       return instance
     } catch (error) {
@@ -122,10 +137,18 @@ export class ChromiumWorld {
     let timeout
     try {
       await this.artifacts.duringExpectedBrowserShutdown(() => Promise.race([
-        context.close(),
+        this.closeContext(context),
         new Promise((_, reject) => { timeout = setTimeout(() => reject(Object.assign(new Error("Chromium close timed out"), {code: "chromium_close_timeout"})), this.closeTimeoutMs) }),
       ]))
-    } catch (error) { errors.push(error) }
+    } catch (error) {
+      errors.push(error)
+      if (error.code === "chromium_close_timeout") {
+        try {
+          await this.artifacts.duringExpectedBrowserShutdown(() => forceCloseBrowser(context, this.closeTimeoutMs))
+          await this.artifacts.producer.event("browser.close_forced", {reason: error.code, bounded_ms: this.closeTimeoutMs})
+        } catch (forcedError) { errors.push(forcedError) }
+      }
+    }
     finally { clearTimeout(timeout); this.context = undefined }
     try {
       await this.artifacts.drain()

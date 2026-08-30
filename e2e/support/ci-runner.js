@@ -8,11 +8,20 @@ import {fileURLToPath} from "node:url"
 import {ArtifactRecorder} from "./artifacts.js"
 import {openFileHandles, removeOwnedWorkspace} from "./temp-workspace.js"
 import {reapManifest} from "./world.js"
+import {readScenarioContract} from "./runtime-contracts.js"
 
 const e2eRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repositoryRoot = resolve(e2eRoot, "..")
 const artifactRoot = join(e2eRoot, "artifacts")
 const ownershipMarker = ".webby-e2e-owned-root.json"
+
+async function writeEmptyCleanupAudit(report, details = {}) {
+  Object.assign(report, {empty_audit: true}, details)
+  await mkdir(artifactRoot, {recursive: true, mode: 0o700})
+  await writeFile(join(artifactRoot, "cleanup-report.json"), JSON.stringify(report, null, 2) + "\n", {mode: 0o600})
+  process.stdout.write(`${JSON.stringify(report)}\n`)
+  return 0
+}
 
 export async function initializeOwnedTempRoot(prefix = "webby-ci-run-") {
   const root = await mkdtemp(join(tmpdir(), prefix))
@@ -99,7 +108,7 @@ function safe(value) {
 async function scenarios() {
   const directory = join(e2eRoot, "contracts", "scenarios")
   return Promise.all((await readdir(directory)).filter(name => name.endsWith(".json")).sort().map(async name => {
-    const value = JSON.parse(await readFile(join(directory, name), "utf8"))
+    const value = await readScenarioContract(join(directory, name))
     return {id: value.id, tier: value.tier, weight: value.weight, drivers: value.drivers, source: `contracts/scenarios/${name}`}
   }))
 }
@@ -181,8 +190,15 @@ export async function cleanupWorlds({temporaryRoot: suppliedRoot, recordedRoot: 
   const report = {schema_version: 1, roots: [], failures: []}
   let recordedRoot
   try { recordedRoot = suppliedRecordedRoot ?? (await readFile(join(artifactRoot, "run-temp-path"), "utf8")).trim() } catch (error) { if (error.code !== "ENOENT") throw error }
-  if (!recordedRoot && !suppliedRoot && !process.env.WEBBY_E2E_TMP_ROOT) throw new Error("cleanup refused: no recorded owned temporary root")
-  const temporaryRoot = await realpath(resolve(suppliedRoot ?? process.env.WEBBY_E2E_TMP_ROOT ?? recordedRoot))
+  if (!recordedRoot && !suppliedRoot && !process.env.WEBBY_E2E_TMP_ROOT) {
+    return writeEmptyCleanupAudit(report)
+  }
+  let temporaryRoot
+  try { temporaryRoot = await realpath(resolve(suppliedRoot ?? process.env.WEBBY_E2E_TMP_ROOT ?? recordedRoot)) }
+  catch (error) {
+    if (error.code !== "ENOENT" || suppliedRoot || process.env.WEBBY_E2E_TMP_ROOT) throw error
+    return writeEmptyCleanupAudit(report, {recorded_root_absent: true})
+  }
   const canonicalTmp = await realpath(tmpdir())
   if (temporaryRoot === canonicalTmp || !temporaryRoot.startsWith(`${canonicalTmp}/`) || !basename(temporaryRoot).startsWith("webby-ci-run-")) throw new Error("cleanup refused: root is outside the private Webby temp namespace")
   let marker

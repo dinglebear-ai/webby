@@ -4,7 +4,7 @@ This package is the executable source of truth for Webby's live end-to-end cover
 
 ## Contract compatibility
 
-The current contract version is `1`. Consumers must reject an unknown major version. Schema changes are atomic: update the schema, committed scenario and inventory snapshots, positive and negative contract tests, parity normalization, and every consumer together. Drivers may not privately reinterpret a scenario or omit a shared outcome.
+The current contract version is `1`. Every runtime consumer validates the full scenario or world schema and rejects an unknown version or environment marker. Schema changes are atomic: update the schema, committed scenario and inventory snapshots, positive and negative contract tests, parity normalization, and every consumer together. Drivers may not privately reinterpret a scenario or omit a shared outcome. Duplicate step IDs and normalized outcome keys are invalid.
 
 Run the contract gate from this directory:
 

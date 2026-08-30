@@ -101,6 +101,16 @@ test("secret zones mechanically prohibit browser capture and never invoke captur
   assert.equal(events.filter(event => event.type === "capture.prohibited").length, 7)
 })
 
+test("secret zones preserve operation and exit-journal failures", async t => {
+  const root = await workspace(t)
+  const journal = await new EventJournal({path: join(root, "events.ndjson"), scenarioId: "secret-zone-errors", worldId: "world"}).open()
+  const originalRecord = journal.record.bind(journal)
+  journal.record = async (producer, type, data) => type === "secret_zone.exited" ? Promise.reject(new Error("exit journal")) : originalRecord(producer, type, data)
+  await assert.rejects(journal.withSecretZone("failing", async () => { throw new Error("operation") }), error => error instanceof AggregateError && error.errors.map(item => item.message).join(",") === "operation,exit journal")
+  journal.record = originalRecord
+  await journal.close()
+})
+
 test("central recorder serves all producers and emits replayable attested sanitized staging", async t => {
   const root = await workspace(t)
   const input = join(root, "protocol.log")

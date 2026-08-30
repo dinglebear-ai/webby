@@ -2,6 +2,7 @@ defmodule Webby.MCP.Credentials do
   @moduledoc "Hashed, independently revocable MCP client credentials."
 
   import Ecto.Query
+  require Logger
   alias Webby.MCP.Credential
   alias Webby.Repo
 
@@ -62,35 +63,37 @@ defmodule Webby.MCP.Credentials do
       do: :ok,
       else: {:error, :revoked}
   rescue
-    _exception -> {:error, :credential_unavailable}
+    _exception in DBConnection.ConnectionError ->
+      Logger.warning("credential availability check failed",
+        event: "mcp.credential.availability_failed",
+        reason: "database_connection_error"
+      )
+
+      {:error, :credential_unavailable}
   end
 
   def revoke(id, opts \\ []) do
     persist = Keyword.get(opts, :persist, &revoke_persisted/1)
-    {:ok, previous_barrier} = Webby.BrowserConnections.begin_credential_revocation(id)
+    {:ok, barrier_token} = Webby.BrowserConnections.begin_credential_revocation(id)
 
     try do
       case persist.(id) do
         {:ok, _credential} = result ->
-          :ok = Webby.BrowserConnections.finish_credential_revocation(id, :committed)
+          :ok =
+            Webby.BrowserConnections.finish_credential_revocation(id, barrier_token, :committed)
+
           result
 
         error ->
           :ok =
-            Webby.BrowserConnections.finish_credential_revocation(
-              id,
-              {:aborted, previous_barrier}
-            )
+            Webby.BrowserConnections.finish_credential_revocation(id, barrier_token, :aborted)
 
           error
       end
     rescue
       exception ->
         :ok =
-          Webby.BrowserConnections.finish_credential_revocation(
-            id,
-            {:aborted, previous_barrier}
-          )
+          Webby.BrowserConnections.finish_credential_revocation(id, barrier_token, :aborted)
 
         reraise exception, __STACKTRACE__
     end

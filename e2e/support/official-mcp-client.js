@@ -1,6 +1,7 @@
 import {readFile} from "node:fs/promises"
 import {Client, StreamableHTTPClientTransport, SUPPORTED_PROTOCOL_VERSIONS} from "@modelcontextprotocol/client"
 import {actionCases} from "./mcp-client.js"
+import {readScenarioContract} from "./runtime-contracts.js"
 
 const DEFAULT_DEADLINES = Object.freeze({connection: 5_000, operation: 5_000, shutdown: 5_000})
 export async function loadOfficialCompatibility(path = new URL("../contracts/mcp-official-compatibility.json", import.meta.url)) { return JSON.parse(await readFile(path, "utf8")) }
@@ -8,7 +9,7 @@ const same = (left, right) => JSON.stringify([...left].sort()) === JSON.stringif
 
 export async function loadAuthoritativeCompatibility() {
   const load = path => readFile(new URL(path, import.meta.url), "utf8").then(JSON.parse)
-  const [mcp, vertical, fixture, lifecycle] = await Promise.all([load("../contracts/mcp-versions.json"), load("../contracts/scenarios/shared-vertical-slice.json"), load("../contracts/scenarios/fixture-outcomes.json"), load("../contracts/scenarios/lifecycle-removal.json")])
+  const [mcp, vertical, fixture, lifecycle] = await Promise.all([load("../contracts/mcp-versions.json"), readScenarioContract(new URL("../contracts/scenarios/shared-vertical-slice.json", import.meta.url)), readScenarioContract(new URL("../contracts/scenarios/fixture-outcomes.json", import.meta.url)), readScenarioContract(new URL("../contracts/scenarios/lifecycle-removal.json", import.meta.url))])
   if (!vertical.steps.some(step => step.action.op === "mcp.invoke")) throw new Error("shared vertical slice no longer exercises MCP")
   const outcomes = new Set()
   for (const fixtureOutcome of fixture.combinations.dimensions.outcome) {

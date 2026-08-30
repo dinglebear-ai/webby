@@ -3,7 +3,7 @@ import {buildObservation, canScanTab, ignoredObservationTabIds, stableStringify}
 import {cancelWebMcp, invokeWebMcp, probeWebMcp} from "./probe.js";
 import {reconcileModeAfterRemoval} from "./permissions.js";
 import {parseLoopbackBaseUrl} from "./base_url.js";
-import {closeObservations, executionAllowed, publishCurrentObservation, ScanScheduler} from "./orchestration.js";
+import {closeObservations, executionAllowed, publishCurrentObservation, requireSettledSuccess, ScanScheduler} from "./orchestration.js";
 
 /** @typedef {{url: string, title: string, tools: unknown[], tab_id: number, document_id: string}} Observation */
 
@@ -351,7 +351,9 @@ async function scanTab(tab, allowActiveTab = false) {
       }
     );
   } catch (error) {
-    if (!expectedScanError(error)) console.error("Webby tab scan failed", {tabId: tab.id, error});
+    if (expectedScanError(error)) return {status: "gone"};
+    console.error("Webby tab scan failed", {tabId: tab.id, error});
+    throw error;
   }
 }
 
@@ -373,6 +375,11 @@ async function closeObservation(tabId) {
       pendingClosures.delete(/** @type {number} */ (tabId));
     }
   } catch (error) {
+    if (expectedGoneDocumentError(error)) {
+      if (observations.get(tabId)?.document_id === observation.document_id) observations.delete(tabId);
+      if (pendingClosures.get(/** @type {number} */ (tabId)) === observation.document_id) pendingClosures.delete(/** @type {number} */ (tabId));
+      return {status: "gone"};
+    }
     console.error("Webby observation close failed; resync required", {tabId, error});
     throw error;
   }
@@ -384,7 +391,12 @@ async function closeAllObservations() {
 
 async function closeIneligibleObservations() {
   reportRejected("close ineligible observations", await Promise.allSettled([...observations.keys()].map(async (tabId) => {
-    const tab = tabId === undefined ? undefined : await chrome.tabs.get(tabId).catch(() => undefined);
+    let tab;
+    try {
+      tab = tabId === undefined ? undefined : await chrome.tabs.get(tabId);
+    } catch (error) {
+      if (!expectedGoneDocumentError(error)) throw error;
+    }
     if (!(await canScanTab(tab, chrome.permissions))) await closeObservation(tabId);
   })));
 }
@@ -444,6 +456,7 @@ function reportRejected(operation, results) {
   for (const result of results) {
     if (result.status === "rejected") console.error(`Webby ${operation} failed`, result.reason);
   }
+  return requireSettledSuccess(operation, results);
 }
 
 /** @param {unknown} error @returns {boolean} */

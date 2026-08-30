@@ -7,6 +7,7 @@ import {spawn} from "node:child_process"
 import {fileURLToPath} from "node:url"
 import {atomicPrivateWrite, assertInside, assertOwnedRegular, createTempWorkspace, diskBytes, removeOwnedWorkspace} from "./temp-workspace.js"
 import {captureProcessIdentity, processExists, reapProcessGroup} from "./process-tree.js"
+import {assertWorldManifest, readWorldManifest} from "./runtime-contracts.js"
 
 const supportDirectory = fileURLToPath(new URL(".", import.meta.url))
 const repositoryRoot = resolve(supportDirectory, "../..")
@@ -249,8 +250,9 @@ export class WebbyWorld {
       if (!this.identity && this.pid && await processExists(this.pid)) {
         this.identity = await captureProcessIdentity(this.pid, this.instanceNonce).catch(() => undefined)
       }
-      await this.teardown({remove: false}).catch(() => {})
-      throw new Error(`${error.message}; diagnostics: ${this.stdoutPath}, ${this.stderrPath}`)
+      try { await this.teardown({remove: false}) }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], `${error.message}; startup cleanup failed; diagnostics: ${this.stdoutPath}, ${this.stderrPath}`, {cause: error}) }
+      throw new Error(`${error.message}; diagnostics: ${this.stdoutPath}, ${this.stderrPath}`, {cause: error})
     }
   }
 
@@ -266,6 +268,7 @@ export class WebbyWorld {
       stdout_path: this.stdoutPath, stderr_path: this.stderrPath, started_at: new Date().toISOString(),
       versions: {node: process.version, webby: "0.1.0"}, metrics: this.metrics,
     }
+    assertWorldManifest(manifest, {source: "generated world manifest"})
     await atomicPrivateWrite(this.manifestPath, JSON.stringify(manifest, null, 2) + "\n")
     await assertOwnedRegular(this.manifestPath, {mode: 0o600})
     this.manifest = manifest
@@ -325,22 +328,24 @@ export class WebbyWorld {
   }
 
   async teardown({remove = !this.preserveArtifacts} = {}) {
-    await this.setHealthDegraded(false).catch(() => {})
-    await this.fixtureReservation?.release().catch(() => {})
-    if (this.identity) await reapProcessGroup(this.identity, this.instanceNonce)
-    await this.logs?.stdout.close()
-    await this.logs?.stderr.close()
+    const failures = []
+    try { await this.setHealthDegraded(false) } catch (error) { failures.push(error) }
+    try { await this.fixtureReservation?.release() } catch (error) { failures.push(error) }
+    try { if (this.identity) await reapProcessGroup(this.identity, this.instanceNonce) } catch (error) { failures.push(error) }
+    try { await this.logs?.stdout.close() } catch (error) { failures.push(error) }
+    try { await this.logs?.stderr.close() } catch (error) { failures.push(error) }
     this.logs = undefined
     if (remove && this.root && !this.rootRemoved) {
-      await removeOwnedWorkspace(this.root)
-      this.rootRemoved = true
+      try { await removeOwnedWorkspace(this.root); this.rootRemoved = true } catch (error) { failures.push(error) }
     }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, "World teardown had multiple failures", {cause: failures[0]})
   }
 }
 
 export async function reapManifest(manifestPath) {
   await assertOwnedRegular(manifestPath, {mode: 0o600})
-  const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
+  const manifest = await readWorldManifest(manifestPath)
   assertInside(resolve(manifestPath, ".."), manifest.database_path)
   return reapProcessGroup({pid: manifest.pid, pgid: manifest.process_group_id, started: manifest.process_started, executable: manifest.process_executable, cwd: manifest.process_cwd, uid: process.getuid?.()}, manifest.instance_nonce)
 }

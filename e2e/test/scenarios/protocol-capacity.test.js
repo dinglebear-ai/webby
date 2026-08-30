@@ -49,6 +49,7 @@ for (const count of [99, 100, 101]) test(`literal ${count} live calls enforce an
     const normalized = {count, admitted: calls.length, succeeded: outcomes.filter(item => item.state === "succeeded").length, rejected: outcomes.filter(item => item.state === "rejected").length}
     assert.deepEqual(normalized, {count, admitted: Math.min(count, 100), succeeded: Math.min(count, 100), rejected: count === 101 ? 1 : 0})
     await fixture.recorder.producers.world.event("capacity.boundary.measured", {...normalized, pending_calls: state.browser_pending})
+    if (count === 100 && process.env.WEBBY_STRESS_PROCESS_NONCE) console.log(`WEBBY_STRESS_MEASUREMENT=${JSON.stringify({pending_calls: normalized.admitted})}`)
   const reuse = beginCalls(fixture, 1, {idPrefix: "post-overflow-reuse", transport: "raw"})
   const [call] = await reuse.arrivals
   await completeCalls(fixture, [call])

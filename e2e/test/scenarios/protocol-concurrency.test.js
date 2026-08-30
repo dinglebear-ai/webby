@@ -29,6 +29,7 @@ test("literal 10, 100, and 1000 tab scans use bounded fanout and live coalesced 
   const coalesced = await sqlite(fixture.world.databasePath, "SELECT count(*) AS count FROM document_sessions WHERE tab_id = 2000 AND status = 'active';")
   assert.equal(Number(coalesced[0].count), 1)
   assert.deepEqual(evidence.map(item => item.count), [10, 100, 1000])
+  if (process.env.WEBBY_STRESS_PROCESS_NONCE) console.log(`WEBBY_STRESS_MEASUREMENT=${JSON.stringify({scan_tabs: evidence.map(item => item.count)})}`)
 })
 
 test("reverse completions, stale socket callbacks, and live channel replacement preserve generation and identity", {timeout: 120_000}, async t => {

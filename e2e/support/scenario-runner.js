@@ -2,6 +2,7 @@ import {createHash} from "node:crypto"
 import {readFile, readdir} from "node:fs/promises"
 import {join} from "node:path"
 import {assertPredicate} from "./assertions.js"
+import {assertScenarioContract, readScenarioContract} from "./runtime-contracts.js"
 
 const handleKinds = new Set(["world", "browser", "pairing", "credential", "page", "session", "document", "call", "audit"])
 const sha256 = value => createHash("sha256").update(value).digest("hex")
@@ -37,7 +38,7 @@ export class LogicalHandles {
 
 export async function loadScenarioMatrix({directory = new URL("../contracts/scenarios/", import.meta.url), tags = {}} = {}) {
   const files = (await readdir(directory)).filter(name => name.endsWith(".json")).sort()
-  const scenarios = await Promise.all(files.map(async name => JSON.parse(await readFile(join(directory.pathname, name), "utf8"))))
+  const scenarios = await Promise.all(files.map(name => readScenarioContract(join(directory.pathname, name))))
   return scenarios.filter(scenario => Object.entries(tags).every(([key, wanted]) => {
     const actual = scenario[key]
     return Array.isArray(actual) ? actual.includes(wanted) : actual === wanted
@@ -47,6 +48,7 @@ export async function loadScenarioMatrix({directory = new URL("../contracts/scen
 export class ScenarioRunner {
   constructor({scenario, driver, world, recorder, actions, observe, cleanup, defaultTimeoutMs = 30_000} = {}) {
     if (!scenario || !driver || !world || !recorder?.producers?.world) throw new ScenarioInfrastructureError("invalid_runner", "scenario, driver, live world, and recorder are required")
+    assertScenarioContract(scenario, {source: "ScenarioRunner scenario"})
     if (!scenario.drivers?.includes(driver)) throw new ScenarioInfrastructureError("ineligible_driver", `${driver} is not eligible for ${scenario.id}`)
     if (typeof actions !== "object" || typeof observe !== "function" || typeof cleanup !== "function") throw new ScenarioInfrastructureError("invalid_runner", "actions, observer, and cleanup are required")
     this.scenario = scenario; this.driver = driver; this.world = world; this.recorder = recorder; this.actions = actions; this.observe = observe; this.cleanup = cleanup; this.defaultTimeoutMs = defaultTimeoutMs
@@ -117,7 +119,8 @@ export class ScenarioRunner {
       completed = {observations: this.observations, handles: this.handles, normalized: Object.fromEntries(this.scenario.outcomes.map(item => [item.key, this.observations[item.predicate.subject]]))}
     } catch (error) {
       primaryError = error
-      await this.recorder.producers.world.failure({summary: error.message, code: error.code ?? "scenario_failed", scenario_id: this.scenario.id}).catch(() => {})
+      try { await this.recorder.producers.world.failure({summary: error.message, code: error.code ?? "scenario_failed", scenario_id: this.scenario.id}) }
+      catch (journalError) { primaryError = new AggregateError([error, journalError], "Scenario failed and failure evidence could not be journaled", {cause: error}) }
     }
     let cleanupError
     try {

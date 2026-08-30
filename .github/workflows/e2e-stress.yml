@@ -34,6 +34,12 @@ jobs:
       - run: mix deps.get && npm ci --prefix e2e
       - run: npx --prefix e2e playwright install --with-deps chromium
       - run: npm --prefix e2e run toolchains
+      - run: npm --prefix e2e run typecheck:stress
+      - name: Stress contracts and integrated fault seams
+        run: npm --prefix e2e run test:stress
+      - name: Live Webby and Chromium fault qualification
+        timeout-minutes: 12
+        run: npm --prefix e2e run test:stress:live
       - run: npm --prefix e2e run manifest -- lane=nightly driver=protocol total=1 shard=1 output=artifacts/nightly-manifest.json
       - name: Deterministic stress qualification
         timeout-minutes: 105

@@ -7,6 +7,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import {compareParity, contractHash} from "../support/parity-report.js";
 import {combinationErrors, deriveHandlerSurfaces, deterministicShards, discover, e2eRoot, mutationFixture, repoRoot, selectCombinations, validateContracts} from "../support/validate-contracts.js";
+import {assertScenarioContract, assertWorldManifest} from "../support/runtime-contracts.js";
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const inventoryPath = path.join(e2eRoot, "contracts/surfaces.json");
@@ -18,7 +19,7 @@ test("all committed contracts are schema-valid, mapped, and fail-closed", () => 
   const result = validateContracts();
   assert.deepEqual(result.errors, []);
   assert.equal(result.report.coverage_percent, 100);
-  assert.equal(result.report.surfaces, 179);
+  assert.equal(result.report.surfaces, 180);
 });
 
 test("scenario schema rejects missing IDs, drivers, outcomes, timeouts, and cleanup", () => {
@@ -40,6 +41,24 @@ test("scenario schema rejects missing IDs, drivers, outcomes, timeouts, and clea
   const unknownPredicate = structuredClone(valid);
   unknownPredicate.cleanup[0].kind = "eventually-maybe";
   assert.equal(validate(unknownPredicate), false);
+});
+
+test("runtime contract validation rejects duplicate semantics and non-scalar security dimensions", () => {
+  const valid = structuredClone(scenarios.find(scenario => scenario.security_matrices?.length));
+  assert.doesNotThrow(() => assertScenarioContract(valid));
+  const duplicateStep = structuredClone(valid);
+  duplicateStep.steps.push(structuredClone(duplicateStep.steps[0]));
+  assert.throws(() => assertScenarioContract(duplicateStep), /duplicate .* step id/);
+  const duplicateOutcome = structuredClone(valid);
+  duplicateOutcome.outcomes.push(structuredClone(duplicateOutcome.outcomes[0]));
+  assert.throws(() => assertScenarioContract(duplicateOutcome), /duplicate .* outcome key/);
+  const invalidDimension = structuredClone(valid);
+  const matrix = invalidDimension.security_matrices[0];
+  matrix.dimensions[Object.keys(matrix.dimensions)[0]][0] = {unsafe: true};
+  assert.throws(() => assertScenarioContract(invalidDimension), /runtime schema validation/);
+  const invalidTriple = structuredClone(valid);
+  invalidTriple.security_matrices[0].mandated_triples[0].undeclared = "nope";
+  assert.throws(() => assertScenarioContract(invalidTriple), /undeclared dimension/);
 });
 
 test("every registered extractor has a positive golden and unmapped mutation guard", (context) => {
@@ -186,6 +205,8 @@ test("world manifest is a versioned fail-closed IPC contract", () => {
   assert.equal(validate(manifest), true);
   assert.equal(validate({...manifest, manifest_version: 2}), false);
   assert.equal(validate({...manifest, secret: "must-not-be-accepted"}), false);
+  assert.doesNotThrow(() => assertWorldManifest(manifest));
+  assert.throws(() => assertWorldManifest({...manifest, environment_marker: "production"}), /runtime schema validation/);
 });
 
 test("parity accepts complete shared outcomes and rejects drift omission and silent projection", () => {
