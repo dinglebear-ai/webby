@@ -49,9 +49,11 @@ export function executionAllowed(paused, permissionGranted) {
  * @param {() => T} commit
  * @returns {Promise<T | undefined>}
  */
-export async function publishCurrentObservation(generation, currentGeneration, publish, commit) {
+export async function publishCurrentObservation(generation, currentGeneration, publish, commit, compensate = async () => {}) {
   await publish();
-  return currentGeneration() === generation ? commit() : undefined;
+  if (currentGeneration() === generation) return commit();
+  await compensate();
+  return undefined;
 }
 
 /**

@@ -33,11 +33,16 @@ export class ExtensionDriver {
     this.tabIds = new WeakMap()
   }
 
-  async worker() {
+  async extensionWorker() {
     let worker = this.context.serviceWorkers().find(candidate => candidate.url().startsWith(`chrome-extension://${this.binding.expected_extension_id}/`))
     if (!worker) worker = await this.context.waitForEvent("serviceworker", {timeout: this.workerTimeoutMs, predicate: candidate => candidate.url().startsWith(`chrome-extension://${this.binding.expected_extension_id}/`)})
     const runtimeId = workerId(worker)
     if (runtimeId !== this.binding.expected_extension_id) throw new Error(`runtime extension ID mismatch: ${runtimeId}`)
+    return worker
+  }
+
+  async worker() {
+    const worker = await this.extensionWorker()
     const response = await fetch(`${this.binding.base_url}/health`)
     if (!response.ok) throw new Error(`bound Webby health failed: ${response.status}`)
     const health = await response.json()
@@ -60,25 +65,33 @@ export class ExtensionDriver {
     const previous = await this.worker()
     const page = this.context.pages()[0] ?? await this.context.newPage()
     const session = await this.context.newCDPSession(page)
+    let handler
+    let timeout
     const version = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("service-worker CDP version was not reported")), this.workerTimeoutMs)
-      session.on("ServiceWorker.workerVersionUpdated", ({versions}) => {
+      timeout = setTimeout(() => reject(new Error("service-worker CDP version was not reported")), this.workerTimeoutMs)
+      handler = ({versions}) => {
         const matching = versions.find(candidate => candidate.scriptURL?.startsWith(`chrome-extension://${this.binding.expected_extension_id}/`))
         if (matching) { clearTimeout(timeout); resolve(matching) }
-      })
+      }
+      session.on("ServiceWorker.workerVersionUpdated", handler)
     })
-    await session.send("ServiceWorker.enable")
-    await session.send("ServiceWorker.stopWorker", {versionId: (await version).versionId})
-    let restartTransient = false
-    try { await previous.evaluate(() => chrome.runtime.id) }
-    catch (error) {
-      if (!/Service worker restarted|closed|destroyed/i.test(error.message)) throw error
-      restartTransient = true
+    try {
+      await session.send("ServiceWorker.enable")
+      await session.send("ServiceWorker.stopWorker", {versionId: (await version).versionId})
+      let restartTransient = false
+      try { await previous.evaluate(() => chrome.runtime.id) }
+      catch (error) {
+        if (!/Service worker restarted|closed|destroyed/i.test(error.message)) throw error
+        restartTransient = true
+      }
+      const popup = await this.popup()
+      await popup.close()
+      return {worker: await this.reacquireWorker(previous), restartTransient}
+    } finally {
+      clearTimeout(timeout)
+      if (handler) session.off("ServiceWorker.workerVersionUpdated", handler)
+      await session.detach().catch(() => {})
     }
-    await session.detach()
-    const popup = await this.popup()
-    await popup.close()
-    return {worker: await this.reacquireWorker(previous), restartTransient}
   }
 
   async popup() {
@@ -103,15 +116,18 @@ export class ExtensionDriver {
   }
 
   async pair(displayName = "Chrome") {
+    await this.waitForStorageValue("e2eChannelReadyNonce")
     const popup = await this.popup()
     try {
       await popup.locator("#pair").click()
       await popup.locator("#status").filter({hasText: "Pairing request sent"}).waitFor()
+      const pairingId = await this.waitForStorageValue("pairingId")
       const worker = await this.worker()
-      return worker.evaluate(async name => {
+      return worker.evaluate(async ({name, expectedPairingId}) => {
         const values = await chrome.storage.local.get(["pairingId", "browserId"])
-        return {display_name: name, pairing_id: values.pairingId ?? null, browser_id: values.browserId ?? null}
-      }, displayName)
+        if (values.pairingId !== expectedPairingId) throw new Error("pairing identity changed before dashboard approval")
+        return {display_name: name, pairing_id: values.pairingId, browser_id: values.browserId ?? null}
+      }, {name: displayName, expectedPairingId: pairingId})
     } finally { await popup.close() }
   }
 
@@ -133,6 +149,28 @@ export class ExtensionDriver {
     }), {storageKey: key, timeout: timeoutMs})
   }
   async socketAttempts() { return (await this.worker()).evaluate(() => globalThis.__webbyE2ESocketAttempts ?? 0) }
+  async scanAllCompletions() { return Number(await (await this.extensionWorker()).evaluate(() => chrome.storage.local.get("e2eScanAllCompletions").then(values => values.e2eScanAllCompletions ?? 0))) }
+  async waitForScanAllCompletion(after, {timeoutMs = this.workerTimeoutMs} = {}) {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const value = await this.scanAllCompletions()
+      if (value > after) return value
+      await new Promise(resolve => setImmediate(resolve))
+    }
+    throw new Error(`full scan completion did not advance beyond ${after}`)
+  }
+  async protocolEvents() { return (await this.extensionWorker()).evaluate(() => chrome.storage.local.get("e2eProtocolEvents")).then(values => values.e2eProtocolEvents ?? []) }
+  async waitForProtocolReply(type, afterSequence = 0, {timeoutMs = this.workerTimeoutMs, documentId, sanitizedUrl} = {}) {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const events = await this.protocolEvents()
+      const outbound = events.find(event => event.sequence > afterSequence && event.direction === "out" && event.type === type && (!documentId || event.observations?.some(observation => observation.document_id === documentId)) && (!sanitizedUrl || event.observations?.some(observation => observation.sanitized_url === sanitizedUrl)))
+      const reply = outbound && events.find(event => event.direction === "in" && event.ref === outbound.ref && event.status === "ok")
+      if (outbound && reply) return {outbound, reply, events}
+      await new Promise(resolve => setImmediate(resolve))
+    }
+    throw new Error(`protocol reply did not arrive: ${type}`)
+  }
   async waitForSocketAttempts(minimum = 1) {
     const deadline = Date.now() + this.workerTimeoutMs
     while (Date.now() < deadline) {
@@ -183,9 +221,14 @@ export class ExtensionDriver {
     const target = new URL(path, this.binding.fixture_url).href
     if (new URL(target).origin !== this.binding.fixture_url) throw new Error("fixture tab escaped bound origin")
     const existing = new Set(this.context.pages())
+    const pageEvent = this.context.waitForEvent("page", {predicate: candidate => !existing.has(candidate)})
     const created = await (await this.worker()).evaluate(url => chrome.tabs.create({url, active: true}), target)
-    let page = this.context.pages().find(candidate => !existing.has(candidate) && candidate.url() === target)
-    page ??= await this.context.waitForEvent("page", {predicate: candidate => !existing.has(candidate) && candidate.url() === target})
+    const eventPage = await pageEvent
+    const page = this.context.pages().find(candidate => !existing.has(candidate) && candidate.url() === target) ?? eventPage
+    if (created.id !== undefined) {
+      const actualId = await (await this.worker()).evaluate(url => chrome.tabs.query({}).then(tabs => tabs.find(tab => tab.url === url)?.id), target)
+      if (actualId !== created.id) { await page.close().catch(() => {}); throw new Error("created fixture tab target mismatch") }
+    }
     await page.waitForURL(target)
     await page.waitForLoadState("load")
     this.tabIds.set(page, created.id)
@@ -207,6 +250,7 @@ export class ExtensionDriver {
     }
     const popup = await this.popup()
     try {
+      await popup.waitForFunction(() => document.querySelector("#base-url")?.value?.length > 0)
       await popup.evaluate(() => {
         const send = chrome.runtime.sendMessage.bind(chrome.runtime)
         chrome.runtime.sendMessage = (...args) => {

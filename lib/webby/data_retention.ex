@@ -15,9 +15,15 @@ defmodule Webby.DataRetention do
   def maintain(state) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
+    abandoned_after_seconds =
+      max(
+        Keyword.fetch!(state, :abandoned_after_seconds),
+        div(Application.get_env(:webby, :invocation_timeout_ms, 15_000) + 999, 1_000) + 1
+      )
+
     with {:ok, _} <-
            Webby.Invocations.reconcile_abandoned(
-             DateTime.add(now, -Keyword.fetch!(state, :abandoned_after_seconds), :second)
+             DateTime.add(now, -abandoned_after_seconds, :second)
            ) do
       drain(
         %{
@@ -86,15 +92,41 @@ defmodule Webby.DataRetention do
   end
 
   def erase_browser(browser_id, opts \\ []) do
-    erase_browser_with_policy(browser_id, Keyword.get(opts, :audits, :anonymize))
+    audit_policy = Keyword.get(opts, :audits, :anonymize)
+    after_tombstone = Keyword.get(opts, :after_tombstone, fn -> :ok end)
+
+    if audit_policy in [:anonymize, :delete] do
+      erase_with_tombstone(browser_id, audit_policy, after_tombstone)
+    else
+      {:error, :invalid_audit_policy}
+    end
+  end
+
+  defp erase_with_tombstone(browser_id, audit_policy, after_tombstone) do
+    :ok = Webby.BrowserConnections.begin_browser_erasure(browser_id)
+
+    try do
+      :ok = after_tombstone.()
+
+      case erase_browser_with_policy(browser_id, audit_policy) do
+        {:ok, _result} = result ->
+          :ok = Webby.BrowserConnections.finish_browser_erasure(browser_id, :committed)
+          result
+
+        error ->
+          :ok = Webby.BrowserConnections.finish_browser_erasure(browser_id, :aborted)
+          error
+      end
+    rescue
+      exception ->
+        :ok = Webby.BrowserConnections.finish_browser_erasure(browser_id, :aborted)
+        reraise exception, __STACKTRACE__
+    end
   end
 
   defp erase_browser_with_policy(browser_id, audit_policy)
        when audit_policy in [:anonymize, :delete],
        do: Repo.transaction(fn -> fetch_and_erase_browser!(browser_id, audit_policy) end)
-
-  defp erase_browser_with_policy(_browser_id, _audit_policy),
-    do: {:error, :invalid_audit_policy}
 
   defp fetch_and_erase_browser!(browser_id, audit_policy) do
     browser = Repo.get(Browser, browser_id) || Repo.rollback(:not_found)
@@ -102,6 +134,11 @@ defmodule Webby.DataRetention do
   end
 
   defp erase_browser!(browser, audit_policy) do
+    Repo.update_all(
+      from(a in InvocationAudit, where: a.browser_id == ^browser.id and a.outcome == "started"),
+      set: [outcome: "failed", error_kind: "browser_erased", duration_ms: 0]
+    )
+
     deleted_audits =
       case audit_policy do
         :delete ->

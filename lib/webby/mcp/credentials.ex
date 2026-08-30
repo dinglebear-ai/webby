@@ -57,7 +57,46 @@ defmodule Webby.MCP.Credentials do
 
   def scope?(%Credential{scopes: %{"values" => scopes}}, scope), do: scope in scopes
 
-  def revoke(id) do
+  def active?(id) do
+    if Repo.exists?(from c in Credential, where: c.id == ^id and is_nil(c.revoked_at)),
+      do: :ok,
+      else: {:error, :revoked}
+  rescue
+    _exception -> {:error, :credential_unavailable}
+  end
+
+  def revoke(id, opts \\ []) do
+    persist = Keyword.get(opts, :persist, &revoke_persisted/1)
+    {:ok, previous_barrier} = Webby.BrowserConnections.begin_credential_revocation(id)
+
+    try do
+      case persist.(id) do
+        {:ok, _credential} = result ->
+          :ok = Webby.BrowserConnections.finish_credential_revocation(id, :committed)
+          result
+
+        error ->
+          :ok =
+            Webby.BrowserConnections.finish_credential_revocation(
+              id,
+              {:aborted, previous_barrier}
+            )
+
+          error
+      end
+    rescue
+      exception ->
+        :ok =
+          Webby.BrowserConnections.finish_credential_revocation(
+            id,
+            {:aborted, previous_barrier}
+          )
+
+        reraise exception, __STACKTRACE__
+    end
+  end
+
+  defp revoke_persisted(id) do
     timestamp = now()
 
     case Repo.update_all(
@@ -65,7 +104,6 @@ defmodule Webby.MCP.Credentials do
            set: [revoked_at: timestamp, updated_at: timestamp]
          ) do
       {1, _} ->
-        Webby.BrowserConnections.cancel_credential(id)
         {:ok, Repo.get!(Credential, id)}
 
       {0, _} ->

@@ -64,6 +64,23 @@ test("runner enforces declared action order rather than parallelizing dependent 
   assert.deepEqual(order, ["first:start", "first:end", "second"]); await recorder.finalize()
 })
 
+test("runner aborts and drains a timed-out action before cleanup", async t => {
+  const recorder = await syntheticRecorder(t, "e2e-action-timeout"); const order = []
+  const scenario = {id: "e2e-action-timeout", drivers: ["protocol"], artifacts: ["timeline", "world-manifest"], handles: {}, steps: [{id: "slow", action: {op: "slow"}, wait: {predicate: {kind: "present", subject: "slow.done"}, timeout_ms: 10}}], outcomes: [], cleanup: [{kind: "closed", subject: "cleanup.done"}]}
+  const actions = {slow: ({signal}) => new Promise(resolve => signal.addEventListener("abort", () => { order.push("action:drained"); resolve({}) }, {once: true}))}
+  const runner = new ScenarioRunner({scenario, driver: "protocol", world: {worldId: "world-unit", instanceNonce: "nonce", seed: 1}, recorder, actions, observe: async () => ({}), cleanup: async () => { order.push("cleanup"); return {"cleanup.done": {state: "closed"}} }, defaultTimeoutMs: 100})
+  await assert.rejects(runner.run(), error => error.code === "scenario_timeout")
+  assert.deepEqual(order, ["action:drained", "cleanup"]); await recorder.finalize()
+})
+
+test("runner preserves primary and cleanup failures", async t => {
+  const recorder = await syntheticRecorder(t, "e2e-dual-failure")
+  const scenario = {id: "e2e-dual-failure", drivers: ["protocol"], artifacts: ["timeline", "world-manifest"], handles: {}, steps: [{id: "fail", action: {op: "fail"}, wait: {predicate: {kind: "present", subject: "fail.done"}, timeout_ms: 100}}], outcomes: [], cleanup: []}
+  const runner = new ScenarioRunner({scenario, driver: "protocol", world: {worldId: "world-unit", instanceNonce: "nonce", seed: 1}, recorder, actions: {fail: async () => { throw new Error("primary") }}, observe: async () => ({}), cleanup: async () => { throw new Error("cleanup") }})
+  await assert.rejects(runner.run(), error => error instanceof AggregateError && error.errors.map(item => item.message).join(",") === "primary,cleanup")
+  await recorder.finalize()
+})
+
 test("synthetic lifecycle vocabulary covers every locked terminal state", () => {
   assert.doesNotThrow(() => assertLifecycleVocabulary({caller: {state: "cancelled"}, browser_work: {state: "aborted"}, session: {state: "invalidated"}, late_result: {state: "rejected"}, capacity: {state: "released"}, audit: {state: "failed", terminal: true}}))
 })
@@ -85,7 +102,7 @@ test("complete simulated protocol pair-to-audit vertical slice", {timeout: 120_0
     "mcp.invoke": async ({handles}) => credentialLease.use(async secret => {
       assert.equal(handles.get("browser", "browser"), browserId); assert.equal(handles.get("credential", "credential"), credentialId)
       mcp = new MCPClient({baseUrl: world.baseUrl, token: secret, version: "2025-06-18", recorder: {record: recorder.producers.mcp.event}}); await mcp.initialize()
-      const pages = await mcp.call({action: "page.list"}); const registered = pages.body.result.structuredContent.find(item => item.id === registrationId); assert.equal(registered.available, true)
+      const pages = await mcp.call({action: "page.list"}); const pageList = pages.body.result.structuredContent ?? JSON.parse(pages.body.result.content[0].text); const registered = pageList.find(item => item.id === registrationId); assert.equal(registered.available, true)
       const tools = await mcp.call({action: "page.tools", params: {page: registrationId}}); const session = tools.body.result.structuredContent.sessions[0]
       const effect = {probe: "scenario-effect"}; const expectedResult = {echo: effect.probe}
       const pending = mcp.call({action: "page.call", params: {page: registrationId, session: session.id, tool: "tool_0", catalog_revision: session.catalog_revision, arguments: effect}}); const call = await toolCall

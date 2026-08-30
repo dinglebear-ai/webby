@@ -74,6 +74,45 @@ defmodule Webby.BrowserConnectionsTest do
     assert 0 = BrowserConnections.cancel_credential(credential_id)
   end
 
+  test "failed credential admission never dispatches browser work" do
+    browser_id = Ecto.UUID.generate()
+    credential_id = Ecto.UUID.generate()
+    assert :ok = BrowserConnections.register(browser_id, self())
+    assert {:ok, nil} = BrowserConnections.begin_credential_revocation(credential_id)
+
+    assert {:error, "revoked", _message} =
+             BrowserConnections.call(
+               browser_id,
+               %{"tool_name" => "forbidden"},
+               100,
+               {credential_id, "request"},
+               nil,
+               credential_id
+             )
+
+    refute_receive {:tool_call, _payload}
+  end
+
+  test "browser erasure cancels calls and disconnects the owned channel" do
+    browser_id = Ecto.UUID.generate()
+    assert :ok = BrowserConnections.register(browser_id, self())
+
+    task = Task.async(fn -> BrowserConnections.call(browser_id, %{}, 500) end)
+    assert_receive {:tool_call, %{"call_id" => call_id}}
+    assert :ok = BrowserConnections.begin_browser_erasure(browser_id)
+
+    assert {:error, "browser_erased", _message} =
+             BrowserConnections.call(browser_id, %{"late" => true}, 100)
+
+    refute_receive {:tool_call, %{"late" => true}}
+    assert :ok = BrowserConnections.finish_browser_erasure(browser_id, :committed)
+    assert_receive :browser_erased
+    assert_receive {:tool_cancel, %{"call_id" => ^call_id}}
+
+    assert {:error, "browser_erased", _message} = Task.await(task)
+    assert {:error, "browser_erased", _message} = BrowserConnections.call(browser_id, %{}, 100)
+  end
+
   test "rejects duplicate active external keys without disturbing the first call" do
     browser_id = Ecto.UUID.generate()
     key = {Ecto.UUID.generate(), 1}

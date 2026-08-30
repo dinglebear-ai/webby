@@ -10,6 +10,7 @@ import {ChromiumWorld} from "../../support/chromium-world.js"
 import {DashboardDriver} from "../../support/dashboard-driver.js"
 import {MCPClient} from "../../support/mcp-client.js"
 import {assertProtocolLifecycleOutcome, protocolLifecycleRows} from "../../support/lifecycle-matrix.js"
+import {protocolBrowserRevokeOracle} from "../../support/lifecycle-parity.js"
 import {SimulatedBrowser} from "../../support/simulated-browser.js"
 import {WebbyWorld} from "../../support/world.js"
 
@@ -180,6 +181,7 @@ test("every lifecycle row owned by webby-ihb.16 executes against an isolated liv
   assert.ok(rows.length > 0)
   for (const row of rows) await t.test(row.id, {timeout: 60_000}, async () => {
     const outcome = await liveRow(row)
+    if (row.transition === "browser-revoke" && row.phase === "in-flight") assert.deepEqual(outcome.normalized, protocolBrowserRevokeOracle)
     assert.equal(assertProtocolLifecycleOutcome(row, outcome, {world_nonce: outcome.world_nonce, document_generation: outcome.document_generation, socket_generation: outcome.socket_generation}), outcome)
   })
 })

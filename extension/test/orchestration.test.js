@@ -16,6 +16,13 @@ test("a stale scan generation cannot commit its observation", async () => {
   assert.equal(commits, 0);
 });
 
+test("a stale scan generation compensates an already published observation", async () => {
+  const events = [];
+  const result = await publishCurrentObservation(1, () => 2, async () => events.push("published"), () => events.push("committed"), async () => events.push("closed"));
+  assert.equal(result, undefined);
+  assert.deepEqual(events, ["published", "closed"]);
+});
+
 test("a failed discovery publish cannot commit success-like local state", async () => {
   let commits = 0;
   await assert.rejects(

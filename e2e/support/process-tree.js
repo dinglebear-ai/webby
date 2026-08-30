@@ -95,11 +95,18 @@ export async function reapProcessGroup(identity, nonce, {graceMs = 2_000} = {}) 
       throw new Error("orphan process group identity mismatch; refusing to signal")
     }
   }
-  process.kill(-identity.pgid, "SIGTERM")
+  try { process.kill(-identity.pgid, "SIGTERM") }
+  catch (error) {
+    if (error.code === "ESRCH") return {alreadyGone: true}
+    throw error
+  }
   if (!(await waitForEmptyGroup(identity.pgid, Date.now() + graceMs))) {
     const survivors = await processGroupMembers(identity.pgid)
     if (survivors.some(member => member.uid !== identity.uid)) throw new Error("process group ownership changed during reap")
-    process.kill(-identity.pgid, "SIGKILL")
+    try { process.kill(-identity.pgid, "SIGKILL") }
+    catch (error) {
+      if (error.code !== "ESRCH") throw error
+    }
     if (!(await waitForEmptyGroup(identity.pgid, Date.now() + graceMs))) throw new Error("process group or listener survived SIGKILL")
   }
   return {alreadyGone: false}

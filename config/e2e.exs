@@ -3,7 +3,7 @@ import Config
 world_root = System.fetch_env!("WEBBY_E2E_WORLD_ROOT") |> Path.expand()
 database = System.fetch_env!("WEBBY_DATABASE_PATH") |> Path.expand()
 runtime_file = System.fetch_env!("WEBBY_E2E_RUNTIME_FILE") |> Path.expand()
-port = 0
+port = System.fetch_env!("WEBBY_PORT") |> String.to_integer()
 authority_port = System.fetch_env!("WEBBY_AUTHORITY_PORT") |> String.to_integer()
 instance_nonce = System.fetch_env!("WEBBY_E2E_INSTANCE_NONCE")
 

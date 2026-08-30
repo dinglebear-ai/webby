@@ -49,7 +49,7 @@ test("complete shared pair-to-audit slice through Chromium", {timeout: 180_000},
   assert.deepEqual(result.normalized["call.succeeded"], {state: "succeeded", terminal: true, value: {probe: "chromium-scenario-effect"}})
   assert.equal(result.handles.get("audit", "audit"), adapter.auditId)
 
-  world.metrics.disk_bytes = await diskBytes(world.root)
+  world.metrics.disk_bytes = await diskBytes(world.root, {symlinkRoots: [world.workspace.profile]})
   const evidence = chromiumEvidence({startupSamples: [world.metrics.startup_ms], world, durationMs: performance.now() - started, artifactBytes: recorder.accountedBytes, overflow: {occurred: Boolean(recorder.journal.truncated), policy: "fail_closed_truncation_latch"}})
   await recorder.producers.world.diagnostic("chromium-evidence.json", evidence, ["workers", "retries", "startup_ms", "peak_rss_kb", "disk_bytes", "artifact_bytes", "duration_ms", "recorder_overflow"])
   const artifact = await recorder.finalize({cleanup: {chromium: "closed", fixture: "closed", mcp: "closed", world: "closed", leaked_ports: 0, leaked_processes: 0, leaked_profiles: 0}})

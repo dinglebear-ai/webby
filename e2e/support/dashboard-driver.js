@@ -119,7 +119,20 @@ export class DashboardDriver {
           if (signal?.aborted) queueMicrotask(abort)
         })
         try { return await Promise.race([operationPromise, interruption]) }
-        finally { clearTimeout(timer); signal?.removeEventListener("abort", abort) }
+        catch (error) {
+          controller.abort(error)
+          let drainTimer
+          let drainError
+          try {
+            await Promise.race([
+              operationPromise.catch(() => undefined),
+              new Promise((_, reject) => { drainTimer = setTimeout(() => reject(Object.assign(new Error("credential operation did not drain after abort"), {code: "credential_operation_drain_timeout", cause: error})), timeoutMs) }),
+            ])
+          } catch (failure) { drainError = failure }
+          finally { clearTimeout(drainTimer) }
+          if (drainError) throw new AggregateError([error, drainError], "Credential operation failed and did not drain", {cause: error})
+          throw error
+        } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort) }
       })
     } finally {
       try {
@@ -165,17 +178,25 @@ export class DashboardDriver {
       }
       throw error
     }
-    const revoke = async () => {
+    let revocation
+    const revoke = async ({dashboard = this} = {}) => {
       if (!active) return
-      active = false
+      if (revocation) return revocation
+      revocation = (async () => {
       try {
-        if (row && await row.getByRole("button", {name: "Revoke", exact: true}).count()) await this.click(row, "Revoke")
-        await this.page.locator(dashboardSelectors.token).waitFor({state: "detached"})
-        await this.clearBrowserSecretSurfaces()
-      } finally {
+        const activeRow = dashboard === this ? row : dashboard.row("mcp-credential", credentialId)
+        if (activeRow && await activeRow.getByRole("button", {name: "Revoke", exact: true}).count()) await dashboard.click(activeRow, "Revoke")
+        const confirmed = dashboard.row("mcp-credential", credentialId)
+        await confirmed.getByRole("button", {name: "Revoke", exact: true}).waitFor({state: "detached"})
+        await confirmed.getByText("Revoked", {exact: false}).waitFor({state: "visible"})
+        await dashboard.page.locator(dashboardSelectors.token).waitFor({state: "detached"})
+        await dashboard.clearBrowserSecretSurfaces()
+        active = false
         secret = undefined
         await context.tracing.start({screenshots: false, snapshots: false, sources: false})
-      }
+      } finally { revocation = undefined }
+      })()
+      return revocation
     }
     return Object.freeze({
       id: credentialId,

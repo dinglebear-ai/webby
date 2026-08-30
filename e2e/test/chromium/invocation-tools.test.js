@@ -193,6 +193,7 @@ test("real Chromium exhausts fixture outcomes, catalog mutation, cancellation, a
     assert.deepEqual({...actual.delayed, effects: "bounded"}, {ok: true, name: "delayed", effects: "bounded", revision: 1})
     liveRows.add(fixtureToolRows.delayed)
 
+    await chromium.artifacts.duringExpectedFixtureCapacityDenial(async () => {
     const capacityClients = Array.from({length: 4}, () => new MCPClient({baseUrl: world.baseUrl, token, version: "2025-06-18", limits: {pendingRequests: 32, requestMs: 60_000, lifetimeMs: 180_000}}))
     for (const client of capacityClients) { clients.add(client); assert.equal((await client.initialize()).status, 200) }
     const capacityCalls = []
@@ -220,6 +221,7 @@ test("real Chromium exhausts fixture outcomes, catalog mutation, cancellation, a
     assert.equal(content(await capacityClients[0].call(callArgs(registrationId, session, "immediate"), {id: 900})).ok, true)
     liveRows.add("capacity.release")
     for (const client of capacityClients) { client.close(); clients.delete(client) }
+    })
 
     const beforeCancel = (await audits(world.databasePath, lease.id)).length
     const preAborted = new AbortController(); preAborted.abort()

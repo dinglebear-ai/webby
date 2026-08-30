@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import {mkdtemp, readFile, rm} from "node:fs/promises"
+import {lstat, mkdtemp, readFile, readdir, rm} from "node:fs/promises"
 import {tmpdir} from "node:os"
 import {join, resolve} from "node:path"
 import test from "node:test"
@@ -7,7 +7,7 @@ import {ArtifactRecorder} from "../support/artifacts.js"
 import {BrowserArtifacts, classifyBrowserError} from "../support/browser-artifacts.js"
 import {ChromiumWorld} from "../support/chromium-world.js"
 import {validateBoundWorld} from "../support/extension-driver.js"
-import {extensionIdForKey, generateTestExtension, hashExtensionTree, TEST_MANIFEST_KEY} from "../support/test-manifest.js"
+import {extensionIdForKey, generateTestExtension, hashExtensionTree, RUNTIME_EXTENSION_FILES, TEST_MANIFEST_KEY} from "../support/test-manifest.js"
 import {WebbyWorld} from "../support/world.js"
 import {startFixtureServer} from "../fixture/server.js"
 
@@ -49,6 +49,15 @@ test("generated copy only adds approved manifest and isolated binding material",
     assert.match(generatedWorker, /initializeBoundE2EWorker/)
     assert.match(generatedWorker, /e2eAuthenticatedBrowserId/)
     assert.match(generatedWorker, /e2eLastScan/)
+    const walk = async (directory, prefix = "") => (await Promise.all((await readdir(directory, {withFileTypes: true})).map(async entry => {
+      const relative = join(prefix, entry.name)
+      const path = join(directory, entry.name)
+      assert.equal((await lstat(path)).isSymbolicLink(), false, relative)
+      return entry.isDirectory() ? walk(path, relative) : [relative]
+    }))).flat()
+    const copied = (await walk(destination)).sort()
+    assert.equal(copied.some(path => path.startsWith("node_modules/")), false)
+    assert.deepEqual(copied, [...RUNTIME_EXTENSION_FILES, "e2e-binding.json"].sort())
   } finally { await rm(root, {recursive: true, force: true}) }
 })
 
@@ -71,6 +80,43 @@ test("central classifier narrowly recognizes restart transients and rejects real
   assert.equal(classifyBrowserError({kind: "console", text: {level: "info", message: "ready"}}).severity, "diagnostic")
   assert.equal(classifyBrowserError({kind: "worker_console", text: {level: "error", message: "boom"}}).severity, "failure")
   assert.equal(classifyBrowserError({kind: "worker_console", text: {level: "info", message: "ready"}}).severity, "diagnostic")
+  const refused = {kind: "network_error", text: {message: "net::ERR_CONNECTION_REFUSED", url: "http://127.0.0.1:65001/health"}}
+  assert.equal(classifyBrowserError(refused).severity, "failure")
+  assert.equal(classifyBrowserError({...refused, expectedNetworkOutage: true}).code, "expected_restart_outage")
+  const aborted = {kind: "network_error", text: {message: "net::ERR_ABORTED", url: "http://127.0.0.1:65001/"}}
+  assert.equal(classifyBrowserError(aborted).severity, "failure")
+  assert.equal(classifyBrowserError({...aborted, expectedNetworkOutage: true}).code, "expected_restart_outage")
+  const errorPage = {kind: "worker_console", text: {level: "error", message: "Webby tab scan failed {error: Error:Frame with ID 1 is showing error page}"}}
+  assert.equal(classifyBrowserError(errorPage).severity, "failure")
+  assert.equal(classifyBrowserError({...errorPage, expectedNetworkOutage: true}).code, "expected_restart_error_page")
+  const revokedClose = {kind: "worker_console", text: {level: "error", message: "Webby observation close failed; resync required {error: channel_not_ready}", url: "chrome-extension://bound/src/service_worker.js"}}
+  assert.equal(classifyBrowserError(revokedClose).severity, "failure")
+  assert.equal(classifyBrowserError({...revokedClose, expectedBrowserRevocation: true}).code, "expected_revoked_observation_close")
+  const revokedEvent = {kind: "worker_console", text: {level: "error", message: "Webby channel event failed {error: Error: channel_disconnected}", url: "chrome-extension://bound/src/service_worker.js"}}
+  assert.equal(classifyBrowserError(revokedEvent).severity, "failure")
+  assert.equal(classifyBrowserError({...revokedEvent, expectedBrowserRevocation: true}).code, "expected_revoked_channel_disconnect")
+  const revokedCall = {...revokedEvent, text: {...revokedEvent.text, message: "Webby channel event failed {callId: a3d3bda1-a1f9-4212-aa92-6b976783b03a, error: Error: channel_disconnected\n    at socket.onclose (chrome-extension://bound/src/channel.js:1:1)}"}}
+  assert.equal(classifyBrowserError({...revokedCall, expectedBrowserRevocation: true}).code, "expected_revoked_channel_disconnect")
+  assert.equal(classifyBrowserError({...revokedCall, text: {...revokedCall.text, url: "service-worker"}, expectedBrowserRevocation: true, expectedExtensionId: "a".repeat(32)}).code, "expected_revoked_channel_disconnect")
+  const notReadyCall = {...revokedCall, text: {...revokedCall.text, url: "service-worker", message: revokedCall.text.message.replace("channel_disconnected", "channel_not_ready")}}
+  assert.equal(classifyBrowserError({...notReadyCall, expectedBrowserRevocation: true, expectedExtensionId: "a".repeat(32)}).code, "expected_revoked_channel_not_ready")
+  assert.equal(classifyBrowserError({...revokedCall, text: {...revokedCall.text, url: "service-worker"}, expectedBrowserRevocation: true}).severity, "failure")
+  const shutdownAbort = {kind: "network_error", text: {message: "net::ERR_ABORTED", url: "http://127.0.0.1:65001/"}}
+  assert.equal(classifyBrowserError(shutdownAbort).severity, "failure")
+  assert.equal(classifyBrowserError({...shutdownAbort, expectedBrowserShutdown: true}).code, "expected_browser_shutdown_abort")
+  const shutdownConsole = {kind: "worker_console", text: {level: "error", message: "Webby E2E binding failed Error: The browser is shutting down.", url: `chrome-extension://${"a".repeat(32)}/src/service_worker.js`}, expectedExtensionId: "a".repeat(32)}
+  assert.equal(classifyBrowserError(shutdownConsole).severity, "failure")
+  assert.equal(classifyBrowserError({...shutdownConsole, expectedBrowserShutdown: true}).code, "expected_browser_shutdown_console")
+  assert.equal(classifyBrowserError({...shutdownConsole, expectedBrowserShutdown: true, text: {...shutdownConsole.text, message: `${shutdownConsole.text.message} unexpected`}}).severity, "failure")
+  assert.equal(classifyBrowserError({...shutdownConsole, expectedBrowserShutdown: true, text: {...shutdownConsole.text, url: "service-worker"}}).severity, "failure")
+  const capacityDenial = {kind: "console", text: {level: "error", message: "Failed to load resource: the server responded with a status of 400 (Bad Request)", url: "http://127.0.0.1:65002/__fixture/wait?scenario_id=chromium_invocation_tools&call_id=capacity_99"}}
+  assert.equal(classifyBrowserError(capacityDenial).severity, "failure")
+  assert.equal(classifyBrowserError({...capacityDenial, expectedFixtureCapacityDenial: true}).code, "expected_fixture_capacity_denial")
+  assert.equal(classifyBrowserError({...capacityDenial, expectedFixtureCapacityDenial: true, text: {...capacityDenial.text, message: "Failed to load resource: the server responded with a status of 401 (Unauthorized)"}}).severity, "failure")
+  assert.equal(classifyBrowserError({...capacityDenial, expectedFixtureCapacityDenial: true, text: {...capacityDenial.text, url: capacityDenial.text.url.replace("capacity_99", "other_99")}}).severity, "failure")
+  assert.equal(classifyBrowserError({...revokedCall, text: {...revokedCall.text, message: revokedCall.text.message.replace("channel_disconnected", "unexpected_failure")}, expectedBrowserRevocation: true}).severity, "failure")
+  assert.equal(classifyBrowserError({...revokedEvent, kind: "console", expectedBrowserRevocation: true}).severity, "failure")
+  assert.equal(classifyBrowserError({...revokedEvent, text: {...revokedEvent.text, url: "https://fixture.test/"}, expectedBrowserRevocation: true}).severity, "failure")
 })
 
 test("browser artifacts obey recorder secret zones", async () => {

@@ -45,6 +45,17 @@ MIX_ENV=test mise exec -- mix credo --strict
 npm test --prefix extension
 ```
 
+The live E2E harness has reproducible protocol, Chromium, compatibility, and
+replay commands. See [Live E2E testing](docs/e2e-testing.md) for setup, CI tiers,
+budgets, artifact safety, and debugging. The quickest blocking local gate is:
+
+```bash
+npm ci --prefix e2e
+./scripts/e2e validate
+./scripts/e2e protocol:pr
+./scripts/e2e chromium:smoke
+```
+
 For extension development, load the [`extension`](extension) directory as an
 unpacked Chrome extension, open its popup, set the loopback Webby URL if needed,
 and submit a pairing request for approval in the local dashboard.

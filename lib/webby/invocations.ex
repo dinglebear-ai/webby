@@ -3,6 +3,7 @@ defmodule Webby.Invocations do
 
   import Ecto.Query
   alias Webby.{BrowserConnections, InvocationAudit, Repo}
+  alias Webby.MCP.Credentials
   require Logger
 
   @completion_attempts 3
@@ -32,8 +33,7 @@ defmodule Webby.Invocations do
 
         timeout = Application.get_env(:webby, :invocation_timeout_ms, 15_000)
 
-        result =
-          BrowserConnections.call(session.browser_id, payload, timeout, external_key, audit.id)
+        result = call_browser(session, payload, timeout, external_key, audit.id, context)
 
         duration = elapsed_ms(started)
         finish_audit(audit, result, duration)
@@ -161,10 +161,7 @@ defmodule Webby.Invocations do
     attempts = Keyword.get(opts, :attempts, @completion_attempts)
     update_fun = Keyword.get(opts, :update_fun, &update_audit/4)
 
-    :global.trans(
-      {__MODULE__, :audit_completion},
-      fn -> complete_with_retry(id, outcome, error_kind, duration, attempts, update_fun) end
-    )
+    complete_with_retry(id, outcome, error_kind, duration, attempts, update_fun)
   end
 
   defp complete_with_retry(id, outcome, error_kind, duration, attempts, update_fun) do
@@ -204,6 +201,31 @@ defmodule Webby.Invocations do
 
   defp elapsed_ms(started),
     do: System.convert_time_unit(System.monotonic_time() - started, :native, :millisecond)
+
+  defp call_browser(session, payload, timeout, external_key, audit_id, context) do
+    credential_id = context[:credential_id]
+
+    case admit_credential(credential_id) do
+      :ok ->
+        BrowserConnections.call(
+          session.browser_id,
+          payload,
+          timeout,
+          external_key,
+          audit_id,
+          credential_id
+        )
+
+      {:error, :revoked} ->
+        {:error, "revoked", "The MCP credential was revoked"}
+
+      {:error, :credential_unavailable} ->
+        {:error, "credential_unavailable", "The MCP credential could not be validated"}
+    end
+  end
+
+  defp admit_credential(nil), do: :ok
+  defp admit_credential(credential_id), do: Credentials.active?(credential_id)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 end

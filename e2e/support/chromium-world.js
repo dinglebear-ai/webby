@@ -57,16 +57,18 @@ export class ChromiumWorld {
     const generated = await generateTestExtension({source: extensionSource, destination: extensionPath, fixtureUrl: manifest.fixture_url, world: manifest, broadHostPermissions})
     validateBoundWorld(generated.binding, manifest)
     const args = [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
-    const context = await chromiumApi.launchPersistentContext(manifest.browser_profile_path, {
-      channel: "chromium", headless: true, args, serviceWorkers: "allow",
-    })
-    // Chromium 142+ gates loopback/private-network page access behind an
-    // explicit user permission. This is the isolated fixture's exact origin,
-    // not a browser-wide bypass or disabled security feature.
-    await context.grantPermissions(["local-network-access"], {origin: manifest.fixture_url})
-    await context.tracing.start({screenshots: false, snapshots: false, sources: false})
+    let context
+    let artifacts
     try {
-      const artifacts = new BrowserArtifacts(recorder.producers.chromium)
+      context = await chromiumApi.launchPersistentContext(manifest.browser_profile_path, {
+        channel: "chromium", headless: true, args, serviceWorkers: "allow",
+      })
+      // Chromium 142+ gates loopback/private-network page access behind an
+      // explicit user permission. This is the isolated fixture's exact origin,
+      // not a browser-wide bypass or disabled security feature.
+      await context.grantPermissions(["local-network-access"], {origin: manifest.fixture_url})
+      await context.tracing.start({screenshots: false, snapshots: false, sources: false})
+      artifacts = new BrowserArtifacts(recorder.producers.chromium, {expectedExtensionId: generated.binding.expected_extension_id})
       artifacts.attach(context)
       const driver = new ExtensionDriver({context, binding: generated.binding, world: manifest, artifacts})
       await driver.worker()
@@ -74,13 +76,20 @@ export class ChromiumWorld {
       await recorder.producers.chromium.event("browser.launched", {extension_id: generated.binding.expected_extension_id, profile: "isolated", channel: "chromium"})
       return instance
     } catch (error) {
-      const closed = await Promise.race([
-        context.close(),
-        new Promise(resolveClose => setTimeout(() => resolveClose(false), closeTimeoutMs)),
-      ]).then(result => result !== false).catch(() => false)
+      let timeout
+      const close = async () => {
+        if (!context) return true
+        const operation = () => context.close()
+        const shutdown = artifacts ? artifacts.duringExpectedBrowserShutdown(operation) : operation()
+        return Promise.race([
+          shutdown.then(() => true),
+          new Promise(resolveClose => { timeout = setTimeout(() => resolveClose(false), closeTimeoutMs) }),
+        ]).catch(() => false).finally(() => clearTimeout(timeout))
+      }
+      const closed = await close()
       if (!closed) {
-        if (typeof world?.reap === "function") await world.reap()
-        else if (typeof world?.teardown === "function") await world.teardown({remove: false})
+        if (typeof world?.reap === "function") await world.reap().catch(() => {})
+        else if (typeof world?.teardown === "function") await world.teardown({remove: false}).catch(() => {})
       }
       throw error
     }
@@ -112,10 +121,10 @@ export class ChromiumWorld {
     } catch (error) { errors.push(error) }
     let timeout
     try {
-      await Promise.race([
+      await this.artifacts.duringExpectedBrowserShutdown(() => Promise.race([
         context.close(),
         new Promise((_, reject) => { timeout = setTimeout(() => reject(Object.assign(new Error("Chromium close timed out"), {code: "chromium_close_timeout"})), this.closeTimeoutMs) }),
-      ])
+      ]))
     } catch (error) { errors.push(error) }
     finally { clearTimeout(timeout); this.context = undefined }
     try {

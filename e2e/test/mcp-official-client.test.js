@@ -22,6 +22,18 @@ test("pinned official SDK inventory accounts for shared actions, outcomes, and s
   assert.deepEqual(authoritative.scenario_ids, ["e2e-shared-vertical-slice", "e2e-fixture-tool-outcomes", "e2e-lifecycle-removal"])
 })
 
+test("official client reports closing truthfully and force-closes a hung shutdown", async () => {
+  const official = new OfficialMCPClient({baseUrl: "http://127.0.0.1:65001", deadlines: {shutdown: 10}})
+  let forced = false
+  official.transport = {terminateSession: () => new Promise(() => {}), close: async () => { forced = true }}
+  official.client = {close: () => new Promise(() => {})}
+  const closing = official.close()
+  assert.deepEqual(official.handles(), {active_requests: 0, timers: 1, transport_closed: false, closed: false})
+  await assert.rejects(closing, error => error.code === "official_mcp_shutdown_timeout")
+  assert.equal(forced, true)
+  assert.deepEqual(official.handles(), {active_requests: 0, timers: 0, transport_closed: false, closed: false})
+})
+
 test("official Streamable HTTP client negotiates, lists, pings, and runs every broker action", {timeout: 60_000}, async t => {
   const world = await WebbyWorld.start({scenarioId: "official-mcp-actions", preserveArtifacts: true})
   const credential = await world.provisionCredential({scopes: ["read", "call"]})
@@ -51,7 +63,7 @@ test("official Streamable HTTP client negotiates, lists, pings, and runs every b
 })
 
 test("official client executes every shared page.call terminal outcome through live browser work", {timeout: 120_000}, async t => {
-  const world = await WebbyWorld.start({scenarioId: "official-mcp-terminals", preserveArtifacts: true})
+  const world = await WebbyWorld.start({scenarioId: "official-mcp-terminals", preserveArtifacts: true, invocationTimeoutMs: 1_000})
   const recorder = await new ArtifactRecorder({root: join(world.root, "official-terminal-artifacts"), scenarioId: "official-mcp-terminals", worldId: world.worldId, versions: {mcp_client: compatibility.sdk.version}}).open()
   const browser = new SimulatedBrowser({baseUrl: world.baseUrl, producer: recorder.producers.protocol})
   let chromium; let official; let malformedClient
@@ -99,7 +111,7 @@ test("official client executes every shared page.call terminal outcome through l
   await assert.rejects(call.response, /structuredContent|record|array/i); corrupting.active = false
 
   const cancelled = new AbortController(); const cancelSeen = browser.waitFor("tool.cancel")
-  call = begin(official, {signal: cancelled.signal}); const cancelledResponse = assert.rejects(call.response, /abort|cancel|official cancellation/i); inbound = await call.arrived; cancelled.abort("official cancellation")
+  call = begin(official, {signal: cancelled.signal}); const cancelledResponse = assert.rejects(call.response, /abort|cancel|official cancellation/i); inbound = await call.arrived; await official.cancel(official.callRequestId()); cancelled.abort("official cancellation")
   const cancelledNotice = await cancelSeen; assert.equal(cancelledNotice.call_id, inbound.call_id)
   await cancelledResponse
   const lateReply = await browser.message("tool.result", {call_id: inbound.call_id, result: {too_late: true}})

@@ -71,6 +71,7 @@ function validateResult(result, scenario, adapter, errors) {
     rawKeys.add(observable.key);
   }
   for (const key of actual) if (!projected.has(key)) errors.push(`${adapter}/${scenario.id}: normalized outcome ${key} has no raw observable provenance`);
+  if (projected.size !== (result.raw_observables ?? []).length) errors.push(`${adapter}/${scenario.id}: every raw observable must map one-to-one to a normalized outcome`);
   const committed = scenario.parity?.[adapter];
   if (!committed) errors.push(`${adapter}/${scenario.id}: scenario has no committed parity contract`);
   const expectedRaw = committed?.required_raw_keys ?? [];

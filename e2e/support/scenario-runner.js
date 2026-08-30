@@ -70,23 +70,40 @@ export class ScenarioRunner {
   }
 
   async bounded(operation, timeoutMs, label) {
+    const controller = new AbortController()
+    const pending = Promise.resolve().then(() => operation(controller.signal))
     let timer
     try {
-      return await Promise.race([operation(), new Promise((_, reject) => { timer = setTimeout(() => reject(new ScenarioInfrastructureError("scenario_timeout", `${label} timed out`)), timeoutMs ?? this.defaultTimeoutMs) })])
+      return await Promise.race([pending, new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new ScenarioInfrastructureError("scenario_timeout", `${label} timed out`)) }, timeoutMs ?? this.defaultTimeoutMs) })])
+    } catch (error) {
+      controller.abort(error)
+      let drainTimer
+      let drainError
+      try {
+        await Promise.race([
+          pending.catch(() => undefined),
+          new Promise((_, reject) => { drainTimer = setTimeout(() => reject(new ScenarioInfrastructureError("scenario_drain_timeout", `${label} did not drain after cancellation`, {cause: error})), timeoutMs ?? this.defaultTimeoutMs) }),
+        ])
+      } catch (failure) { drainError = failure }
+      finally { clearTimeout(drainTimer) }
+      if (drainError) throw new AggregateError([error, drainError], `${label} failed and did not drain`, {cause: error})
+      throw error
     } finally { clearTimeout(timer) }
   }
 
   async run() {
     await this.event("scenario.started", {scenario_id: this.scenario.id, driver: this.driver, seed: this.world.seed, contract_hash: this.handles.contractHash})
+    let completed
+    let primaryError
     try {
       for (const step of this.scenario.steps) {
         const action = this.actions[step.action.op]
         if (!action) throw new ScenarioInfrastructureError("missing_action", `no action registered for ${step.action.op}`)
         await this.event("scenario.step.started", {step_id: step.id, operation: step.action.op})
-        const result = await this.bounded(() => action({params: step.action.params ?? {}, handles: this.handles, observations: this.observations}), step.wait.timeout_ms, step.id)
+        const result = await this.bounded(signal => action({params: step.action.params ?? {}, handles: this.handles, observations: this.observations, signal}), step.wait.timeout_ms, step.id)
         if (result?.handles) for (const [name, value] of Object.entries(result.handles)) this.handles.bind(name, this.scenario.handles[name], String(value))
         Object.assign(this.observations, result?.observations)
-        Object.assign(this.observations, await this.bounded(() => this.observe(step, this), step.wait.timeout_ms, `${step.id} observation`))
+        Object.assign(this.observations, await this.bounded(signal => this.observe(step, this, signal), step.wait.timeout_ms, `${step.id} observation`))
         if (!Object.hasOwn(this.observations, step.wait.predicate.subject)) throw new ScenarioInfrastructureError("missing_observation", `action ${step.action.op} did not produce ${step.wait.predicate.subject}`)
         assertPredicate(step.wait.predicate, this.observations, step.id)
         await this.event("scenario.step.completed", {step_id: step.id, operation: step.action.op})
@@ -97,13 +114,19 @@ export class ScenarioRunner {
       }
       await this.event("scenario.completed", {scenario_id: this.scenario.id, outcome_keys: this.scenario.outcomes.map(item => item.key)})
       await this.assertJournalContinuity()
-      return {observations: this.observations, handles: this.handles, normalized: Object.fromEntries(this.scenario.outcomes.map(item => [item.key, this.observations[item.predicate.subject]]))}
+      completed = {observations: this.observations, handles: this.handles, normalized: Object.fromEntries(this.scenario.outcomes.map(item => [item.key, this.observations[item.predicate.subject]]))}
     } catch (error) {
+      primaryError = error
       await this.recorder.producers.world.failure({summary: error.message, code: error.code ?? "scenario_failed", scenario_id: this.scenario.id}).catch(() => {})
-      throw error
-    } finally {
-      const cleanup = await this.bounded(() => this.cleanup(this), this.defaultTimeoutMs, "scenario cleanup")
-      for (const predicate of this.scenario.cleanup) assertPredicate(predicate, cleanup, predicate.subject)
     }
+    let cleanupError
+    try {
+      const cleanup = await this.bounded(signal => this.cleanup(this, signal), this.defaultTimeoutMs, "scenario cleanup")
+      for (const predicate of this.scenario.cleanup) assertPredicate(predicate, cleanup, predicate.subject)
+    } catch (error) { cleanupError = error }
+    if (primaryError && cleanupError) throw new AggregateError([primaryError, cleanupError], "Scenario and cleanup both failed", {cause: primaryError})
+    if (primaryError) throw primaryError
+    if (cleanupError) throw cleanupError
+    return completed
   }
 }

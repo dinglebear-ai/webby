@@ -10,6 +10,11 @@ import {closeObservations, executionAllowed, publishCurrentObservation, ScanSche
 const DEFAULTS = {baseUrl: "http://127.0.0.1:6477", scanningMode: "granted_sites", scanningPaused: false};
 /** @type {WebbyChannel | undefined} */
 let channel;
+/** @type {Promise<void> | undefined} */
+let initialization;
+let initializationGeneration = 0;
+/** @type {Promise<{publicKey?: string, privateKey?: JsonWebKey, browserId?: string}> | undefined} */
+let identityCreation;
 /** @type {Map<number | undefined, Observation>} */
 let observations = new Map();
 /** @type {Map<number, number>} */
@@ -54,6 +59,8 @@ chrome.storage.onChanged.addListener((changes) => {
   if (("baseUrl" in changes || "browserId" in changes) && channel) {
     channel.close();
     channel = undefined;
+    initializationGeneration += 1;
+    initialization = undefined;
   }
   initialize();
 });
@@ -65,6 +72,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 async function initialize() {
+  if (initialization) return initialization;
+  const generation = ++initializationGeneration;
+  initialization = initializeGeneration(generation).finally(() => {
+    if (generation === initializationGeneration) initialization = undefined;
+  });
+  return initialization;
+}
+
+/** @param {number} generation */
+async function initializeGeneration(generation) {
   await chrome.alarms.create("webby-periodic-scan", {periodInMinutes: 1});
   const settings = {...DEFAULTS, ...await chrome.storage.local.get(Object.keys(DEFAULTS))};
   try { settings.baseUrl = parseLoopbackBaseUrl(settings.baseUrl); } catch {
@@ -72,8 +89,8 @@ async function initialize() {
     await chrome.storage.local.set({baseUrl: settings.baseUrl});
   }
   const identity = await ensureIdentity();
-  if (!channel) {
-    channel = new WebbyChannel({
+  if (!channel && generation === initializationGeneration) {
+    const candidate = new WebbyChannel({
       baseUrl: settings.baseUrl,
       extensionId: chrome.runtime.id,
       browserId: identity.browserId,
@@ -81,7 +98,8 @@ async function initialize() {
       onReady: resumeAndScan,
       onEvent: handleServerEvent
     });
-    channel.connect();
+    if (generation !== initializationGeneration || channel) candidate.close();
+    else { channel = candidate; candidate.connect(); }
   }
   if (settings.scanningPaused) await closeAllObservations();
   else if (identity.browserId) await scanAll();
@@ -95,11 +113,16 @@ async function ensureIdentity() {
     await chrome.storage.local.get(["publicKey", "privateKey", "browserId"])
   );
   if (current.publicKey && current.privateKey) return current;
-  const pair = await crypto.subtle.generateKey({name: "Ed25519"}, true, ["sign", "verify"]);
-  const publicKey = encode(await crypto.subtle.exportKey("raw", pair.publicKey));
-  const privateKey = await crypto.subtle.exportKey("jwk", pair.privateKey);
-  await chrome.storage.local.set({publicKey, privateKey});
-  return {publicKey, privateKey};
+  identityCreation ??= (async () => {
+    const latest = await chrome.storage.local.get(["publicKey", "privateKey", "browserId"]);
+    if (latest.publicKey && latest.privateKey) return latest;
+    const pair = await crypto.subtle.generateKey({name: "Ed25519"}, true, ["sign", "verify"]);
+    const publicKey = encode(await crypto.subtle.exportKey("raw", pair.publicKey));
+    const privateKey = await crypto.subtle.exportKey("jwk", pair.privateKey);
+    await chrome.storage.local.set({publicKey, privateKey});
+    return {publicKey, privateKey};
+  })().finally(() => { identityCreation = undefined; });
+  return identityCreation;
 }
 
 /**
@@ -182,7 +205,7 @@ async function executeToolCall(payload) {
       func: invokeWebMcp,
       args: [payload.tool_name, payload.arguments ?? {}, payload.call_id, expectedCatalog, true]
     });
-    const boundary = execution?.result;
+    const boundary = /** @type {any} */ (execution?.result);
     // A targeted document that is replaced while its injected promise is
     // pending resolves without an InjectionResult payload in Chromium.
     if (!boundary || boundary.__webby_execution_v1__ !== true) throw new Error("stale_document");
@@ -258,6 +281,7 @@ function knownToolError(kind) {
   return kind !== undefined && ["webmcp_unavailable", "stale_catalog", "stale_document", "tool_not_found", "result_too_large", "AbortError"].includes(kind);
 }
 
+/** @param {unknown} error @param {string | undefined} message @returns {string} */
 function classifyToolError(error, message) {
   if (expectedGoneDocumentError(error)) return "stale_document";
   if (message && /render(?:er)? process (?:gone|crashed)|render frame.*crashed/i.test(message)) return "renderer_crashed";
@@ -321,7 +345,10 @@ async function scanTab(tab, allowActiveTab = false) {
         const reply = await requireChannel().message("discovery.observed", {observations: [observation]});
         await persistIgnoredOrigins(reply);
       },
-      () => observations.set(tabId, observation)
+      () => observations.set(tabId, observation),
+      async () => {
+        await requireChannel().message("session.closed", {tab_id: tabId, document_id: observation.document_id});
+      }
     );
   } catch (error) {
     if (!expectedScanError(error)) console.error("Webby tab scan failed", {tabId: tab.id, error});

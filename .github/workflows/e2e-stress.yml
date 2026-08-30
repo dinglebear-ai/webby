@@ -1,0 +1,57 @@
+name: Live E2E nightly qualification
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: live-e2e-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  nightly:
+    name: Nightly protocol qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env: {MIX_ENV: test}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236
+        with: {elixir-version: "1.20.3", otp-version: "29.0.5"}
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with: {node-version: "22.18.0", cache: npm, cache-dependency-path: e2e/package-lock.json}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            deps
+            _build
+          key: e2e-${{ runner.os }}-otp29.0.5-elixir1.20.3-node22.18.0-pw1.62.1-${{ hashFiles('mix.lock', 'e2e/package-lock.json') }}
+      - run: mix deps.get && npm ci --prefix e2e
+      - run: npx --prefix e2e playwright install --with-deps chromium
+      - run: npm --prefix e2e run toolchains
+      - run: npm --prefix e2e run manifest -- lane=nightly driver=protocol total=1 shard=1 output=artifacts/nightly-manifest.json
+      - name: Deterministic stress qualification
+        timeout-minutes: 105
+        env:
+          WEBBY_STRESS_SEED: nightly-${{ github.run_id }}-${{ github.run_attempt }}
+          WEBBY_STRESS_REPETITIONS: "2"
+          WEBBY_STRESS_CONCURRENCY: "2"
+          WEBBY_STRESS_RETRIES: "1"
+        run: ./scripts/e2e-repeat
+      - name: External reaper and leak audit
+        if: always()
+        run: npm --prefix e2e run cleanup
+      - name: Upload preserved stress evidence
+        if: failure() && hashFiles('e2e/artifacts/stress/upload/**/upload-attestation.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nightly-stress-replay
+          path: e2e/artifacts/stress/upload
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 6

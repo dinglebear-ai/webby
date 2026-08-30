@@ -8,7 +8,7 @@ import Ajv2020 from "ajv/dist/2020.js"
 import addFormats from "ajv-formats"
 import {WebbyWorld, reapManifest, reserveLoopbackPort} from "../support/world.js"
 import {captureProcessIdentity, processExists, processGroupMembers, reapProcessGroup} from "../support/process-tree.js"
-import {atomicPrivateWrite, createTempWorkspace, openFileHandles, removeOwnedWorkspace} from "../support/temp-workspace.js"
+import {atomicPrivateWrite, createTempWorkspace, diskBytes, openFileHandles, removeOwnedWorkspace} from "../support/temp-workspace.js"
 
 const execFileAsync = promisify(execFile)
 const worlds = new Set()
@@ -42,6 +42,17 @@ test("private workspaces and exclusive writes reject symlink substitution", asyn
   } finally {
     await removeOwnedWorkspace(workspace.root)
   }
+})
+
+test("disk budgets count browser-profile symlinks without following them and reject all others", async () => {
+  const workspace = await createTempWorkspace("webby-disk-symlink-")
+  try {
+    await writeFile(`${workspace.profile}/target`, "browser-data")
+    await symlink("target", `${workspace.profile}/RunningChromeVersion`)
+    assert.ok(await diskBytes(workspace.root, {symlinkRoots: [workspace.profile]}) > 0)
+    await symlink(workspace.profile, `${workspace.config}/substitute`)
+    await assert.rejects(diskBytes(workspace.root, {symlinkRoots: [workspace.profile]}), /symlink in world/)
+  } finally { await removeOwnedWorkspace(workspace.root) }
 })
 
 test("atomic private publication is no-clobber and never exposes partial bytes", async () => {
@@ -175,12 +186,14 @@ test("preserved restart retains durable browser state while fresh restart does n
   await execFileAsync("sqlite3", [world.databasePath, `INSERT INTO page_registrations(id,slug,display_name,origin,url_pattern,preferred_browser_id,auto_attach,enabled,exposure_mode,inserted_at,updated_at) VALUES('00000000-0000-0000-0000-000000000002','live-page','Live Page','https://fixture.test','/*','00000000-0000-0000-0000-000000000001',1,1,'broker','${now}','${now}'); INSERT INTO document_sessions(id,browser_id,registration_id,tab_id,document_id,current_origin,sanitized_path,page_title,catalog_revision,catalog_fingerprint,catalog_summary,connected_at,last_seen_at,status,inserted_at,updated_at) VALUES('00000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002',1,'doc-live','https://fixture.test','/','Live',1,'fingerprint','{"tools":[]}','${now}','${now}','active','${now}','${now}')`])
   assert.equal((await execFileAsync("sqlite3", [world.databasePath, "SELECT status FROM document_sessions WHERE document_id='doc-live'"])).stdout.trim(), "active")
   const oldPid = world.pid
+  const oldBaseUrl = world.baseUrl
   worlds.delete(world)
   world = await world.restart({preserveState: true})
   worlds.add(world)
   assert.equal((await execFileAsync("sqlite3", [world.databasePath, "SELECT count(*) FROM browsers WHERE extension_id='extension-preserved'"])).stdout.trim(), "1")
   assert.equal((await execFileAsync("sqlite3", [world.databasePath, "SELECT status FROM document_sessions WHERE document_id='doc-live'"])).stdout.trim(), "closed")
   assert.equal(world.metrics.startup_kind, "warm")
+  assert.equal(world.baseUrl, oldBaseUrl)
   assert.notEqual(world.pid, oldPid)
   assert.equal(await processExists(oldPid), false)
   const preservedRoot = world.root

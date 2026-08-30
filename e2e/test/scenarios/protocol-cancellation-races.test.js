@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import {credentialRevokeOwnerOracle, normalizeLifecycleEvidence} from "../../support/lifecycle-parity.js"
 import {auditState, beginAdmittedCalls, eventBarrier, measuredState, openCapacityFixture, rawMcpCall, rawMcpCancel, toolOutcome} from "./protocol-capacity-fixture.js"
 
 function invoke(fixture, entry, id, arguments_ = {}) {
@@ -171,4 +172,6 @@ test("credential revocation cancels an in-flight call and releases capacity exac
   await assert.rejects(fixture.browsers[0].browser.result(call.call_id, {late: true}), error => error.code === "call_not_pending")
   const measured = await measuredState(fixture); assert.equal(measured.browser_pending, 0); assert.equal(measured.active_sessions, 1)
   const audits = await auditState(fixture); assert.deepEqual(audits.rows, [{outcome: "failed", error_kind: "revoked"}]); assert.equal(audits.started, 0)
+  const normalized = normalizeLifecycleEvidence({caller: {state: "revoked", terminal: true}, browserWork: {state: "aborted"}, session: {state: measured.active_sessions === 1 ? "active" : "invalidated"}, lateResult: {state: "rejected"}, capacity: {state: "released", value: measured.browser_pending}, audit: {state: audits.rows[0].outcome, terminal: true, count: audits.rows.length, outcome: audits.rows[0].outcome}})
+  assert.deepEqual(normalized, credentialRevokeOwnerOracle)
 })

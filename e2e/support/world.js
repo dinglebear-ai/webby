@@ -137,9 +137,10 @@ export class WebbyWorld {
     return world
   }
 
-  constructor({scenarioId = "unspecified", seed = 0, startupTimeoutMs = 45_000, preserveArtifacts = false, workspace, authorityPort = 0, invocationTimeoutMs = 120_000} = {}) {
+  constructor({scenarioId = "unspecified", seed = 0, startupTimeoutMs = 45_000, preserveArtifacts = false, workspace, authorityPort = 0, listenPort = 0, invocationTimeoutMs = 120_000} = {}) {
     if (!/^[a-zA-Z0-9_-]+$/.test(scenarioId)) throw new Error("invalid scenario ID")
     if (!Number.isInteger(authorityPort) || authorityPort < 0 || authorityPort > 65_535) throw new Error("invalid authority port")
+    if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65_535) throw new Error("invalid listen port")
     if (!Number.isInteger(invocationTimeoutMs) || invocationTimeoutMs < 100 || invocationTimeoutMs > 120_000) throw new Error("invalid invocation timeout")
     this.scenarioId = scenarioId
     this.seed = seed
@@ -147,6 +148,7 @@ export class WebbyWorld {
     this.preserveArtifacts = preserveArtifacts
     this.workspace = workspace
     this.authorityPort = authorityPort
+    this.listenPort = listenPort
     this.invocationTimeoutMs = invocationTimeoutMs
     this.worldId = `world-${randomUUID()}`
     this.instanceNonce = token()
@@ -192,9 +194,9 @@ export class WebbyWorld {
       WEBBY_E2E_TELEMETRY_CAPABILITY_HASH: sha256(this.telemetryCapability),
       WEBBY_E2E_HEALTH_FAULT_FILE: this.healthFaultPath,
       WEBBY_E2E_INVOCATION_TIMEOUT_MS: String(this.invocationTimeoutMs),
-      WEBBY_PORT: "0",
-      // Port zero delegates selection to RuntimeDiscovery's own listen call. The
-      // authority socket is therefore acquired once and never handed off.
+      WEBBY_PORT: String(this.listenPort),
+      // Authority port zero delegates selection to RuntimeDiscovery's own
+      // listen call, so that socket is acquired once and never handed off.
       WEBBY_AUTHORITY_PORT: String(this.authorityPort),
       SECRET_KEY_BASE: this.secret,
       XDG_CONFIG_HOME: this.workspace.config,
@@ -237,7 +239,10 @@ export class WebbyWorld {
       this.baseUrl = `http://127.0.0.1:${this.port}`
       await waitForReadiness(this, this.startupTimeoutMs)
       this.metrics.startup_ms = Math.round(performance.now() - started)
-      this.metrics.disk_bytes = await diskBytes(this.root)
+      // Chromium owns its isolated profile and creates platform-specific
+      // symlinks. Count those links without following them; every other world
+      // directory remains fail-closed against symlink substitution.
+      this.metrics.disk_bytes = await diskBytes(this.root, {symlinkRoots: [this.workspace.profile]})
       await this.writeManifest()
       return this
     } catch (error) {
@@ -308,8 +313,9 @@ export class WebbyWorld {
   async restart({preserveState = true} = {}) {
     const previousDatabase = this.databasePath
     const previousRoot = this.root
+    const previousPort = this.port
     await this.teardown({remove: !preserveState})
-    const replacement = new WebbyWorld({scenarioId: this.scenarioId, seed: this.seed, startupTimeoutMs: this.startupTimeoutMs, preserveArtifacts: this.preserveArtifacts, workspace: preserveState ? this.workspace : undefined, authorityPort: this.authorityPort})
+    const replacement = new WebbyWorld({scenarioId: this.scenarioId, seed: this.seed, startupTimeoutMs: this.startupTimeoutMs, preserveArtifacts: this.preserveArtifacts, workspace: preserveState ? this.workspace : undefined, authorityPort: this.authorityPort, listenPort: preserveState ? previousPort : 0})
     if (preserveState) {
       replacement.databasePath = previousDatabase
       for (const path of [join(previousRoot, "world.json"), join(previousRoot, "config", "bound-port"), join(previousRoot, "config", "secret-key-base"), join(previousRoot, "config", "telemetry-capability"), join(previousRoot, "artifacts", "telemetry.ndjson"), join(previousRoot, "artifacts", "stdout.log"), join(previousRoot, "artifacts", "stderr.log")]) await unlink(path).catch(() => {})

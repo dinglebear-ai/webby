@@ -104,13 +104,19 @@ export async function openFileHandles(root) {
   return handles
 }
 
-export async function diskBytes(root) {
+export async function diskBytes(root, {symlinkRoots = []} = {}) {
   let total = 0
   const {readdir} = await import("node:fs/promises")
+  const allowed = symlinkRoots.map(path => resolve(path))
+  const symlinkAllowed = path => allowed.some(root => path === root || path.startsWith(`${root}${sep}`))
   async function walk(path) {
     for (const entry of await readdir(path, {withFileTypes: true})) {
       const child = join(path, entry.name)
-      if (entry.isSymbolicLink()) throw new Error(`symlink in world: ${child}`)
+      if (entry.isSymbolicLink()) {
+        if (!symlinkAllowed(resolve(child))) throw new Error(`symlink in world: ${child}`)
+        total += (await lstat(child)).size
+        continue
+      }
       if (entry.isDirectory()) await walk(child)
       else total += (await stat(child)).size
     }

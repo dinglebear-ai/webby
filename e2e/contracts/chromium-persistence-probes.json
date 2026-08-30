@@ -1,0 +1,20 @@
+{
+  "contract_version": 1,
+  "owner": "webby-ihb.20",
+  "scenario_id": "e2e-persistence-retention",
+  "inventory": [
+    "chromium-profile-identity-durable",
+    "fresh-chromium-profile-isolated",
+    "preserved-webby-restart",
+    "fresh-webby-world-isolated",
+    "live-session-reconciled",
+    "audit-retained-and-anonymized",
+    "browser-erasure-isolated",
+    "retention-multi-batch",
+    "retention-active-preserved",
+    "retention-pending-preserved",
+    "retention-started-audit-preserved",
+    "sanitized-checkpoint-diagnostics"
+  ],
+  "reviewed_exclusions": []
+}

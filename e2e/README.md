@@ -14,6 +14,22 @@ npm run validate
 npm test
 ```
 
+Stable lane commands live in this package and are the only commands CI calls:
+
+```bash
+npm run ci:contract
+npm run protocol:pr       # PR protocol, zero retries
+npm run protocol:full     # main/nightly lifecycle
+npm run chromium:smoke    # PR Chromium, one worker, zero retries
+npm run chromium:full     # main/manual complete Chromium lifecycle
+npm run mcp:compat        # pinned official MCP client
+npm run replay -- artifacts/attested/sanitized-staging
+npm run cleanup           # external reaper and final leak audit
+```
+
+The root `scripts/e2e` and Mix aliases only forward to these package commands;
+they do not maintain a second scenario selection policy.
+
 `npm run validate` prints the mapped/excluded denominator and fails when source extraction differs from the committed snapshot, the denominator implausibly shrinks, a surface lacks a scenario/reviewed exclusion, an extractor cannot understand its source, schemas fail, lifecycle assertions are incomplete, or timeout ordering is unsafe.
 
 ## Scenario selection

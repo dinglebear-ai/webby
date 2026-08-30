@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+command=${1:?usage: scripts/e2e COMMAND [ARGS...]}
+shift
+exec npm --prefix "$repo_root/e2e" run "$command" -- "$@"

@@ -14,18 +14,40 @@ defmodule Webby.BrowserConnections do
   def unregister(browser_id, pid \\ self()),
     do: GenServer.call(__MODULE__, {:unregister, browser_id, pid})
 
-  def call(browser_id, payload, timeout \\ @timeout, external_key \\ nil, audit_id \\ nil),
-    do:
-      GenServer.call(
-        __MODULE__,
-        {:call, browser_id, payload, timeout, external_key, audit_id},
-        timeout + 1_000
-      )
+  def call(
+        browser_id,
+        payload,
+        timeout \\ @timeout,
+        external_key \\ nil,
+        audit_id \\ nil,
+        credential_id \\ nil
+      ),
+      do:
+        GenServer.call(
+          __MODULE__,
+          {:call, browser_id, payload, timeout, external_key, audit_id, credential_id},
+          timeout + 1_000
+        )
 
   def cancel(external_key), do: GenServer.call(__MODULE__, {:cancel, external_key})
 
   def cancel_credential(credential_id),
     do: GenServer.call(__MODULE__, {:cancel_credential, credential_id})
+
+  def begin_credential_revocation(credential_id),
+    do: GenServer.call(__MODULE__, {:begin_credential_revocation, credential_id})
+
+  def finish_credential_revocation(credential_id, outcome),
+    do: GenServer.call(__MODULE__, {:finish_credential_revocation, credential_id, outcome})
+
+  def begin_browser_erasure(browser_id),
+    do: GenServer.call(__MODULE__, {:begin_browser_erasure, browser_id})
+
+  def finish_browser_erasure(browser_id, outcome),
+    do: GenServer.call(__MODULE__, {:finish_browser_erasure, browser_id, outcome})
+
+  def browser_admissible?(browser_id),
+    do: GenServer.call(__MODULE__, {:browser_admissible, browser_id})
 
   def cancel_document(browser_id, tab_id, document_id),
     do: GenServer.call(__MODULE__, {:cancel_document, browser_id, tab_id, document_id})
@@ -44,7 +66,13 @@ defmodule Webby.BrowserConnections do
 
   @impl true
   def init(_state) do
-    state = %{connections: %{}, calls: %{}, external_keys: %{}}
+    state = %{
+      connections: %{},
+      calls: %{},
+      external_keys: %{},
+      credential_barriers: %{},
+      erased_browsers: MapSet.new()
+    }
 
     if Application.get_env(:webby, Webby.Repo, [])[:pool] == Ecto.Adapters.SQL.Sandbox,
       do: {:ok, state},
@@ -59,9 +87,13 @@ defmodule Webby.BrowserConnections do
 
   @impl true
   def handle_call({:register, browser_id, pid}, _from, state) do
-    state = drop_connection(state, browser_id, "browser_replaced")
-    connection = %{pid: pid, monitor: Process.monitor(pid), generation: make_ref()}
-    {:reply, :ok, put_in(state, [:connections, browser_id], connection)}
+    if MapSet.member?(state.erased_browsers, browser_id) do
+      {:reply, {:error, :browser_erased}, state}
+    else
+      state = drop_connection(state, browser_id, "browser_replaced")
+      connection = %{pid: pid, monitor: Process.monitor(pid), generation: make_ref()}
+      {:reply, :ok, put_in(state, [:connections, browser_id], connection)}
+    end
   end
 
   def handle_call({:unregister, browser_id, pid}, _from, state) do
@@ -71,8 +103,15 @@ defmodule Webby.BrowserConnections do
     end
   end
 
-  def handle_call({:call, browser_id, payload, timeout, external_key, audit_id}, from, state) do
+  def handle_call(
+        {:call, browser_id, payload, timeout, external_key, audit_id, credential_id},
+        from,
+        state
+      ) do
     cond do
+      MapSet.member?(state.erased_browsers, browser_id) ->
+        {:reply, {:error, "browser_erased", "The selected browser was erased"}, state}
+
       map_size(state.calls) >= @max_pending_calls ->
         {:reply, {:error, "server_busy", "Too many page tool calls are already pending"}, state}
 
@@ -80,6 +119,9 @@ defmodule Webby.BrowserConnections do
         {:reply,
          {:error, "duplicate_request",
           "A tool call with this request identity is already pending"}, state}
+
+      credential_id != nil and Map.has_key?(state.credential_barriers, credential_id) ->
+        {:reply, revoked_error(), state}
 
       true ->
         start_call(state, browser_id, payload, timeout, external_key, audit_id, from)
@@ -100,6 +142,63 @@ defmodule Webby.BrowserConnections do
       end)
 
     {:reply, length(ids), finish_calls(state, ids, :credential_revoked)}
+  end
+
+  def handle_call({:begin_credential_revocation, credential_id}, _from, state) do
+    previous = Map.get(state.credential_barriers, credential_id)
+    barriers = Map.put_new(state.credential_barriers, credential_id, :revoking)
+    {:reply, {:ok, previous}, %{state | credential_barriers: barriers}}
+  end
+
+  def handle_call({:finish_credential_revocation, credential_id, :committed}, _from, state) do
+    ids = matching_calls(state, &match?({^credential_id, _request_id}, &1.external_key))
+
+    state = %{
+      state
+      | credential_barriers: Map.put(state.credential_barriers, credential_id, :revoked)
+    }
+
+    {:reply, :ok, finish_calls(state, ids, :credential_revoked)}
+  end
+
+  def handle_call(
+        {:finish_credential_revocation, credential_id, {:aborted, previous}},
+        _from,
+        state
+      ) do
+    barriers =
+      case previous do
+        nil -> Map.delete(state.credential_barriers, credential_id)
+        prior_state -> Map.put(state.credential_barriers, credential_id, prior_state)
+      end
+
+    {:reply, :ok, %{state | credential_barriers: barriers}}
+  end
+
+  def handle_call({:begin_browser_erasure, browser_id}, _from, state) do
+    {:reply, :ok, %{state | erased_browsers: MapSet.put(state.erased_browsers, browser_id)}}
+  end
+
+  def handle_call({:finish_browser_erasure, browser_id, :committed}, _from, state) do
+    case state.connections[browser_id] do
+      %{pid: pid} -> send(pid, :browser_erased)
+      nil -> :ok
+    end
+
+    {:reply, :ok, drop_connection(state, browser_id, "browser_erased")}
+  end
+
+  def handle_call({:finish_browser_erasure, browser_id, :aborted}, _from, state) do
+    {:reply, :ok, %{state | erased_browsers: MapSet.delete(state.erased_browsers, browser_id)}}
+  end
+
+  def handle_call({:browser_admissible, browser_id}, _from, state) do
+    reply =
+      if MapSet.member?(state.erased_browsers, browser_id),
+        do: {:error, :browser_erased},
+        else: :ok
+
+    {:reply, reply, state}
   end
 
   def handle_call({:cancel_document, browser_id, tab_id, document_id}, _from, state) do
@@ -160,8 +259,11 @@ defmodule Webby.BrowserConnections do
         ids = matching_calls(state, &(&1.caller_monitor == monitor))
 
         Enum.each(ids, fn id ->
-          if audit_id = state.calls[id].audit_id,
-            do: Webby.Invocations.complete_audit(audit_id, "failed", "caller_down", 0)
+          if audit_id = state.calls[id].audit_id do
+            Task.Supervisor.start_child(Webby.ProbeSupervisor, fn ->
+              Webby.Invocations.complete_audit(audit_id, "failed", "caller_down", 0)
+            end)
+          end
         end)
 
         {:noreply, finish_calls(state, ids, :caller_down)}
@@ -252,6 +354,8 @@ defmodule Webby.BrowserConnections do
 
   defp maybe_reply(from, {:connection_lost, kind}),
     do: GenServer.reply(from, {:error, kind, "The selected browser disconnected"})
+
+  defp revoked_error, do: {:error, "revoked", "The MCP credential was revoked"}
 
   defp completion(%{"type" => "tool.result", "result" => result}), do: {:ok, result}
 
