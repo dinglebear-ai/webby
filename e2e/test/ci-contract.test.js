@@ -17,6 +17,8 @@ function assertTriggerAndStressContracts(primary, stress) {
   for (const entry of requiredStressEntries) assert.ok(stress.includes(entry), `missing stress workflow entry ${entry}`)
   const contractsJob = primary.slice(primary.indexOf("  contracts:"), primary.indexOf("  protocol-pr:"))
   assert.ok(contractsJob.includes(contractsJobBeamSetup), "contracts job must install pinned Elixir for AST extraction")
+  const protocolJob = primary.slice(primary.indexOf("  protocol-pr:"), primary.indexOf("  chromium-pr:"))
+  assert.ok(protocolJob.includes(compatibilityBrowserSetup), "protocol job must install Chromium for revocation lifecycle coverage")
   const compatibilityJob = primary.slice(primary.indexOf("  compatibility:"))
   assert.ok(compatibilityJob.includes(compatibilityBrowserSetup), "compatibility job must install Chromium for live browser work")
 }
@@ -51,6 +53,8 @@ test("every E2E trigger path and deterministic, seam, live, and cleanup command 
   for (const path of requiredE2EPaths) assert.throws(() => assertTriggerAndStressContracts(primary.replace(`\"${path}\"`, "\"removed/**\""), stress), /missing E2E trigger path/)
   for (const entry of requiredStressEntries) assert.throws(() => assertTriggerAndStressContracts(primary, stress.replaceAll(entry, "removed-entry")), /missing stress workflow entry/)
   assert.throws(() => assertTriggerAndStressContracts(primary.replace(contractsJobBeamSetup, "removed/setup-beam@0000000000000000000000000000000000000000"), stress), /contracts job must install pinned Elixir/)
+  const protocolJob = primary.slice(primary.indexOf("  protocol-pr:"), primary.indexOf("  chromium-pr:"))
+  assert.throws(() => assertTriggerAndStressContracts(primary.replace(protocolJob, protocolJob.replace(compatibilityBrowserSetup, "removed browser setup")), stress), /protocol job must install Chromium/)
   const compatibilityJob = primary.slice(primary.indexOf("  compatibility:"))
   assert.throws(() => assertTriggerAndStressContracts(primary.replace(compatibilityJob, compatibilityJob.replace(compatibilityBrowserSetup, "removed browser setup")), stress), /compatibility job must install Chromium/)
 })

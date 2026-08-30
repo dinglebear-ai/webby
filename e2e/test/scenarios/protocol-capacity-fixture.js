@@ -40,12 +40,27 @@ export async function openCapacityFixture(t, scenarioId, {browserCount = 1, cred
   const recorder = await new ArtifactRecorder({root: join(root, "recorder"), scenarioId, worldId: world.worldId, seed: world.seed, secrets: [world.secret]}).open()
   let chromium
   let dashboard
+  const browsers = []
+  const credentials = []
+  t.after(async () => {
+    const failures = []
+    for (const {client} of credentials) client.close()
+    for (const operation of [
+      ...browsers.map(({browser}) => () => browser.close()),
+      ...(chromium ? [() => chromium.close()] : []),
+      () => recorder.finalize({cleanup: {clients: "closed", browsers: "closed", chromium: chromium ? "closed" : "not-started"}}),
+      () => world.teardown(),
+      () => rm(root, {recursive: true, force: true}),
+    ]) {
+      try { await operation() } catch (error) { failures.push(error) }
+    }
+    if (failures.length) throw new AggregateError(failures, "capacity fixture cleanup failed")
+  })
   if (dashboardSetup) {
     chromium = await ChromiumWorld.launch({world, recorder})
     const page = await chromium.context.newPage()
     dashboard = await new DashboardDriver({page, recorder, timeoutMs: 20_000}).open(world.baseUrl)
   }
-  const browsers = []
   for (let index = 0; index < browserCount; index += 1) {
     const browser = new SimulatedBrowser({baseUrl: world.baseUrl, producer: recorder.producers.protocol, timeoutMs: 30_000})
     let browserId
@@ -77,7 +92,6 @@ export async function openCapacityFixture(t, scenarioId, {browserCount = 1, cred
     await recorder.producers.world.event("setup.direct-fixture", {kind: "reviewed-fault-injection", browser_count: browserCount, registration_id: registrationId})
   }
   for (const entry of browsers) await entry.browser.observe([{...observation, tab_id: 700 + browsers.indexOf(entry), document_id: `document-${700 + browsers.indexOf(entry)}`}])
-  const credentials = []
   for (let index = 0; index < credentialCount; index += 1) {
     const credential = await world.provisionCredential({scopes: ["read", "call"]})
     recorder.addSecret(credential.token)
@@ -88,20 +102,6 @@ export async function openCapacityFixture(t, scenarioId, {browserCount = 1, cred
     credentials.push({credential, client, sessions: tools.body.result.structuredContent.sessions})
   }
   const fixture = {root, world, recorder, chromium, dashboard, browsers, credentials, registrationId, observation}
-  t.after(async () => {
-    const failures = []
-    for (const {client} of credentials) client.close()
-    for (const operation of [
-      ...browsers.map(({browser}) => () => browser.close()),
-      ...(chromium ? [() => chromium.close()] : []),
-      () => recorder.finalize({cleanup: {clients: "closed", browsers: "closed", chromium: chromium ? "closed" : "not-started"}}),
-      () => world.teardown(),
-      () => rm(root, {recursive: true, force: true}),
-    ]) {
-      try { await operation() } catch (error) { failures.push(error) }
-    }
-    if (failures.length) throw new AggregateError(failures, "capacity fixture cleanup failed")
-  })
   return fixture
 }
 
