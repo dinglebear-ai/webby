@@ -54,7 +54,7 @@ async function removeOwnedMixResidue(temporaryRoot, name) {
       if (!entry.isFile() || entry.isSymbolicLink() || !match) throw new Error(`invalid Mix ${kind} residue entry: ${entry.name}`)
       const info = await lstat(join(namespaceRoot, entry.name))
       if (info.size > 1024) throw new Error(`oversized Mix ${kind} residue entry: ${entry.name}`)
-      if (match[1]) { const port = Number(match[1]); if (info.size !== 0 || port < 1 || port > 65_535) throw new Error(`invalid Mix port entry: ${entry.name}`); ports.push(port) }
+      if (match[1]) { const port = Number(match[1]); if ((kind === "pubsub" && info.size !== 0) || port < 1 || port > 65_535) throw new Error(`invalid Mix port entry: ${entry.name}`); ports.push(port) }
     }
   }
   const handles = await openFileHandles(residueRoot)
