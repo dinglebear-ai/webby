@@ -50,19 +50,18 @@ async function removeOwnedMixResidue(temporaryRoot, name) {
     if (!namespace.isDirectory() || namespace.isSymbolicLink() || !/^[A-Za-z0-9_-]{16,64}$/.test(namespace.name)) throw new Error(`invalid Mix residue namespace: ${namespace.name}`)
     const namespaceRoot = join(residueRoot, namespace.name)
     for (const entry of await readdir(namespaceRoot, {withFileTypes: true})) {
-      const expected = kind === "lock" ? /^lock_\d+$/ : /^port_(\d+)$/
-      const match = entry.name.match(expected)
+      const match = entry.name.match(kind === "lock" ? /^(?:lock_\d+|port_(\d+))$/ : /^port_(\d+)$/)
       if (!entry.isFile() || entry.isSymbolicLink() || !match) throw new Error(`invalid Mix ${kind} residue entry: ${entry.name}`)
       const info = await lstat(join(namespaceRoot, entry.name))
       if (info.size > 1024) throw new Error(`oversized Mix ${kind} residue entry: ${entry.name}`)
-      if (kind === "pubsub") { const port = Number(match[1]); if (info.size !== 0 || port < 1 || port > 65_535) throw new Error(`invalid Mix PubSub port entry: ${entry.name}`); ports.push(port) }
+      if (match[1]) { const port = Number(match[1]); if (info.size !== 0 || port < 1 || port > 65_535) throw new Error(`invalid Mix port entry: ${entry.name}`); ports.push(port) }
     }
   }
   const handles = await openFileHandles(residueRoot)
   if (handles.length) throw new Error(`open handles remain in Mix residue: ${JSON.stringify(handles)}`)
   const openPorts = []
   for (const port of ports) if (!(await portClosed(port))) openPorts.push(port)
-  if (openPorts.length) throw new Error(`Mix PubSub listeners remain: ${openPorts.join(",")}`)
+  if (openPorts.length) throw new Error(`Mix listeners remain: ${openPorts.join(",")}`)
   await rm(residueRoot, {recursive: true, force: false})
   return {root: name, removed: true, kind: `mix_${kind}`, ports_checked: ports.length}
 }

@@ -90,7 +90,7 @@ test("cleanup narrowly removes inert run-owned Mix residue", async () => {
   const owned = await initializeOwnedTempRoot(); const uid = process.getuid(); const namespace = "abcdefghijklmnop"
   const lock = join(owned, `mix_lock_user${uid}`, namespace); const pubsub = join(owned, `mix_pubsub_user${uid}`, namespace)
   await mkdir(lock, {recursive: true}); await mkdir(pubsub, {recursive: true})
-  await writeFile(join(lock, "lock_0"), "owner metadata"); await writeFile(join(pubsub, "port_1"), "")
+  await writeFile(join(lock, "lock_0"), "owner metadata"); await writeFile(join(lock, "port_2"), ""); await writeFile(join(pubsub, "port_1"), "")
   assert.equal(await cleanupWorlds({temporaryRoot: owned}), 0)
   await assert.rejects(stat(owned), error => error.code === "ENOENT")
 })
