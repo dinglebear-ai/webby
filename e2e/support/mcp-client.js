@@ -160,6 +160,11 @@ export class MCPClient {
       if (parsed !== "[INVALID JSON]" && jsonDepth(parsed) > this.limits.jsonDepth) throw new MCPClientError("json_depth", "request JSON exceeds client depth limit")
     }
     const requestHeaders = new Headers(headers)
+    // Each isolated world may receive a loopback port previously used by an
+    // already-reaped world. Do not leave that ownership decision to Node's
+    // process-global fetch pool: a stale keepalive POST cannot be retried
+    // safely and otherwise surfaces as an unrelated `fetch failed`.
+    if (!requestHeaders.has("connection")) requestHeaders.set("connection", "close")
     if (path === "/mcp") {
       if (!requestHeaders.has("accept")) requestHeaders.set("accept", "application/json, text/event-stream")
       if (body !== undefined && !requestHeaders.has("content-type")) requestHeaders.set("content-type", "application/json")

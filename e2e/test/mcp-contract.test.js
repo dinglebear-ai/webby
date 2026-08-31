@@ -200,6 +200,7 @@ test("latest-version requests mirror method, name, and stateless metadata", asyn
   assert.equal(captured[1].headers["mcp-method"], "tools/call")
   assert.equal(captured[1].headers["mcp-name"], "webby")
   for (const request of captured) {
+    assert.equal(request.headers.connection, "close")
     assert.equal(request.headers.authorization, "Bearer webby_secret")
     assert.equal(request.headers["mcp-protocol-version"], "2026-07-28")
     assert.equal(request.body.params._meta["io.modelcontextprotocol/protocolVersion"], "2026-07-28")

@@ -168,6 +168,11 @@ export class SimulatedBrowser extends EventEmitter {
     let messages = 0
     for (let index = 0; index < observations.length; index += batchSize) {
       await this.observe(observations.slice(index, index + batchSize)); messages++
+      // Phoenix requires protocol heartbeats even while application messages
+      // are flowing. Large live scans can spend longer than the transport idle
+      // window persisting sequential batches, so the simulated extension must
+      // own the same keepalive boundary as the real extension.
+      await this.heartbeat()
     }
     return {count, messages, peakBatchSize: Math.min(count, batchSize), observations}
   }

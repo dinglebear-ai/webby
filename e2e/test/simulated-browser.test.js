@@ -139,6 +139,20 @@ test("10/100/1000 tab primitives record bounded peak concurrency and reverse com
   await assert.rejects(browser.simulateTabs(1_001), error => error.code === "tab_count_limit")
 })
 
+test("batched live scans maintain the Phoenix heartbeat boundary without changing the discovery denominator", async () => {
+  const browser = new SimulatedBrowser({baseUrl: "http://127.0.0.1:1"})
+  const batches = []
+  let heartbeats = 0
+  browser.observe = async observations => { batches.push(observations.map(item => item.tab_id)); return {type: "acknowledgement"} }
+  browser.heartbeat = async () => { heartbeats += 1; return {status: "ok"} }
+  const result = await browser.scanTabs(1_000, {batchSize: 128})
+  assert.equal(result.count, 1_000)
+  assert.equal(result.messages, 8)
+  assert.equal(batches.length, 8)
+  assert.equal(heartbeats, 8)
+  assert.deepEqual(batches.map(batch => batch.length), [128, 128, 128, 128, 128, 128, 128, 104])
+})
+
 test("identity replacement is deterministically blocked and subsequent connections use the released identity", async () => {
   const browser = new SimulatedBrowser({baseUrl: "http://127.0.0.1:1", browserId: "stale-browser"}); const original = browser.identity; const replacement = new Ed25519Identity()
   browser.gates.identity.block(); let transitioned = false

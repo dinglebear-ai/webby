@@ -1,5 +1,5 @@
 import {execFile} from "node:child_process"
-import {mkdir, readFile, rm, stat} from "node:fs/promises"
+import {mkdir, readFile, readdir, rm, stat} from "node:fs/promises"
 import {join, resolve} from "node:path"
 import {promisify} from "node:util"
 import {chromium} from "playwright"
@@ -11,6 +11,12 @@ import {assertWorldManifest, readWorldManifest} from "./runtime-contracts.js"
 const repositoryRoot = resolve(new URL("../..", import.meta.url).pathname)
 const execFileAsync = promisify(execFile)
 const assetBuilds = new Map()
+const chromiumTempPrefix = ".org.chromium.Chromium."
+
+async function chromiumTempNames(root) {
+  if (!root) return new Set()
+  return new Set((await readdir(root).catch(error => error.code === "ENOENT" ? [] : Promise.reject(error))).filter(name => name.startsWith(chromiumTempPrefix)))
+}
 
 async function validateAssets(root = repositoryRoot) {
   for (const name of [join("js", "app.js"), join("css", "app.css")]) {
@@ -102,12 +108,16 @@ export class ChromiumWorld {
     const generated = await generateTestExtension({source: extensionSource, destination: extensionPath, fixtureUrl: manifest.fixture_url, world: manifest, broadHostPermissions})
     validateBoundWorld(generated.binding, manifest)
     const args = [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+    const chromiumTempRoot = process.env.TMPDIR
+    const chromiumTempBefore = await chromiumTempNames(chromiumTempRoot)
+    let ownedChromiumTempPaths = []
     let context
     let artifacts
     try {
       context = await chromiumApi.launchPersistentContext(manifest.browser_profile_path, {
         channel: "chromium", headless: true, args, serviceWorkers: "allow",
       })
+      ownedChromiumTempPaths = [...await chromiumTempNames(chromiumTempRoot)].filter(name => !chromiumTempBefore.has(name)).map(name => join(chromiumTempRoot, name))
       // Chromium 142+ gates loopback/private-network page access behind an
       // explicit user permission. This is the isolated fixture's exact origin,
       // not a browser-wide bypass or disabled security feature.
@@ -117,11 +127,12 @@ export class ChromiumWorld {
       artifacts.attach(context)
       const driver = new ExtensionDriver({context, binding: generated.binding, world: manifest, artifacts})
       await driver.worker()
-      const instance = new ChromiumWorld({world, manifest, context, driver, artifacts, generated, closeTimeoutMs, closeContext: value => value.close()})
+      const instance = new ChromiumWorld({world, manifest, context, driver, artifacts, generated, ownedChromiumTempPaths, closeTimeoutMs, closeContext: value => value.close()})
       await recorder.producers.chromium.event("browser.launched", {extension_id: generated.binding.expected_extension_id, profile: "isolated", channel: "chromium"})
       return instance
     } catch (error) {
-      const cleanupFailures = await cleanupFailedChromiumLaunch(context, artifacts, closeTimeoutMs, [manifest.browser_profile_path, extensionPath])
+      ownedChromiumTempPaths = [...await chromiumTempNames(chromiumTempRoot)].filter(name => !chromiumTempBefore.has(name)).map(name => join(chromiumTempRoot, name))
+      const cleanupFailures = await cleanupFailedChromiumLaunch(context, artifacts, closeTimeoutMs, [manifest.browser_profile_path, extensionPath, ...ownedChromiumTempPaths])
       if (cleanupFailures.length) throw new AggregateError([error, ...cleanupFailures], "Chromium launch and cleanup failed", {cause: error})
       throw error
     }
@@ -167,7 +178,12 @@ export class ChromiumWorld {
         } catch (forcedError) { errors.push(forcedError) }
       }
     }
-    finally { clearTimeout(timeout); this.context = undefined }
+    finally {
+      clearTimeout(timeout)
+      this.context = undefined
+      for (const path of this.ownedChromiumTempPaths ?? []) await rm(path, {recursive: true, force: true}).catch(error => errors.push(error))
+      this.ownedChromiumTempPaths = []
+    }
     try {
       await this.artifacts.drain()
       this.artifacts.assertClean()
