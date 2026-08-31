@@ -192,7 +192,7 @@ test("actual popup and dashboard enforce pause, credential revoke, browser revok
       "cleanup.temporary.world.is.removable": {state: "removable"},
     })
     const parityRecorder = await new ArtifactRecorder({root: join(world.workspace.artifacts, "chromium-lifecycle-parity"), scenarioId: lifecycleContract.id, worldId: world.worldId, seed: world.seed}).open()
-    const proof = source => ({source, verified: true})
+    const proof = () => ({kind: "pending_recorder_token"})
     const chromiumScenario = await runLifecycleScenario({scenario: lifecycleContract, driver: "chromium", world, recorder: parityRecorder, normalized: chromiumNormalized, cleanup: parityCleanup, runtimeSurfaceEvidence: {
       "lifecycle.trigger": {
         "out:tool-cancel": proof(`browser revoke returned terminal ${terminal.body.result.structuredContent.kind}`),

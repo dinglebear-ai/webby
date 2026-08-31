@@ -48,14 +48,14 @@ export async function loadScenarioMatrix({directory = new URL("../contracts/scen
 }
 
 export class ScenarioRunner {
-  constructor({scenario, driver, world, recorder, actions, observe, cleanup, defaultTimeoutMs = 30_000} = {}) {
+  constructor({scenario, driver, world, recorder, actions, observe, cleanup, defaultTimeoutMs = 30_000, recordTelemetry = true} = {}) {
     if (!scenario || !driver || !world || !recorder?.producers?.world) throw new ScenarioInfrastructureError("invalid_runner", "scenario, driver, live world, and recorder are required")
     assertScenarioContract(scenario, {source: "ScenarioRunner scenario"})
     if (!scenario.drivers?.includes(driver)) throw new ScenarioInfrastructureError("ineligible_driver", `${driver} is not eligible for ${scenario.id}`)
     if (typeof actions !== "object" || typeof observe !== "function" || typeof cleanup !== "function") throw new ScenarioInfrastructureError("invalid_runner", "actions, observer, and cleanup are required")
-    this.scenario = scenario; this.driver = driver; this.world = world; this.recorder = recorder; this.actions = actions; this.observe = observe; this.cleanup = cleanup; this.defaultTimeoutMs = defaultTimeoutMs
+    this.scenario = scenario; this.driver = driver; this.world = world; this.recorder = recorder; this.actions = actions; this.observe = observe; this.cleanup = cleanup; this.defaultTimeoutMs = defaultTimeoutMs; this.recordTelemetry = recordTelemetry
     this.handles = new LogicalHandles({world, contract: scenario})
-    this.observations = {}; this.observedSurfaceIds = new Set(); this.lastSequence = recorder.journal.sequence
+    this.observations = {}; this.observedSurfaceIds = new Set(); this.surfaceProofs = {}; this.lastSequence = recorder.journal.sequence
     this.boundaryEvidenceRequired = observedBoundarySurfaces(scenario.id, scenario.steps[0].action.op) !== undefined
     if (this.boundaryEvidenceRequired) validateBoundaryDenominator(scenario)
     if (!scenario.artifacts?.includes("timeline") || !scenario.artifacts?.includes("world-manifest")) throw new ScenarioInfrastructureError("missing_artifact_requirement", "scenario must require timeline and world manifest artifacts")
@@ -106,11 +106,14 @@ export class ScenarioRunner {
       for (const step of this.scenario.steps) {
         const action = this.actions[step.action.op]
         if (!action) throw new ScenarioInfrastructureError("missing_action", `no action registered for ${step.action.op}`)
-        const boundary = createBoundaryObservation(this.scenario.id, step.action.op)
+        const boundary = createBoundaryObservation(this.scenario.id, step.action.op, this.recorder)
         await this.event("scenario.step.started", {step_id: step.id, operation: step.action.op})
         const result = await this.bounded(signal => action({params: step.action.params ?? {}, handles: this.handles, observations: this.observations, signal, boundary}), step.wait.timeout_ms, step.id)
-        const boundaryEvidence = boundary?.consume()
-        for (const surfaceId of boundaryEvidence?.surface_ids ?? []) this.observedSurfaceIds.add(surfaceId)
+        const boundaryEvidence = await boundary?.consume()
+        for (const surfaceId of boundaryEvidence?.surface_ids ?? []) {
+          this.observedSurfaceIds.add(surfaceId)
+          this.surfaceProofs[surfaceId] = boundaryEvidence.proofs[surfaceId]
+        }
         if (result?.handles) for (const [name, value] of Object.entries(result.handles)) this.handles.bind(name, this.scenario.handles[name], String(value))
         Object.assign(this.observations, result?.observations)
         Object.assign(this.observations, await this.bounded(signal => this.observe(step, this, signal), step.wait.timeout_ms, `${step.id} observation`))
@@ -124,7 +127,7 @@ export class ScenarioRunner {
       }
       if (this.boundaryEvidenceRequired) {
         if (this.observedSurfaceIds.size === 0) throw new ScenarioInfrastructureError("missing_surface_evidence", `${this.driver}/${this.scenario.id}: runtime surface evidence is required`)
-        const surfaceEvidence = validateObservedSurfaces({scenario: this.scenario, driver: this.driver, observed: [...this.observedSurfaceIds], inventory: await loadSurfaceInventory()})
+        const surfaceEvidence = validateObservedSurfaces({scenario: this.scenario, driver: this.driver, observed: [...this.observedSurfaceIds], proofs: this.surfaceProofs, inventory: await loadSurfaceInventory()})
         await this.recorder.producers.world.diagnostic("surface-evidence.json", surfaceEvidence, Object.keys(surfaceEvidence))
       }
       await this.event("scenario.completed", {scenario_id: this.scenario.id, outcome_keys: this.scenario.outcomes.map(item => item.key)})
@@ -141,7 +144,7 @@ export class ScenarioRunner {
       for (const predicate of this.scenario.cleanup) assertPredicate(predicate, cleanup, predicate.subject)
     } catch (error) { cleanupError = error }
     const telemetryDenominator = new Set((process.env.WEBBY_E2E_SCENARIO_DENOMINATOR ?? "").split(",").filter(Boolean))
-    if (this.boundaryEvidenceRequired && process.env.WEBBY_E2E_SCENARIO_TELEMETRY && telemetryDenominator.has(`${this.driver}:${this.scenario.id}`)) {
+    if (this.recordTelemetry && this.boundaryEvidenceRequired && process.env.WEBBY_E2E_SCENARIO_TELEMETRY && telemetryDenominator.has(`${this.driver}:${this.scenario.id}`)) {
       await appendFile(process.env.WEBBY_E2E_SCENARIO_TELEMETRY, JSON.stringify({scenario_id: this.scenario.id, adapter: this.driver, duration_ms: Date.now() - startedAt, status: primaryError || cleanupError ? "failed" : "passed"}) + "\n", {mode: 0o600})
     }
     if (primaryError && cleanupError) throw new AggregateError([primaryError, cleanupError], "Scenario and cleanup both failed", {cause: primaryError})

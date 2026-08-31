@@ -79,11 +79,22 @@
       "properties": {"key": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"}, "predicate": {"$ref": "#/$defs/predicate"}}
     },
     "operation": {
-      "type": "object", "additionalProperties": false, "required": ["op"],
-      "properties": {
-        "op": {"enum": ["health.request", "browser.pair", "discovery.publish", "dashboard.register", "credential.create", "mcp.negotiate", "mcp.invoke", "audit.observe", "transport.reject-matrix", "websocket.reject-matrix", "limits.exercise", "lifecycle.trigger", "lifecycle.observe-terminal", "lifecycle.recover", "capacity.fill", "capacity.overflow", "race.execute", "capacity.reuse", "world.start", "world.restart", "retention.drain", "privacy.erase", "extension.configure", "extension.pair-scan", "extension.permissions", "extension.restart", "fixture.discover", "fixture.invoke-matrix", "fixture.mutate", "commands.validate"]},
-        "params": {"type": "object"}
-      }
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["op"],
+          "properties": {
+            "op": {"const": "health.request"},
+            "params": {"type": "object", "additionalProperties": false, "properties": {"id": {"type": "string", "minLength": 1}}}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["op"],
+          "properties": {
+            "op": {"enum": ["browser.pair", "discovery.publish", "dashboard.register", "credential.create", "mcp.negotiate", "mcp.invoke", "audit.observe", "transport.reject-matrix", "websocket.reject-matrix", "limits.exercise", "lifecycle.trigger", "lifecycle.observe-terminal", "lifecycle.recover", "capacity.fill", "capacity.overflow", "race.execute", "capacity.reuse", "world.start", "world.restart", "retention.drain", "privacy.erase", "extension.configure", "extension.pair-scan", "extension.permissions", "extension.restart", "fixture.discover", "fixture.invoke-matrix", "fixture.mutate", "commands.validate"]},
+            "params": {"type": "object", "additionalProperties": false}
+          }
+        }
+      ]
     },
     "predicate": {
       "type": "object", "additionalProperties": false, "required": ["kind", "subject"],

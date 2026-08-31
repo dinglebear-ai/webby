@@ -45,9 +45,9 @@ export async function runLifecycleScenario({scenario, driver, world, recorder, n
     return [item.predicate.subject, value]
   }))
   const runner = new ScenarioRunner({scenario, driver, world, recorder, actions: {
-    "lifecycle.trigger": async ({boundary}) => { observeLifecycleProofs(boundary, runtimeSurfaceEvidence["lifecycle.trigger"]); boundary.complete(); return {observations: {"wait.lifecycle-removal.trigger": {state: "terminal", terminal: true}}} },
-    "lifecycle.observe-terminal": async ({boundary}) => { observeLifecycleProofs(boundary, runtimeSurfaceEvidence["lifecycle.observe-terminal"]); boundary.complete(); return {observations: {...observations, "wait.lifecycle-removal.terminal": {state: "terminal", terminal: true}}} },
-    "lifecycle.recover": async ({boundary}) => { observeLifecycleProofs(boundary, runtimeSurfaceEvidence["lifecycle.recover"]); boundary.complete(); return {observations: {"wait.lifecycle-removal.recover": {state: "recovered", terminal: true}}} },
+    "lifecycle.trigger": async ({boundary}) => { await observeLifecycleProofs(boundary, runtimeSurfaceEvidence["lifecycle.trigger"]); boundary.complete(); return {observations: {"wait.lifecycle-removal.trigger": {state: "terminal", terminal: true}}} },
+    "lifecycle.observe-terminal": async ({boundary}) => { await observeLifecycleProofs(boundary, runtimeSurfaceEvidence["lifecycle.observe-terminal"]); boundary.complete(); return {observations: {...observations, "wait.lifecycle-removal.terminal": {state: "terminal", terminal: true}}} },
+    "lifecycle.recover": async ({boundary}) => { await observeLifecycleProofs(boundary, runtimeSurfaceEvidence["lifecycle.recover"]); boundary.complete(); return {observations: {"wait.lifecycle-removal.recover": {state: "recovered", terminal: true}}} },
   }, observe: async () => ({}), cleanup})
   const result = await runner.run()
   return {...result, normalized: Object.fromEntries(lifecycleParityKeys.map(key => {
@@ -56,8 +56,14 @@ export async function runLifecycleScenario({scenario, driver, world, recorder, n
   }))}
 }
 
-function observeLifecycleProofs(boundary, proofs) {
+async function observeLifecycleProofs(boundary, proofs) {
   if (!proofs || typeof proofs !== "object" || Array.isArray(proofs)) throw new Error("typed lifecycle boundary proofs are required")
+  const pending = Object.entries(proofs).filter(([, proof]) => proof?.kind === "pending_recorder_token")
+  if (pending.length) {
+    const token = await boundary.record(pending.map(([surfaceId]) => surfaceId))
+    for (const [surfaceId, proof] of Object.entries(proofs)) if (proof?.kind !== "pending_recorder_token") boundary.observe(surfaceId, proof)
+    return token
+  }
   for (const [surfaceId, proof] of Object.entries(proofs)) boundary.observe(surfaceId, proof)
 }
 

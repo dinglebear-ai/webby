@@ -9,7 +9,7 @@ import {ChromiumWorld} from "../../support/chromium-world.js"
 import {assertExecutedCoverage, fixtureToolRows, reviewedCrashExclusions} from "../../support/chromium-invocation-matrix.js"
 import {DashboardDriver} from "../../support/dashboard-driver.js"
 import {fixtureOutcomeParityResult, runSharedFixtureOutcome} from "../../support/fixture-outcome-parity.js"
-import {observeVerifiedSurfaces} from "../../support/boundary-surfaces.js"
+import {observeRecordedSurfaces} from "../../support/boundary-surfaces.js"
 import {MCPClient, MCPClientError} from "../../support/mcp-client.js"
 import {compareParity} from "../../support/parity-report.js"
 import {ScenarioRunner} from "../../support/scenario-runner.js"
@@ -385,8 +385,8 @@ test("real Chromium exhausts fixture outcomes, catalog mutation, cancellation, a
     const chromiumRunner = new ScenarioRunner({
       scenario: fixtureContract, driver: "chromium", world, recorder: chromiumRecorder,
       actions: {
-        "fixture.discover": async ({boundary}) => { observeVerifiedSurfaces(boundary, ["in:discovery-observed", "capability:fixture", "world-field:fixture-url"], "live Chromium fixture catalog was discovered and sanitized"); boundary.complete(); return {observations: {"catalog.sanitized": chromiumCatalog, "wait.fixture-tool-outcomes.catalog": chromiumCatalog}} },
-        "fixture.invoke-matrix": async ({boundary}) => { observeVerifiedSurfaces(boundary, ["in:tool-result", "in:tool-error", "out:tool-call", "mcp:tools-call", "action:page-call", "ext-event:call", "ext-event:cancel", "fixture:json", "fixture:text", "fixture:throw", "fixture:delay", "fixture:cancel", "fixture:oversized", "fixture:deep", "fixture:side-effect"], "live Chromium fixture matrix executed and asserted every result and cancellation boundary"); boundary.complete(); return {observations: {"results.normalized": chromiumResults, "abort.observed": chromiumAbort, "wait.fixture-tool-outcomes.outcomes": chromiumResults}} },
+        "fixture.discover": async ({boundary}) => { observeRecordedSurfaces(boundary, ["in:discovery-observed", "capability:fixture", "world-field:fixture-url"], "live Chromium fixture catalog was discovered and sanitized"); boundary.complete(); return {observations: {"catalog.sanitized": chromiumCatalog, "wait.fixture-tool-outcomes.catalog": chromiumCatalog}} },
+        "fixture.invoke-matrix": async ({boundary}) => { observeRecordedSurfaces(boundary, ["in:tool-result", "in:tool-error", "out:tool-call", "mcp:tools-call", "action:page-call", "ext-event:call", "ext-event:cancel", "fixture:json", "fixture:text", "fixture:throw", "fixture:delay", "fixture:cancel", "fixture:oversized", "fixture:deep", "fixture:side-effect"], "live Chromium fixture matrix executed and asserted every result and cancellation boundary"); boundary.complete(); return {observations: {"results.normalized": chromiumResults, "abort.observed": chromiumAbort, "wait.fixture-tool-outcomes.outcomes": chromiumResults}} },
         "fixture.mutate": async ({boundary}) => { boundary.complete(); return {observations: {"stale.rejected": chromiumStale, "wait.fixture-tool-outcomes.mutation": chromiumStale}} },
       },
       observe: async () => ({}), cleanup: parityCleanup,

@@ -13,7 +13,7 @@ const worldValidator = ajv.compile(readJson(new URL("./world-manifest.schema.jso
 // escape hatch. Keep the registry explicit so adding a parameter requires a
 // reviewed contract change before a scenario can rely on it.
 const operationParameters = Object.freeze({
-  "health.request": {optional: ["id"]},
+  "health.request": {optional: ["id"], types: {id: "string"}},
   "browser.pair": {}, "discovery.publish": {}, "dashboard.register": {},
   "credential.create": {}, "mcp.negotiate": {}, "mcp.invoke": {}, "audit.observe": {},
   "transport.reject-matrix": {}, "websocket.reject-matrix": {}, "limits.exercise": {},
@@ -61,6 +61,7 @@ function assertOperationParameters(action, source) {
   const unknown = Object.keys(params).filter(key => !allowed.has(key))
   const missing = (contract.required ?? []).filter(key => !Object.hasOwn(params, key))
   if (unknown.length || missing.length) throw new Error(`${source}: ${action.op} parameters are invalid; unknown=${unknown.join(",")} missing=${missing.join(",")}`)
+  for (const [key, type] of Object.entries(contract.types ?? {})) if (Object.hasOwn(params, key) && (typeof params[key] !== type || (type === "string" && params[key].length === 0))) throw new Error(`${source}: ${action.op} parameter ${key} must be a nonempty ${type}`)
 }
 
 export function assertWorldManifest(manifest, {source = "world manifest"} = {}) {

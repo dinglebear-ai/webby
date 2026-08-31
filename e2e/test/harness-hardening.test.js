@@ -7,7 +7,19 @@ import {runHarnessSelfTests} from "../support/harness-self-test.js"
 import {buildSuiteTelemetry, parseScenarioTelemetry, writeSuiteTelemetry} from "../support/suite-telemetry.js"
 import {loadSurfaceInventory, validateObservedSurfaces, writeSurfaceEvidence} from "../support/surface-evidence.js"
 import {readScenarioContract} from "../support/runtime-contracts.js"
-import {createBoundaryObservation, validateBoundaryDenominator} from "../support/boundary-surfaces.js"
+import {createBoundaryObservation, surfaceProof, validateBoundaryDenominator} from "../support/boundary-surfaces.js"
+
+const proofFor = (surfaceId, sequence) => {
+  const category = surfaceId.split(":", 1)[0]
+  if (category === "http" || category === "behavior") return surfaceProof.http({status: 200, ok: true}, {path: "/health"})
+  if (category === "artifact") return {kind: "artifact_attestation", attestation_sha256: "a".repeat(64), file: {path: `${surfaceId}.json`, sha256: "b".repeat(64)}}
+  if (category === "world-field" || category === "capability") return {kind: "manifest_field", manifest_path: "world-manifest.json", field: "field", value: true}
+  if (category === "dashboard") return surfaceProof.dashboard("test", "entity-1")
+  if (category === "chrome-event") return surfaceProof.chrome({sequence}, {eventName: "chrome.test", identity: "tab-1"})
+  if (category === "version" || category === "mcp" || category === "action") return surfaceProof.mcp({status: 200}, {method: "tools/call", version: "2025-06-18", action: "status"})
+  return surfaceProof.journal({sequence, type: "boundary.test", producer: "test"})
+}
+const proofMap = surfaceIds => Object.fromEntries(surfaceIds.map((surfaceId, index) => [surfaceId, proofFor(surfaceId, index + 1)]))
 
 test("suite telemetry reports non-secret cost and stability measurements", async t => {
   const root = await mkdtemp(join(tmpdir(), "webby-telemetry-")); t.after(() => rm(root, {recursive: true, force: true}))
@@ -34,30 +46,31 @@ test("adapter surface evidence must exactly equal declarations and inventory map
   assert.throws(() => validateBoundaryDenominator({...scenario, surface_ids: scenario.surface_ids.slice(1)}), /surface denominator drifted/)
   const root = await mkdtemp(join(tmpdir(), "webby-surface-runtime-")); t.after(() => rm(root, {recursive: true, force: true}))
   const path = join(root, "surface-evidence.json")
-  const evidence = await writeSurfaceEvidence(path, {scenario, driver: "protocol", observed: scenario.surface_ids, inventory})
+  const evidence = await writeSurfaceEvidence(path, {scenario, driver: "protocol", observed: scenario.surface_ids, proofs: proofMap(scenario.surface_ids), inventory})
   assert.equal(evidence.coverage_percent, 100); assert.equal(evidence.observed_surface_ids.length, scenario.surface_ids.length)
-  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.slice(1), inventory}), /missing=/)
-  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.filter(id => id !== "artifact:manifest"), inventory}), /missing=artifact:manifest/)
-  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.filter(id => id !== "version:2025-03"), inventory}), /missing=version:2025-03/)
-  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: [...scenario.surface_ids, "surface:invented"], inventory}), /undeclared=.*surface:invented/)
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, proofs: Object.fromEntries(scenario.surface_ids.map(id => [id, {source: `forged ${id}`, verified: true}])), inventory}), /invalid proof/)
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.slice(1), proofs: proofMap(scenario.surface_ids.slice(1)), inventory}), /missing=/)
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.filter(id => id !== "artifact:manifest"), proofs: proofMap(scenario.surface_ids.filter(id => id !== "artifact:manifest")), inventory}), /missing=artifact:manifest/)
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.filter(id => id !== "version:2025-03"), proofs: proofMap(scenario.surface_ids.filter(id => id !== "version:2025-03")), inventory}), /missing=version:2025-03/)
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: [...scenario.surface_ids, "surface:invented"], proofs: proofMap([...scenario.surface_ids, "surface:invented"]), inventory}), /undeclared=.*surface:invented/)
   const unmapped = structuredClone(inventory); unmapped.surfaces.find(row => row.id === scenario.surface_ids[0]).scenarios = []
-  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, inventory: unmapped}), /inventory does not map/)
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, proofs: proofMap(scenario.surface_ids), inventory: unmapped}), /inventory does not map/)
 })
 
 test("runtime boundary completion seals only individually proven surfaces", () => {
   const boundary = createBoundaryObservation("e2e-shared-vertical-slice", "health.request")
   assert.throws(() => boundary.consume(), /completion evidence is missing/)
-  boundary.observe("http:get-health", {source: "GET /health returned 200", verified: true})
-  assert.throws(() => boundary.observe("http:get-root", undefined), /verified runtime proof is required/)
-  assert.throws(() => boundary.observe("surface:invented", {source: "invented", verified: true}), /undeclared boundary surface/)
+  boundary.observe("http:get-health", surfaceProof.http({status: 200, ok: true}, {path: "/health"}))
+  assert.throws(() => boundary.observe("http:get-root", {source: "forged prose", verified: true}), /discriminated producer proof is required/)
+  assert.throws(() => boundary.observe("surface:invented", {kind: "journal_event", sequence: 1, type: "invented"}), /undeclared boundary surface/)
   const evidence = boundary.complete()
   assert.equal(boundary.consume(), evidence)
   assert.equal(evidence.state, "verified")
   assert.deepEqual(evidence.surface_ids, ["http:get-health"])
-  assert.equal(evidence.proofs["http:get-health"].source, "GET /health returned 200")
+  assert.deepEqual(evidence.proofs["http:get-health"], {kind: "http_response", method: "GET", path: "/health", status: 200, ok: true})
   assert.equal(evidence.surface_ids.includes("http:get-root"), false)
   assert.throws(() => boundary.complete(), /more than once/)
-  assert.throws(() => boundary.observe("http:get-root", {source: "late", verified: true}), /already sealed/)
+  assert.throws(() => boundary.observe("http:get-root", surfaceProof.http({status: 200, ok: true}, {path: "/"})), /already sealed/)
 })
 
 test("scheduled self-test executes deliberate fail-closed seams", async () => {

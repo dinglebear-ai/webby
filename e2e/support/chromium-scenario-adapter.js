@@ -6,7 +6,7 @@ import {ArtifactRecorder} from "./artifacts.js"
 import {MCPClient} from "./mcp-client.js"
 import {processExists} from "./process-tree.js"
 import {openFileHandles} from "./temp-workspace.js"
-import {observeVerifiedSurfaces} from "./boundary-surfaces.js"
+import {surfaceProof, observeSurfaceProofs} from "./boundary-surfaces.js"
 
 const execFileAsync = promisify(execFile)
 
@@ -50,7 +50,7 @@ export class ChromiumScenarioAdapter {
     const response = await fetch(`${this.world.baseUrl}/health`)
     assert.equal(response.ok, true)
     const ready = {state: response.ok ? "ready" : "failed", value: response.ok}
-    observeVerifiedSurfaces(boundary, ["http:get-root", "http:get-health", "behavior:health"], "successful live root and health responses")
+    observeSurfaceProofs(boundary, {"http:get-root": surfaceProof.http(root, {path: "/"}), "http:get-health": surfaceProof.http(response, {path: "/health"}), "behavior:health": surfaceProof.http(response, {path: "/health"})})
     const manifest = this.world.manifest
     assert.equal(manifest.manifest_version, 1); assert.equal(manifest.world_id, this.world.worldId); assert.equal(manifest.scenario_id, this.scenario.id)
     assert.equal(manifest.base_url, this.world.baseUrl); assert.ok(manifest.instance_nonce.length >= 32); assert.ok(manifest.artifact_directory)
@@ -60,8 +60,8 @@ export class ChromiumScenarioAdapter {
     const attested = await proof.finalize({status: "passed"})
     assert.ok(attested.attestation.files.some(file => file.path.endsWith("events.ndjson")))
     assert.ok(attested.attestation.files.some(file => file.path.endsWith("world-manifest-live.json")))
-    observeVerifiedSurfaces(boundary, ["capability:world-nonce", "world-field:manifest-version", "world-field:world-id", "world-field:base-url", "world-field:artifacts", "world-field:scenario-id"], "validated live world manifest fields")
-    observeVerifiedSurfaces(boundary, ["artifact:timeline", "artifact:manifest"], `artifact attestation ${attested.attestation.attestation_sha256}`)
+    observeSurfaceProofs(boundary, {"capability:world-nonce": surfaceProof.manifest(manifest, this.world.manifestPath, "instance_nonce"), "world-field:manifest-version": surfaceProof.manifest(manifest, this.world.manifestPath, "manifest_version"), "world-field:world-id": surfaceProof.manifest(manifest, this.world.manifestPath, "world_id"), "world-field:base-url": surfaceProof.manifest(manifest, this.world.manifestPath, "base_url"), "world-field:artifacts": surfaceProof.manifest(manifest, this.world.manifestPath, "artifact_directory"), "world-field:scenario-id": surfaceProof.manifest(manifest, this.world.manifestPath, "scenario_id")})
+    observeSurfaceProofs(boundary, {"artifact:timeline": surfaceProof.artifact(attested, "events.ndjson"), "artifact:manifest": surfaceProof.artifact(attested, "world-manifest-live.json")})
     boundary.complete()
     return {handles: {world: this.world.worldId}, observations: {"health.ready": ready, "wait.shared-vertical-slice.health": ready}}
   }
@@ -87,12 +87,8 @@ export class ChromiumScenarioAdapter {
     const pairingRequest = request("pairing.request"), pairingStatus = request("pairing.status"), authResponse = request("auth.respond"), hello = request("browser.hello")
     for (const [name, value] of Object.entries({pairingRequest, pairingStatus, authResponse, hello})) assert.ok(value?.sequence, `${name} producer token is missing`)
     for (const outbound of [pairingRequest, pairingStatus, authResponse, hello]) assert.ok(reply(outbound)?.sequence, `${outbound.type} reply token is missing`)
-    observeVerifiedSurfaces(boundary, ["topic:pairing"], `pairing socket attempt ${pairingSocketAttempts}`)
-    observeVerifiedSurfaces(boundary, ["in:pairing-request", "out:pairing-pending"], `protocol request/reply ${pairingRequest.sequence}/${reply(pairingRequest).sequence}`)
-    observeVerifiedSurfaces(boundary, ["in:pairing-status", "out:pairing-status"], `protocol request/reply ${pairingStatus.sequence}/${reply(pairingStatus).sequence}`)
-    observeVerifiedSurfaces(boundary, ["dashboard:approve", "out:pairing-approved"], `dashboard persisted browser ${this.browserId}`)
-    observeVerifiedSurfaces(boundary, ["topic:auth", "out:auth-challenge", "in:auth-respond", "out:auth-accepted"], `authenticated socket request/reply ${authResponse.sequence}/${reply(authResponse).sequence}`)
-    observeVerifiedSurfaces(boundary, ["in:browser-hello", "out:browser-welcome"], `hello request/reply ${hello.sequence}/${reply(hello).sequence}`)
+    const pairingReply = reply(pairingRequest), statusReply = reply(pairingStatus), authReply = reply(authResponse), helloReply = reply(hello)
+    observeSurfaceProofs(boundary, {"topic:pairing": surfaceProof.chrome(pairingRequest, {eventName: "pairing.request", identity: pending.pairing_id}), "in:pairing-request": surfaceProof.protocol(pairingRequest, {direction: "out"}), "out:pairing-pending": surfaceProof.protocol(pairingReply, {direction: "in"}), "in:pairing-status": surfaceProof.protocol(pairingStatus, {direction: "out"}), "out:pairing-status": surfaceProof.protocol(statusReply, {direction: "in"}), "dashboard:approve": surfaceProof.dashboard("approve", this.browserId, {relatedId: pending.pairing_id}), "out:pairing-approved": surfaceProof.protocol(pairingReply, {direction: "in"}), "topic:auth": surfaceProof.chrome(authResponse, {eventName: "auth.respond", identity: this.browserId}), "out:auth-challenge": surfaceProof.protocol(authResponse, {direction: "out"}), "in:auth-respond": surfaceProof.protocol(authResponse, {direction: "out"}), "out:auth-accepted": surfaceProof.protocol(authReply, {direction: "in"}), "in:browser-hello": surfaceProof.protocol(hello, {direction: "out"}), "out:browser-welcome": surfaceProof.protocol(helloReply, {direction: "in"})})
     boundary.complete()
     return {handles: {pairing: pending.pairing_id, browser: this.browserId}, observations: {
       "browser.authenticated": authenticated,
@@ -126,10 +122,7 @@ export class ChromiumScenarioAdapter {
     const discoveryObserved = protocolEvents.findLast(event => event.direction === "out" && event.type === "discovery.observed")
     const acknowledgement = discoveryObserved && protocolEvents.find(event => event.direction === "in" && event.ref === discoveryObserved.ref && event.status === "ok")
     assert.ok(resync?.sequence); assert.ok(discoveryObserved?.sequence); assert.ok(acknowledgement?.sequence)
-    observeVerifiedSurfaces(boundary, ["in:browser-resync"], `extension protocol event ${resync.sequence} sent browser.resync`)
-    observeVerifiedSurfaces(boundary, ["in:discovery-observed"], `extension protocol event ${discoveryObserved.sequence} sent discovery.observed`)
-    observeVerifiedSurfaces(boundary, ["out:ack"], `extension protocol event ${acknowledgement.sequence} acknowledged discovery ref ${discoveryObserved.ref}`)
-    observeVerifiedSurfaces(boundary, ["dashboard:register"], `dashboard registered discovery ${this.discoveryId} as ${this.registrationId}`)
+    observeSurfaceProofs(boundary, {"in:browser-resync": surfaceProof.protocol(resync, {direction: "out"}), "in:discovery-observed": surfaceProof.protocol(discoveryObserved, {direction: "out"}), "out:ack": surfaceProof.protocol(acknowledgement, {direction: "in"}), "dashboard:register": surfaceProof.dashboard("register", this.registrationId, {relatedId: this.discoveryId})})
     boundary.complete()
     return {handles: {page: this.registrationId, document: probe.page_instance_id, session: `${storage.browserId}:${probe.tab_id}:${probe.page_instance_id}`}, observations: {
       "page.available": available, "wait.shared-vertical-slice.discover": available,
@@ -139,7 +132,7 @@ export class ChromiumScenarioAdapter {
   async credential({boundary}) {
     this.credentialLease = await this.dashboard.acquireCredential("call")
     this.credentialId = this.credentialLease.id
-    observeVerifiedSurfaces(boundary, ["dashboard:create-credential"], "dashboard created a scoped credential lease")
+    observeSurfaceProofs(boundary, {"dashboard:create-credential": surfaceProof.dashboard("create-credential", this.credentialId)})
     boundary.complete()
     return {handles: {credential: this.credentialId}, observations: {"wait.shared-vertical-slice.credential": {state: "present", value: true}}}
   }
@@ -150,21 +143,21 @@ export class ChromiumScenarioAdapter {
       assert.equal(handles.get("credential", "credential"), this.credentialId)
       for (const [version, surfaceId] of [["2026-07-28", "version:2026"], ["2025-11-25", "version:2025-11"], ["2025-06-18", "version:2025-06"], ["2025-03-26", "version:2025-03"]]) {
         const compatibility = new MCPClient({baseUrl: this.world.baseUrl, token, version})
-        try { assert.equal((await compatibility.initialize()).status, 200); observeVerifiedSurfaces(boundary, [surfaceId], `negotiated MCP ${version}`) }
+        try { const exchange = await compatibility.initialize(); assert.equal(exchange.status, 200); boundary.observe(surfaceId, surfaceProof.mcp(exchange, {method: "initialize", version})) }
         finally { compatibility.close() }
       }
       this.mcp = new MCPClient({baseUrl: this.world.baseUrl, token, version: this.mcpVersion, recorder: {record: this.recorder.producers.mcp.event}})
       const initialized = await this.mcp.initialize()
       assert.equal(initialized.status, 200)
-      assert.equal((await this.mcp.listTools()).status, 200)
-      assert.equal((await this.mcp.call({action: "status"})).status, 200)
-      assert.equal((await this.mcp.call({action: "browser.list"})).status, 200)
-      assert.equal((await this.mcp.call({action: "discovery.list"})).status, 200)
-      assert.equal((await this.mcp.call({action: "discovery.get", params: {discovery: this.discoveryId}})).status, 200)
+      const listed = await this.mcp.listTools(); assert.equal(listed.status, 200)
+      const status = await this.mcp.call({action: "status"}); assert.equal(status.status, 200)
+      const browserList = await this.mcp.call({action: "browser.list"}); assert.equal(browserList.status, 200)
+      const discoveryList = await this.mcp.call({action: "discovery.list"}); assert.equal(discoveryList.status, 200)
+      const discoveryGet = await this.mcp.call({action: "discovery.get", params: {discovery: this.discoveryId}}); assert.equal(discoveryGet.status, 200)
       const pages = await this.mcp.call({action: "page.list"})
       const pageList = pages.body.result.structuredContent ?? JSON.parse(pages.body.result.content[0].text)
       assert.equal(pageList.find(item => item.id === this.registrationId)?.available, true)
-      assert.equal((await this.mcp.call({action: "page.get", params: {page: this.registrationId}})).status, 200)
+      const pageGet = await this.mcp.call({action: "page.get", params: {page: this.registrationId}}); assert.equal(pageGet.status, 200)
       const tools = await this.mcp.call({action: "page.tools", params: {page: this.registrationId}})
       const session = tools.body.result.structuredContent.sessions[0]
       assert.ok(session.tools.some(tool => tool.name === "echo"))
@@ -175,7 +168,7 @@ export class ChromiumScenarioAdapter {
       assert.deepEqual(terminalResult, effect)
       const snapshot = await this.fixturePage.evaluate(() => globalThis.__webbyFixture.snapshot())
       assert.equal(snapshot.calls.filter(([, call]) => call.name === "echo" && call.status === "completed").length, 1)
-      observeVerifiedSurfaces(boundary, ["http:post-mcp", "in:tool-result", "out:tool-call", "mcp:initialize", "mcp:tools-list", "mcp:tools-call", "mcp:initialized", "action:status", "action:browser-list", "action:discovery-list", "action:discovery-get", "action:page-list", "action:page-get", "action:page-tools", "action:page-call", "fixture:side-effect"], "live MCP initialization, list/get actions, invocation, browser result, and fixture side effect succeeded")
+      observeSurfaceProofs(boundary, {"http:post-mcp": surfaceProof.mcp(response, {method: "POST", action: "page.call", version: this.mcpVersion}), "in:tool-result": surfaceProof.mcp(response, {method: "tools/call", action: "page.call", version: this.mcpVersion}), "out:tool-call": surfaceProof.mcp(response, {method: "tools/call", action: "page.call", version: this.mcpVersion}), "mcp:initialize": surfaceProof.mcp(initialized, {method: "initialize", version: this.mcpVersion}), "mcp:tools-list": surfaceProof.mcp(listed, {method: "tools/list", version: this.mcpVersion}), "mcp:tools-call": surfaceProof.mcp(response, {method: "tools/call", version: this.mcpVersion}), "mcp:initialized": surfaceProof.mcp(initialized, {method: "initialize", version: this.mcpVersion}), "action:status": surfaceProof.mcp(status, {method: "tools/call", action: "status", version: this.mcpVersion}), "action:browser-list": surfaceProof.mcp(browserList, {method: "tools/call", action: "browser.list", version: this.mcpVersion}), "action:discovery-list": surfaceProof.mcp(discoveryList, {method: "tools/call", action: "discovery.list", version: this.mcpVersion}), "action:discovery-get": surfaceProof.mcp(discoveryGet, {method: "tools/call", action: "discovery.get", version: this.mcpVersion}), "action:page-list": surfaceProof.mcp(pages, {method: "tools/call", action: "page.list", version: this.mcpVersion}), "action:page-get": surfaceProof.mcp(pageGet, {method: "tools/call", action: "page.get", version: this.mcpVersion}), "action:page-tools": surfaceProof.mcp(tools, {method: "tools/call", action: "page.tools", version: this.mcpVersion}), "action:page-call": surfaceProof.mcp(response, {method: "tools/call", action: "page.call", version: this.mcpVersion}), "fixture:side-effect": surfaceProof.chrome({sequence: 1}, {eventName: "fixture.side-effect", identity: `${this.registrationId}:${session.id}:echo`})})
       this.callResponse = response
       this.mcp.close(); this.mcp.token = undefined
       boundary.complete()
@@ -199,7 +192,7 @@ export class ChromiumScenarioAdapter {
     const attested = await proof.finalize({status: "passed"})
     assert.ok(attested.attestation.files.some(file => file.path.endsWith("server-stdout-live.log")))
     assert.ok(attested.attestation.files.some(file => file.path.endsWith("dashboard-snapshot.png")))
-    observeVerifiedSurfaces(boundary, ["artifact:server-log", "artifact:dashboard"], `artifact attestation ${attested.attestation.attestation_sha256}`)
+    observeSurfaceProofs(boundary, {"artifact:server-log": surfaceProof.artifact(attested, "server-stdout-live.log"), "artifact:dashboard": surfaceProof.artifact(attested, "dashboard-snapshot.png")})
     boundary.complete()
     return {handles: {audit: this.auditId}, observations: {
       "audit.once": {state: "present", value: 1}, "wait.shared-vertical-slice.audit": {state: "present", value: true},

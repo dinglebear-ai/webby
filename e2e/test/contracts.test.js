@@ -41,6 +41,14 @@ test("scenario schema rejects missing IDs, drivers, outcomes, timeouts, and clea
   const unknownPredicate = structuredClone(valid);
   unknownPredicate.cleanup[0].kind = "eventually-maybe";
   assert.equal(validate(unknownPredicate), false);
+  const parameterless = structuredClone(valid);
+  parameterless.steps[0].action = {op: "browser.pair", params: {invented: true}};
+  assert.equal(validate(parameterless), false, "parameterless operation rejects unknown params");
+  const health = structuredClone(valid);
+  health.steps[0].action = {op: "health.request", params: {id: 42}};
+  assert.equal(validate(health), false, "health id has a schema-level string type");
+  health.steps[0].action.params = {id: "probe"};
+  assert.equal(validate(health), true, "health accepts its declared optional id");
 });
 
 test("runtime contract validation rejects duplicate semantics and non-scalar security dimensions", () => {
@@ -61,7 +69,7 @@ test("runtime contract validation rejects duplicate semantics and non-scalar sec
   assert.throws(() => assertScenarioContract(invalidTriple), /undeclared dimension/);
   const invalidParams = structuredClone(valid);
   invalidParams.steps[0].action.params = {adapter_invents_semantics: true};
-  assert.throws(() => assertScenarioContract(invalidParams), /parameters are invalid/);
+  assert.throws(() => assertScenarioContract(invalidParams), /runtime schema validation|parameters are invalid/);
 });
 
 test("every registered extractor has a positive golden and unmapped mutation guard", async (context) => {
