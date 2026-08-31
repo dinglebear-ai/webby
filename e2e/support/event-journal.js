@@ -67,6 +67,7 @@ export class EventJournal {
   }
 
   latchOverflow(reason, rejectedBytes) {
+    this.truncated = true
     this.overflowPromise ??= (async () => {
       await this.pending
       const details = {schema_version: 1, code: "artifact_overflow", reason, retained_events: this.events, retained_bytes: this.bytes, rejected_bytes: rejectedBytes, first_failure_preserved: true}

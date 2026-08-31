@@ -53,7 +53,12 @@ async function stageCleanupFailure(reportPath, report) {
 
 export async function initializeOwnedTempRoot(prefix = "webby-ci-run-") {
   const root = await mkdtemp(join(tmpdir(), prefix))
-  await writeFile(join(root, ownershipMarker), JSON.stringify({schema_version: 1, nonce: randomUUID(), created_by: "webby-ci-runner"}) + "\n", {flag: "wx", mode: 0o600})
+  try {
+    await writeFile(join(root, ownershipMarker), JSON.stringify({schema_version: 1, nonce: randomUUID(), created_by: "webby-ci-runner"}) + "\n", {flag: "wx", mode: 0o600})
+  } catch (error) {
+    await rm(root, {recursive: true, force: true}).catch(() => {})
+    throw error
+  }
   return root
 }
 
@@ -190,11 +195,25 @@ export async function runSuite(name) {
   const invokedAt = Date.now()
   const files = suites[name]
   if (!files) throw new Error(`unknown suite: ${name}`)
-  await rm(artifactRoot, {recursive: true, force: true})
+  // Reap the previous run before rotating its evidence pointer. Deleting the
+  // artifact directory first used to erase the only path to an interrupted
+  // run's temporary root, making the following cleanup a false green.
+  let previousRoot
+  try { previousRoot = (await readFile(join(artifactRoot, "run-temp-path"), "utf8")).trim() }
+  catch (error) { if (error.code !== "ENOENT") throw error }
+  if (previousRoot && await cleanupWorlds({recordedRoot: previousRoot}) !== 0) throw new Error(`previous E2E run cleanup failed: ${previousRoot}`)
   await mkdir(artifactRoot, {recursive: true, mode: 0o700})
+  for (const path of ["scenario-manifest.json", "test-output.log", "suite-telemetry.json", "cleanup-report.json"]) await rm(join(artifactRoot, path), {force: true})
+  for (const directory of ["attested", "upload", "cleanup-attested"]) await rm(join(artifactRoot, directory), {recursive: true, force: true})
   const manifestPath = join(artifactRoot, "scenario-manifest.json")
-  const runTemp = await initializeOwnedTempRoot()
-  await writeFile(join(artifactRoot, "run-temp-path"), `${await realpath(runTemp)}\n`, {mode: 0o600})
+  let runTemp
+  try {
+    runTemp = await initializeOwnedTempRoot()
+    await writeFile(join(artifactRoot, "run-temp-path"), `${await realpath(runTemp)}\n`, {mode: 0o600})
+  } catch (error) {
+    if (runTemp) await rm(runTemp, {recursive: true, force: true}).catch(() => {})
+    throw error
+  }
   const driver = name.startsWith("chromium") ? "chromium" : "protocol"
   // Chromium smoke deliberately includes the main-tier lifecycle-removal
   // contract, so its executable manifest must use the main denominator even
@@ -226,7 +245,7 @@ export async function runSuite(name) {
   if (status === 0 && JSON.stringify(plannedScenarioIds) !== JSON.stringify(observedScenarioIds)) { status = 1; infrastructureError = `scenario telemetry denominator drifted: planned=${plannedScenarioIds.join(",")} observed=${observedScenarioIds.join(",")}` }
   await writeSuiteTelemetry(join(artifactRoot, "suite-telemetry.json"), {
     suite: name, status: status === 0 ? "passed" : "failed", startedAt, finishedAt,
-    setupMs: startedAt.getTime() - invokedAt, attempts: 1, retries: 0, plannedScenarioIds, scenarioRuns, infrastructureError,
+    setupMs: startedAt.getTime() - invokedAt, attempts: 1, retries: 0, plannedScenarioIds, scenarioRuns, infrastructureError, adapter: driver,
   })
   if (status !== 0) {
     const root = join(artifactRoot, "attested")

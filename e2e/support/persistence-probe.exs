@@ -47,16 +47,6 @@ result =
       {:ok, cutoff, _offset} = DateTime.from_iso8601(cutoff)
       Webby.Invocations.reconcile_abandoned(cutoff)
 
-    %{"op" => "browser.erase", "browser_id" => browser_id, "audits" => audits} ->
-      policy =
-        case audits do
-          "anonymize" -> :anonymize
-          "delete" -> :delete
-          _ -> raise "invalid isolated audit erasure policy"
-        end
-
-      Webby.DataRetention.erase_browser(browser_id, audits: policy)
-
     %{"op" => "schema.validate"} ->
       Webby.SchemaMetadata.validate_generation()
 

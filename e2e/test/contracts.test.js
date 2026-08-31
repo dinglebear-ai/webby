@@ -19,7 +19,7 @@ test("all committed contracts are schema-valid, mapped, and fail-closed", () => 
   const result = validateContracts();
   assert.deepEqual(result.errors, []);
   assert.equal(result.report.coverage_percent, 100);
-  assert.equal(result.report.surfaces, 182);
+  assert.equal(result.report.surfaces, 183);
 });
 
 test("scenario schema rejects missing IDs, drivers, outcomes, timeouts, and cleanup", () => {

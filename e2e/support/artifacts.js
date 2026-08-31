@@ -153,6 +153,12 @@ export class ArtifactRecorder {
     const journalInput = join(this.rawRoot, "events.ndjson")
     const journalOutput = join(this.stagingRoot, "events.ndjson")
     try {
+      if (status === "passed" && this.journal.overflow) {
+        throw new RedactionError("artifact_overflow", "passed artifact set contains a truncated journal")
+      }
+      if (status === "passed" && this.omissions.length > 0) {
+        throw new RedactionError("required_artifact_omitted", `passed artifact set omitted ${this.omissions.length} nonessential artifact(s)`)
+      }
       await sanitizeFile(journalInput, journalOutput, {registry: this.registry, maxFileBytes: this.limits.journalBytes})
       this.items.push({id: "journal", producer: "harness", kind: "journal", name: "events.ndjson", staged: journalOutput, bytes: (await stat(journalOutput)).size, sha256: await hashFile(journalOutput), essential: true})
       const truncationInput = `${journalInput}.truncation.json`

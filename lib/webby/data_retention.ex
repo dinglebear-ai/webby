@@ -159,7 +159,12 @@ defmodule Webby.DataRetention do
       end
 
     {pairings, _} =
-      Repo.delete_all(from p in PairingRequest, where: p.browser_id == ^browser.id)
+      Repo.delete_all(
+        from p in PairingRequest,
+          where:
+            p.browser_id == ^browser.id or
+              (p.extension_id == ^browser.extension_id and p.public_key == ^browser.public_key)
+      )
 
     Repo.delete!(browser)
 

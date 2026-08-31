@@ -15,7 +15,7 @@
     "cleanup_grace": 30000
   },
   "extractor_registry": [
-    {"category": "http_route", "source": "lib/webby_web/router.ex", "extractor": "phoenix-routes", "minimum_count": 6, "independent_derivation": "runtime-router-introspection"},
+    {"category": "http_route", "source": "lib/webby_web/router.ex", "extractor": "phoenix-routes", "minimum_count": 7, "independent_derivation": "runtime-router-introspection"},
     {"category": "socket_topic", "source": "lib/webby_web/channels/browser_socket.ex", "extractor": "socket-topics", "minimum_count": 2},
     {"category": "browser_inbound", "source": "lib/webby/browser_protocol.ex", "extractor": "browser-allowlist", "minimum_count": 11, "independent_derivation": "channel-handler-extraction"},
     {"category": "browser_outbound", "source": "lib/webby_web/channels/browser_channel.ex", "extractor": "browser-envelopes", "minimum_count": 9},
@@ -36,7 +36,7 @@
     ,{"category": "world_manifest_field", "source": "e2e/support/world-manifest.schema.json", "extractor": "json-schema-properties", "minimum_count": 23}
   ],
   "snapshots": {
-    "http_route": ["ANY /dev/mailbox", "GET /", "GET /dev/dashboard", "GET /health", "GET /mcp", "POST /mcp"],
+    "http_route": ["ANY /dev/mailbox", "GET /", "GET /dev/dashboard", "GET /health", "GET /mcp", "POST /e2e/persistence", "POST /mcp"],
     "socket_topic": ["browser:auth", "browser:pairing:*"],
     "browser_inbound": ["auth.respond", "browser.hello", "browser.resync", "browser.settings", "discovery.observed", "heartbeat", "pairing.request", "pairing.status", "session.closed", "tool.error", "tool.result"],
     "browser_outbound": ["acknowledgement", "auth.accepted", "auth.challenge", "browser.welcome", "pairing.approved", "pairing.pending", "pairing.rejected", "pairing.status", "tool.call", "tool.cancel"],
@@ -61,6 +61,7 @@
     {"id": "http:get-health", "category": "http_route", "symbol": "GET /health", "source": "lib/webby_web/router.ex:26", "scenarios": ["e2e-shared-vertical-slice", "e2e-persistence-retention"]},
     {"id": "http:get-mcp", "category": "http_route", "symbol": "GET /mcp", "source": "lib/webby_web/router.ex:28", "scenarios": ["e2e-transport-security"]},
     {"id": "http:post-mcp", "category": "http_route", "symbol": "POST /mcp", "source": "lib/webby_web/router.ex:27", "scenarios": ["e2e-shared-vertical-slice", "e2e-transport-security"]},
+    {"id": "http:post-e2e-persistence", "category": "http_route", "symbol": "POST /e2e/persistence", "source": "lib/webby_web/router.ex:27", "scenarios": ["e2e-persistence-retention"]},
     {"id": "http:dev-dashboard", "category": "http_route", "symbol": "GET /dev/dashboard", "source": "lib/webby_web/router.ex:48", "scenarios": [], "exclusion": {"source_symbol": "live_dashboard /dashboard", "owner": "Webby maintainers", "rationale": "Phoenix LiveDashboard is compiled only for the development environment and is not part of the production-like E2E world.", "approved_by": "Webby E2E plan", "reviewed_on": "2026-08-27", "expires_on": "2027-08-27"}},
     {"id": "http:dev-mailbox", "category": "http_route", "symbol": "ANY /dev/mailbox", "source": "lib/webby_web/router.ex:49", "scenarios": [], "exclusion": {"source_symbol": "forward /mailbox", "owner": "Webby maintainers", "rationale": "The local Swoosh mailbox is compiled only for development and Webby does not send mail in its production-like E2E world.", "approved_by": "Webby E2E plan", "reviewed_on": "2026-08-27", "expires_on": "2027-08-27"}},
     {"id": "topic:auth", "category": "socket_topic", "symbol": "browser:auth", "source": "lib/webby_web/channels/browser_socket.ex:5", "scenarios": ["e2e-shared-vertical-slice", "e2e-transport-security"]},

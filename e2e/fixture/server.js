@@ -27,6 +27,7 @@ export async function startFixtureServer({worldId, port = 0, hostname = "127.0.0
     origin, capability: control.capability, control,
     async close() {
       control.disconnect();
+      if (!server.listening) return;
       await new Promise((resolve, reject) => {
         server.closeAllConnections?.();
         server.closeIdleConnections?.();

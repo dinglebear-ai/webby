@@ -51,7 +51,9 @@ export class DashboardDriver {
     await this.click(pairing, "Approve")
     await pairing.waitFor({state: "detached"})
     const browser = await this.rowByText("browsers", "browser", displayName)
-    return idFrom(browser, "browser-")
+    const browserId = await idFrom(browser, "browser-")
+    this.lastOperation = await this.producer.event("dashboard.operation.completed", {action: "approve", entity_id: browserId, related_id: pairingId})
+    return browserId
   }
 
   async rejectPairing(pairingId) {
@@ -78,7 +80,9 @@ export class DashboardDriver {
     await this.click(row, "Register page")
     await row.waitFor({state: "detached"})
     const registration = await this.rowByText("registrations", "registration", title)
-    return idFrom(registration, "registration-")
+    const registrationId = await idFrom(registration, "registration-")
+    this.lastOperation = await this.producer.event("dashboard.operation.completed", {action: "register", entity_id: registrationId, related_id: discoveryId})
+    return registrationId
   }
 
   async credentialRow(scope, {active = false} = {}) {
@@ -167,6 +171,7 @@ export class DashboardDriver {
         row = await this.credentialRow(scope, {active: true})
         credentialId = await idFrom(row, "mcp-credential-")
       })
+      this.lastOperation = await this.producer.event("dashboard.operation.completed", {action: "create-credential", entity_id: credentialId})
     } catch (error) {
       try {
         if (row && await row.getByRole("button", {name: "Revoke", exact: true}).count()) await this.click(row, "Revoke")

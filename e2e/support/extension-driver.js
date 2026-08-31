@@ -201,6 +201,10 @@ export class ExtensionDriver {
     return (await this.worker()).evaluate(() => ({...(globalThis.__webbyE2EChromeEvents ?? {})}))
   }
 
+  async chromeEvents() {
+    return (await this.extensionWorker()).evaluate(() => chrome.storage.local.get("e2eChromeEventLog")).then(values => values.e2eChromeEventLog ?? [])
+  }
+
   async waitForChromeEvent(name, minimum = 1, {timeoutMs = this.workerTimeoutMs} = {}) {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {

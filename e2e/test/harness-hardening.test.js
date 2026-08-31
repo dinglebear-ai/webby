@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import {createHash} from "node:crypto"
 import {mkdtemp, readFile, rm} from "node:fs/promises"
 import {tmpdir} from "node:os"
 import {join} from "node:path"
@@ -12,12 +13,12 @@ import {createBoundaryObservation, surfaceProof, validateBoundaryDenominator} fr
 const proofFor = (surfaceId, sequence) => {
   const category = surfaceId.split(":", 1)[0]
   if (category === "http" || category === "behavior") return surfaceProof.http({status: 200, ok: true}, {path: "/health"})
-  if (category === "artifact") return {kind: "artifact_attestation", attestation_sha256: "a".repeat(64), file: {path: `${surfaceId}.json`, sha256: "b".repeat(64)}}
+  if (category === "artifact") { const file = {path: `${surfaceId}.json`, bytes: 1, expanded_bytes: 1, sha256: "b".repeat(64)}; const unsigned = {schema_version: 1, scenario_id: "e2e-shared-vertical-slice", world_id: "test-world", files: [file]}; return {kind: "artifact_attestation", attestation: {...unsigned, attestation_sha256: createHash("sha256").update(JSON.stringify(unsigned)).digest("hex")}, file: {path: file.path, sha256: file.sha256}} }
   if (category === "world-field" || category === "capability") return {kind: "manifest_field", manifest_path: "world-manifest.json", field: "field", value: true}
-  if (category === "dashboard") return surfaceProof.dashboard("test", "entity-1")
-  if (category === "chrome-event") return surfaceProof.chrome({sequence}, {eventName: "chrome.test", identity: "tab-1"})
+  if (category === "dashboard") return surfaceProof.dashboard({sequence, producer: "dashboard", type: "dashboard.operation.completed", data: {action: "test", entity_id: "entity-1"}})
+  if (category === "chrome-event") return surfaceProof.chrome({sequence, producer: "extension", event_name: "chrome.test", identity: "tab-1"}, {eventName: "chrome.test", identity: "tab-1"})
   if (category === "version" || category === "mcp" || category === "action") return surfaceProof.mcp({status: 200}, {method: "tools/call", version: "2025-06-18", action: "status"})
-  return surfaceProof.journal({sequence, type: "boundary.test", producer: "test"})
+  return surfaceProof.journal({sequence, type: "surface.test.observed", producer: "test", data: {surface_id: surfaceId, correlation: {surface_id: surfaceId, sequence}}}, surfaceId)
 }
 const proofMap = surfaceIds => Object.fromEntries(surfaceIds.map((surfaceId, index) => [surfaceId, proofFor(surfaceId, index + 1)]))
 
@@ -34,6 +35,10 @@ test("suite telemetry reports non-secret cost and stability measurements", async
   assert.throws(() => buildSuiteTelemetry({suite: "ok", status: "passed", startedAt, finishedAt, plannedScenarioIds: ["missing"]}), /denominator drifted/)
   assert.throws(() => buildSuiteTelemetry({suite: "ok", status: "passed", startedAt, finishedAt, plannedScenarioIds: ["e2e-a"], scenarioRuns: [{scenario_id: "e2e-a", adapter: "protocol", duration_ms: 1, status: "failed"}]}), /contains failed scenario runs/)
   assert.throws(() => buildSuiteTelemetry({suite: "ok", status: "passed", startedAt, finishedAt, infrastructureError: "spawn failed"}), /contains an infrastructure error/)
+  assert.throws(() => buildSuiteTelemetry({suite: "protocol-full", status: "passed", startedAt, finishedAt, plannedScenarioIds: ["e2e-a"], scenarioRuns: [{scenario_id: "e2e-a", adapter: "chromium", duration_ms: 1, status: "passed"}]}), /adapter drifted/)
+  assert.throws(() => buildSuiteTelemetry({suite: "protocol-full", status: "passed", startedAt, finishedAt, plannedScenarioIds: ["e2e-a", "e2e-a"]}), /duplicate scenario IDs/)
+  assert.throws(() => buildSuiteTelemetry({suite: "ok", status: "passed", startedAt: finishedAt, finishedAt: startedAt}), /precedes/)
+  assert.throws(() => buildSuiteTelemetry({suite: "ok", status: "passed", startedAt, finishedAt, setupMs: -1}), /setup telemetry/)
   const failed = buildSuiteTelemetry({suite: "protocol-full", status: "failed", startedAt, finishedAt, plannedScenarioIds: ["e2e-a"], scenarioRuns: [], infrastructureError: "spawn failed"})
   assert.equal(failed.evidence_complete, false); assert.equal(failed.infrastructure_error, "spawn failed")
   assert.throws(() => parseScenarioTelemetry("{bad"), /malformed/)
@@ -49,6 +54,12 @@ test("adapter surface evidence must exactly equal declarations and inventory map
   const evidence = await writeSurfaceEvidence(path, {scenario, driver: "protocol", observed: scenario.surface_ids, proofs: proofMap(scenario.surface_ids), inventory})
   assert.equal(evidence.coverage_percent, 100); assert.equal(evidence.observed_surface_ids.length, scenario.surface_ids.length)
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, proofs: Object.fromEntries(scenario.surface_ids.map(id => [id, {source: `forged ${id}`, verified: true}])), inventory}), /invalid proof/)
+  const wrongKind = proofMap(scenario.surface_ids); wrongKind["artifact:manifest"] = proofFor("http:get-root", 999)
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, proofs: wrongKind, inventory}), /not allowed/)
+  const forgedJournal = proofMap(scenario.surface_ids); forgedJournal["in:pairing-request"] = {kind: "journal_event", sequence: 1, type: "boundary.observed", producer: "world", surface_id: "in:pairing-request"}
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, proofs: forgedJournal, inventory}), /unbound/)
+  const forgedArtifact = proofMap(scenario.surface_ids); forgedArtifact["artifact:manifest"].attestation.attestation_sha256 = "0".repeat(64)
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, proofs: forgedArtifact, inventory}), /finalized attestation/)
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.slice(1), proofs: proofMap(scenario.surface_ids.slice(1)), inventory}), /missing=/)
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.filter(id => id !== "artifact:manifest"), proofs: proofMap(scenario.surface_ids.filter(id => id !== "artifact:manifest")), inventory}), /missing=artifact:manifest/)
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.filter(id => id !== "version:2025-03"), proofs: proofMap(scenario.surface_ids.filter(id => id !== "version:2025-03")), inventory}), /missing=version:2025-03/)

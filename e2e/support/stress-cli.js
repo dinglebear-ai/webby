@@ -6,7 +6,7 @@ import {join, resolve} from "node:path"
 import {fileURLToPath, pathToFileURL} from "node:url"
 import {promisify} from "node:util"
 import {ArtifactRecorder} from "./artifacts.js"
-import {initializeOwnedTempRoot, stageAttested} from "./ci-runner.js"
+import {cleanupWorlds, initializeOwnedTempRoot, stageAttested} from "./ci-runner.js"
 import {collectCleanup, throwCleanupFailures} from "./cleanup-plan.js"
 import {detectLeaks} from "./leak-detector.js"
 import {captureProcessIdentity, reapProcessGroup} from "./process-tree.js"
@@ -14,7 +14,7 @@ import {readReplayManifest} from "./seed-replay.js"
 import {runStress} from "./stress-runner.js"
 import {stressScenarioFiles, stressScenarios, validateRequiredMeasurements, validateStressScenarios} from "./stress-scenarios.js"
 import {removeOwnedWorkspace} from "./temp-workspace.js"
-import {reapManifest} from "./world.js"
+import {forceReapSpawnedGroup, reapManifest} from "./world.js"
 import {readWorldManifest} from "./runtime-contracts.js"
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)))
@@ -35,14 +35,21 @@ export async function runStressChild(command, args, {signal, env, cwd, timeoutMs
   const nonce = `webby-stress-${randomUUID()}`
   const commandArgs = command === process.execPath ? [`--title=${nonce}`, ...args] : args
   const childProcess = spawn(command, commandArgs, {cwd, env: {...env, WEBBY_STRESS_PROCESS_NONCE: nonce}, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"]})
-  const identity = process.platform === "win32" ? null : await captureProcessIdentity(childProcess.pid, nonce)
+  let identity
   const chunks = []; let bytes = 0; const limit = 8 * 1024 * 1024
   for (const stream of [childProcess.stdout, childProcess.stderr]) stream.on("data", chunk => { process.stdout.write(chunk); if (bytes < limit) { const kept = chunk.subarray(0, limit - bytes); chunks.push(kept); bytes += kept.length } })
   let timedOut = false; let termination
-  const terminate = () => termination ??= (identity ? reapProcessGroup(identity, nonce, {graceMs: 2_000}) : Promise.resolve(childProcess.kill("SIGTERM")))
+  const terminate = () => termination ??= (identity ? reapProcessGroup(identity, nonce, {graceMs: 2_000}) : process.platform === "win32" ? Promise.resolve(childProcess.kill("SIGTERM")) : forceReapSpawnedGroup(childProcess, childProcess.pid, {graceMs: 2_000}))
   signal?.addEventListener("abort", terminate, {once: true}); const timer = setTimeout(() => { timedOut = true; void terminate() }, timeoutMs); timer.unref?.()
   let exitTimer
   try {
+    try {
+      identity = process.platform === "win32" ? null : await captureProcessIdentity(childProcess.pid, nonce)
+    } catch (error) {
+      if (timedOut) { await termination; throw Object.assign(new Error(`${command} timed out after ${timeoutMs}ms`), {output: Buffer.concat(chunks), cause: error}) }
+      if (signal?.aborted) { await termination; throw signal.reason ?? new Error("stress child cancelled") }
+      throw error
+    }
     const exited = new Promise((resolveExit, reject) => { childProcess.once("error", reject); childProcess.once("exit", value => resolveExit(value ?? 1)) })
     const boundedExit = new Promise((_, reject) => { exitTimer = setTimeout(() => reject(new Error(`${command} child did not exit after bounded reap`)), timeoutMs + 5_000); exitTimer.unref?.() })
     const code = await Promise.race([exited, boundedExit])
@@ -51,7 +58,11 @@ export async function runStressChild(command, args, {signal, env, cwd, timeoutMs
     if (timedOut) throw Object.assign(new Error(`${command} timed out after ${timeoutMs}ms`), {output})
     if (code !== 0) throw Object.assign(new Error(`${command} exited ${code}`), {output})
     return output
-  } finally { clearTimeout(timer); clearTimeout(exitTimer); signal?.removeEventListener("abort", terminate); if (identity) await reapProcessGroup(identity, nonce, {graceMs: 500}) }
+  } finally {
+    clearTimeout(timer); clearTimeout(exitTimer); signal?.removeEventListener("abort", terminate)
+    if (identity) await reapProcessGroup(identity, nonce, {graceMs: 500})
+    else if (childProcess.pid && !termination) await forceReapSpawnedGroup(childProcess, childProcess.pid)
+  }
 }
 
 export async function collectStressResources(workerTmp, resource) {
@@ -159,7 +170,19 @@ async function runStressScenario({id, attemptRoot, workerTmp, recorder, signal, 
 export async function main(args = process.argv.slice(2), env = process.env) {
   const config = await parseStressOptions(args, env); const artifactRoot = resolve(option(args, "artifacts", join(root, "artifacts", "stress")))
   await mkdir(artifactRoot, {recursive: true, mode: 0o700}); await mkdir(join(root, "artifacts"), {recursive: true, mode: 0o700})
-  const runTempRoot = await initializeOwnedTempRoot("webby-ci-run-stress-"); await writeFile(join(root, "artifacts", "run-temp-path"), `${runTempRoot}\n`, {mode: 0o600})
+  const runTempPath = join(root, "artifacts", "run-temp-path")
+  let previousRoot
+  try { previousRoot = (await readFile(runTempPath, "utf8")).trim() }
+  catch (error) { if (error.code !== "ENOENT") throw error }
+  if (previousRoot && await cleanupWorlds({recordedRoot: previousRoot}) !== 0) throw new Error(`previous stress run cleanup failed: ${previousRoot}`)
+  let runTempRoot
+  try {
+    runTempRoot = await initializeOwnedTempRoot("webby-ci-run-stress-")
+    await writeFile(runTempPath, `${runTempRoot}\n`, {mode: 0o600})
+  } catch (error) {
+    if (runTempRoot) await rm(runTempRoot, {recursive: true, force: true}).catch(() => {})
+    throw error
+  }
   const controller = new AbortController(); const handlers = Object.fromEntries(["SIGTERM", "SIGINT"].map(name => [name, () => controller.abort(new Error(`stress runner received ${name}`))]))
   for (const [name, handler] of Object.entries(handlers)) process.once(name, handler)
   const resources = new Map(); let result; let failure; let cleanupFailures = []

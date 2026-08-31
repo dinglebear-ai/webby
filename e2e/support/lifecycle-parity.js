@@ -58,12 +58,6 @@ export async function runLifecycleScenario({scenario, driver, world, recorder, n
 
 async function observeLifecycleProofs(boundary, proofs) {
   if (!proofs || typeof proofs !== "object" || Array.isArray(proofs)) throw new Error("typed lifecycle boundary proofs are required")
-  const pending = Object.entries(proofs).filter(([, proof]) => proof?.kind === "pending_recorder_token")
-  if (pending.length) {
-    const token = await boundary.record(pending.map(([surfaceId]) => surfaceId))
-    for (const [surfaceId, proof] of Object.entries(proofs)) if (proof?.kind !== "pending_recorder_token") boundary.observe(surfaceId, proof)
-    return token
-  }
   for (const [surfaceId, proof] of Object.entries(proofs)) boundary.observe(surfaceId, proof)
 }
 

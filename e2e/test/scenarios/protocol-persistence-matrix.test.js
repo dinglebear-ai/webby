@@ -60,6 +60,14 @@ test("persistence execution set covers every inventoried behavior and every dire
   }
 })
 
+test("persistence operation transport is the inventoried isolated E2E route", async () => {
+  const inventory = JSON.parse(await readFile(new URL("../../contracts/surfaces.json", import.meta.url), "utf8"))
+  const route = inventory.surfaces.find(surface => surface.id === "http:post-e2e-persistence")
+  assert.deepEqual(route, {id: "http:post-e2e-persistence", category: "http_route", symbol: "POST /e2e/persistence", source: "lib/webby_web/router.ex:27", scenarios: ["e2e-persistence-retention"]})
+  const contract = JSON.parse(await readFile(scenarioPath, "utf8"))
+  assert.ok(contract.surface_ids.includes(route.id))
+})
+
 async function seedBrowser(world, id) {
   const extension = `matrix${id}`.padEnd(32, "x").slice(0, 32)
   await executeSql(world.databasePath, `INSERT INTO browsers(id,display_name,extension_id,public_key,scanning_mode,scanning_paused,paired_at,inserted_at,updated_at) VALUES('${id}','Matrix','${extension}',X'${"11".repeat(32)}','granted_sites',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);`)

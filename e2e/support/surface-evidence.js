@@ -1,4 +1,5 @@
 import {readFile, writeFile} from "node:fs/promises"
+import {validateSurfaceProof} from "./boundary-surfaces.js"
 
 const sortedUnique = values => [...new Set(values)].sort()
 
@@ -24,7 +25,8 @@ export function validateObservedSurfaces({scenario, driver, observed, proofs, in
   const proofIds = Object.keys(proofs).sort()
   if (JSON.stringify(proofIds) !== JSON.stringify(actual)) throw new Error(`${driver}/${scenario.id}: proof denominator drifted`)
   for (const [surfaceId, proof] of Object.entries(proofs)) {
-    if (!proof || typeof proof !== "object" || typeof proof.kind !== "string") throw new Error(`${driver}/${scenario.id}: invalid proof for ${surfaceId}`)
+    try { validateSurfaceProof(surfaceId, proof) }
+    catch (error) { throw new Error(`${driver}/${scenario.id}: invalid proof for ${surfaceId}: ${error.message}`, {cause: error}) }
   }
   return Object.freeze({schema_version: 2, scenario_id: scenario.id, adapter: driver, declared_surface_ids: declared, observed_surface_ids: actual, coverage_percent: 100, proofs: Object.freeze(Object.fromEntries(actual.map(id => [id, proofs[id]])))})
 }

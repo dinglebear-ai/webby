@@ -147,6 +147,30 @@ defmodule Webby.DataRetentionTest do
     assert {:error, :browser_erased} = Webby.BrowserConnections.register(browser.id, self())
   end
 
+  test "browser erasure removes resolved pairing material for the same extension identity" do
+    browser = insert_browser()
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    matching =
+      %PairingRequest{}
+      |> PairingRequest.changeset(%{
+        display_name: "Rejected matching identity",
+        extension_id: browser.extension_id,
+        public_key: browser.public_key,
+        scanning_mode: browser.scanning_mode,
+        status: "rejected",
+        expires_at: now,
+        resolved_at: now
+      })
+      |> Repo.insert!()
+
+    unrelated_id = insert_pairing(now, 555, "rejected")
+
+    assert {:ok, %{deleted_pairings: 1}} = DataRetention.erase_browser(browser.id)
+    refute Repo.get(PairingRequest, matching.id)
+    assert Repo.get(PairingRequest, unrelated_id)
+  end
+
   test "browser erasure removes its tombstone and preserves durable data when callback rejects" do
     browser = insert_browser()
 

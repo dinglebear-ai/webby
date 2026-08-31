@@ -5,6 +5,7 @@ import test from "node:test"
 import {ArtifactRecorder} from "../../support/artifacts.js"
 import {ChromiumScenarioAdapter, chromiumDeferredInventory, chromiumEvidence, percentile} from "../../support/chromium-scenario-adapter.js"
 import {ChromiumWorld} from "../../support/chromium-world.js"
+import {runCleanupPlan} from "../../support/cleanup-plan.js"
 import {DashboardDriver} from "../../support/dashboard-driver.js"
 import {startFixtureServer} from "../../fixture/server.js"
 import {ScenarioRunner} from "../../support/scenario-runner.js"
@@ -31,11 +32,13 @@ test("complete shared pair-to-audit slice through Chromium", {timeout: 180_000},
   let adapter
   let finalized = false
   t.after(async () => {
-    await adapter?.mcp?.close()
-    await chromium?.close().catch(() => {})
-    await fixture?.close().catch(() => {})
-    if (!finalized) await recorder.finalize({status: "failed"}).catch(() => {})
-    await world?.teardown({remove: true}).catch(() => {})
+    await runCleanupPlan([
+      ["mcp", () => adapter?.mcp?.close()],
+      ["chromium", () => chromium?.close()],
+      ["fixture", () => fixture?.close()],
+      ["recorder", () => finalized ? undefined : recorder.finalize({status: "failed"})],
+      ["world", () => world?.teardown({remove: true})],
+    ], {message: "Chromium vertical-slice fallback cleanup failed"})
   })
 
   chromium = await ChromiumWorld.launch({world, recorder, broadHostPermissions: true})

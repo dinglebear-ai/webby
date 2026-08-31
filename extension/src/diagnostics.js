@@ -1,4 +1,4 @@
-/** @typedef {{active: boolean, workerNonce?: string, chromeEvent: (name: string) => void, socketAttempt: () => void, protocolOut: (frame: any) => void, protocolIn: (frame: any) => void, cancellationTransient: (value: any) => Promise<unknown>, flush: () => Promise<void>, channelReady: () => Promise<unknown>, authenticated: (browserId?: string) => Promise<unknown>, scanCompleted: (value: any) => Promise<unknown>, scanAllCompleted: () => Promise<unknown>, selectScanTarget: (fallback: () => any) => Promise<any>, scanError: (error: unknown) => unknown, socketAttempts?: () => number, binding?: Record<string, string>}} ExtensionDiagnostics */
+/** @typedef {{active: boolean, workerNonce?: string, chromeEvent: (name: string, identity?: string, correlation?: unknown) => void, socketAttempt: () => void, protocolOut: (frame: any) => void, protocolIn: (frame: any) => void, cancellationTransient: (value: any) => Promise<unknown>, flush: () => Promise<void>, channelReady: () => Promise<unknown>, authenticated: (browserId?: string) => Promise<unknown>, scanCompleted: (value: any) => Promise<unknown>, scanAllCompleted: () => Promise<unknown>, selectScanTarget: (fallback: () => any) => Promise<any>, scanError: (error: unknown) => unknown, socketAttempts?: () => number, binding?: Record<string, string>}} ExtensionDiagnostics */
 
 /** @type {Readonly<ExtensionDiagnostics>} */
 const DEFAULT_DIAGNOSTICS = Object.freeze({
@@ -67,6 +67,8 @@ export function createIsolatedE2EDiagnostics(candidate) {
   /** @type {Record<string, number>} */
   const chromeEvents = {};
   /** @type {any[]} */
+  const chromeEventLog = [];
+  /** @type {any[]} */
   const protocolEvents = [];
   /** @type {Record<string, string>} */
   const protocolRefs = {};
@@ -93,19 +95,23 @@ export function createIsolatedE2EDiagnostics(candidate) {
     await persist(value);
   };
   const flush = async () => {
-    await Promise.all([...pendingWrites]);
+    // A write can enqueue another write while the current batch is settling.
+    // Keep draining until the set is quiescent so this really is a final flush.
+    while (pendingWrites.size > 0) await Promise.all([...pendingWrites]);
     if (persistenceFailure) throw persistenceFailure;
   };
   const recordProtocol = (/** @type {any} */ value) => {
-    protocolEvents.push({...value, sequence: protocolEvents.length + 1});
+    protocolEvents.push({...value, producer: "extension", sequence: protocolEvents.length + 1});
     trackPersist({e2eProtocolEvents: protocolEvents.slice(-256)});
   };
 
   const implementation = Object.freeze({
     active: true,
     workerNonce,
-    chromeEvent(/** @type {string} */ name) {
+    chromeEvent(/** @type {string} */ name, /** @type {string | undefined} */ identity = name, /** @type {unknown} */ correlation) {
       chromeEvents[name] = (chromeEvents[name] ?? 0) + 1;
+      chromeEventLog.push({event_name: name, identity: String(identity), producer: "extension", sequence: chromeEventLog.length + 1, ...(correlation === undefined ? {} : {correlation})});
+      trackPersist({e2eChromeEventLog: chromeEventLog.slice(-256)});
       trackPersist({e2eChromeEvents: {...chromeEvents}});
     },
     socketAttempt() { socketAttempts += 1; e2eGlobal.__webbyE2ESocketAttempts = socketAttempts; },
@@ -113,7 +119,8 @@ export function createIsolatedE2EDiagnostics(candidate) {
     protocolOut(/** @type {any} */ {ref, event, payload}) {
       protocolRefs[ref] = payload?.type ?? event;
       recordProtocol({
-        direction: "out", ref, event, type: protocolRefs[ref],
+        direction: "out", ref, event, type: protocolRefs[ref], correlation: payload?.request_id ?? ref,
+        identity: payload?.payload?.pairing_id ?? payload?.payload?.browser_id ?? ref,
         observations: payload?.payload?.observations?.map((/** @type {any} */ value) => {
           let sanitized_url = null;
           try { const parsed = new URL(value.url); sanitized_url = parsed.origin + parsed.pathname; } catch {}
@@ -122,7 +129,8 @@ export function createIsolatedE2EDiagnostics(candidate) {
       });
     },
     protocolIn(/** @type {any} */ {ref, event, payload}) {
-      recordProtocol({direction: "in", ref, event, type: protocolRefs[ref] ?? event, status: payload?.status ?? null, observation_count: payload?.response?.payload?.observation_count ?? null});
+      const response = event === "phx_reply" ? payload?.response ?? payload?.payload ?? {} : payload ?? {};
+      recordProtocol({direction: "in", ref, event, type: response?.type ?? protocolRefs[ref] ?? event, correlation: response?.request_id ?? ref, identity: response?.browser_id ?? ref, status: payload?.status ?? null, observation_count: response?.payload?.observation_count ?? null});
     },
     cancellationTransient(/** @type {any} */ value) {
       return persistMilestone({e2eLastTransientCancellation: value});

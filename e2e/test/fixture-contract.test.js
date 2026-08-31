@@ -28,6 +28,12 @@ test("serves deterministic pages and module without exposing the control capabil
   assert.equal((await fetch(`${fixture.origin}/`, {method: "POST"})).status, 405);
 });
 
+test("fixture shutdown is idempotent for strict fallback cleanup", async () => {
+  const {fixture} = await world();
+  await fixture.close();
+  await fixture.close();
+});
+
 test("reload and navigation responses carry distinct document instance identities", async (t) => {
   const {fixture} = await world(); t.after(() => fixture.close());
   const instance = async (path) => (await (await fetch(`${fixture.origin}${path}`)).text()).match(/data-document-instance="([^"]+)"/)[1];

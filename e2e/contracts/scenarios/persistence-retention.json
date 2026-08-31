@@ -1,7 +1,7 @@
 {
   "contract_version": 1,
   "id": "e2e-persistence-retention",
-  "surface_ids": ["http:get-health", "storage:browser-id", "storage:public-key", "storage:private-key", "behavior:fresh-migration", "behavior:startup-reconcile", "behavior:health", "behavior:retention", "world-field:pid", "world-field:database", "world-field:started", "world-field:process-group", "world-field:process-started", "world-field:process-executable", "world-field:process-cwd", "secret:bearer", "secret:private-jwk", "secret:signature", "secret:cookie", "secret:db", "artifact:persistence"],
+  "surface_ids": ["http:get-health", "http:post-e2e-persistence", "storage:browser-id", "storage:public-key", "storage:private-key", "behavior:fresh-migration", "behavior:startup-reconcile", "behavior:health", "behavior:retention", "world-field:pid", "world-field:database", "world-field:started", "world-field:process-group", "world-field:process-started", "world-field:process-executable", "world-field:process-cwd", "secret:bearer", "secret:private-jwk", "secret:signature", "secret:cookie", "secret:db", "artifact:persistence"],
   "title": "Restart migration retention and erasure lifecycle",
   "description": "Verifies fresh migration, durable identities, startup reconciliation, retention draining, metadata minimization, and erasure.",
   "owner": "webby-ihb.15",

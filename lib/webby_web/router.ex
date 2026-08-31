@@ -24,6 +24,7 @@ defmodule WebbyWeb.Router do
     pipe_through :api
 
     get "/health", StatusController, :show
+    post "/e2e/persistence", E2EPersistenceController, :create
     post "/mcp", MCPController, :create
     get "/mcp", MCPController, :listen
   end

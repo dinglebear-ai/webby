@@ -89,6 +89,36 @@ test("explicit final flush surfaces a tracked failure without a later milestone"
   await assert.rejects(globalThis.__webbyE2EFlushDiagnostics(), /final diagnostic write failed/);
 });
 
+test("final flush drains writes added while an earlier write is pending", async () => {
+  const writes = [];
+  const resolvers = [];
+  globalThis.chrome = {
+    runtime: {id: "a".repeat(32)}, tabs: {get: async id => ({id})},
+    storage: {local: {
+      async get() { return {}; },
+      async set(value) { writes.push(value); await new Promise(resolve => resolvers.push(resolve)); }
+    }}
+  };
+  const {createIsolatedE2EDiagnostics} = await import(`../src/diagnostics.js?quiescent=${Date.now()}`);
+  const diagnostics = createIsolatedE2EDiagnostics({
+    schema_version: 1, environment_marker: "isolated-e2e", expected_extension_id: chrome.runtime.id,
+    instance_nonce: "n".repeat(43), base_url: "http://127.0.0.1:65001", fixture_url: "http://127.0.0.1:65002"
+  });
+  diagnostics.chromeEvent("tabs.onUpdated");
+  const flushed = diagnostics.flush();
+  await Promise.resolve();
+  assert.equal(writes.length, 2);
+  diagnostics.protocolOut({ref: "1", event: "message", payload: {type: "discovery.observed"}});
+  for (const resolve of resolvers.splice(0, 2)) resolve();
+  let done = false;
+  void flushed.then(() => { done = true });
+  await Promise.resolve();
+  assert.equal(done, false);
+  resolvers.shift()();
+  await flushed;
+  assert.equal(writes.length, 3);
+});
+
 test("transient cancellation diagnostics are durably observable", async () => {
   const writes = [];
   globalThis.chrome = {

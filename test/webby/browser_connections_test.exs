@@ -238,6 +238,38 @@ defmodule Webby.BrowserConnectionsTest do
     assert_receive {:tool_cancel, %{"call_id" => ^replacement_id}}
   end
 
+  test "caller death completes its audit inline when the audit task cannot launch" do
+    browser_id = Ecto.UUID.generate()
+    audit_id = Ecto.UUID.generate()
+    parent = self()
+
+    Application.put_env(:webby, :caller_down_audit_starter, fn _operation ->
+      {:error, :supervisor_unavailable}
+    end)
+
+    Application.put_env(:webby, :caller_down_audit_completion, fn id, outcome, kind, duration ->
+      send(parent, {:audit_completed, id, outcome, kind, duration})
+      {:ok, 1}
+    end)
+
+    on_exit(fn ->
+      Application.delete_env(:webby, :caller_down_audit_starter)
+      Application.delete_env(:webby, :caller_down_audit_completion)
+    end)
+
+    assert :ok = BrowserConnections.register(browser_id, self())
+
+    caller =
+      spawn(fn ->
+        BrowserConnections.call(browser_id, %{"document_id" => "doc"}, 5_000, nil, audit_id)
+      end)
+
+    assert_receive {:tool_call, %{"call_id" => call_id}}
+    Process.exit(caller, :kill)
+    assert_receive {:audit_completed, ^audit_id, "failed", "caller_down", 0}
+    assert_receive {:tool_cancel, %{"call_id" => ^call_id}}
+  end
+
   test "only the channel process that received a call may complete it" do
     browser_id = Ecto.UUID.generate()
     assert :ok = BrowserConnections.register(browser_id, self())

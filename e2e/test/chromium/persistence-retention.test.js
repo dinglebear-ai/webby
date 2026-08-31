@@ -4,6 +4,7 @@ import {join} from "node:path"
 import test from "node:test"
 import {ArtifactRecorder} from "../../support/artifacts.js"
 import {ChromiumWorld} from "../../support/chromium-world.js"
+import {runCleanupPlan} from "../../support/cleanup-plan.js"
 import {DashboardDriver} from "../../support/dashboard-driver.js"
 import {checkpointedDiagnostics, executeSql, persistenceOperation, sqlite} from "../../support/persistence-driver.js"
 import {WebbyWorld} from "../../support/world.js"
@@ -76,7 +77,7 @@ test("real Chromium profile and Webby persistence retain only durable state, dra
   assert.equal(await dashboard.row("browser", browserId).count(), 1, "preserved restart lost the public browser identity")
   await chromium.artifacts.duringExpectedBrowserShutdown(() => dashboard.page.close())
   await chromium.artifacts.duringExpectedBrowserRevocation(() => chromium.artifacts.duringExpectedNetworkOutage(async () => {
-    assert.match(await persistenceOperation(world, {op: "browser.erase", browser_id: browserId, audits: "anonymize"}), /audits: :anonymize/)
+    assert.match(await persistenceOperation(world, {op: "browser.erase", browser_id: browserId, audits: "anonymize"}), /"audits":"anonymize"/)
   }))
   dashboard = await new DashboardDriver({page: await chromium.context.newPage(), recorder}).open(world.baseUrl)
   assert.equal(await dashboard.row("browser", browserId).count(), 0, "erased browser remained publicly visible")
@@ -113,7 +114,14 @@ test("fresh Webby world and Chromium profile do not inherit paired identity or r
   const fresh = await WebbyWorld.start({scenarioId: "chromium-fresh-isolation-target", seed: 20022})
   const recorder = await new ArtifactRecorder({root: join(fresh.workspace.artifacts, "fresh-target"), scenarioId: "e2e-persistence-retention", worldId: fresh.worldId, seed: fresh.seed, secrets: [fresh.secret]}).open()
   let chromium
-  t.after(async () => { await chromium?.close().catch(() => {}); await recorder.finalize({status: "failed"}).catch(() => {}); await fresh.teardown({remove: true}).catch(() => {}) })
+  let finalized = false
+  t.after(async () => {
+    await runCleanupPlan([
+      ["chromium", () => chromium?.close()],
+      ["recorder", () => finalized ? undefined : recorder.finalize({status: "failed"})],
+      ["world", () => fresh.teardown({remove: true})],
+    ], {message: "Fresh-world fallback cleanup failed"})
+  })
   chromium = await ChromiumWorld.launch({world: fresh, recorder})
   await chromium.driver.configure()
   await chromium.driver.pair("Chrome")
@@ -123,5 +131,6 @@ test("fresh Webby world and Chromium profile do not inherit paired identity or r
   assert.equal((await sqlite(fresh.databasePath, "SELECT count(*) AS count FROM browsers"))[0].count, 0)
   await chromium.close(); chromium = undefined
   await recorder.finalize({status: "passed", cleanup: {fresh_profile: "isolated", fresh_database: "empty"}})
+  finalized = true
   await fresh.teardown({remove: true})
 })

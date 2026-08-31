@@ -413,9 +413,45 @@ defmodule Webby.BrowserConnections do
   defp complete_caller_down_audit(nil), do: :ok
 
   defp complete_caller_down_audit(audit_id) do
-    Task.Supervisor.start_child(Webby.ProbeSupervisor, fn ->
-      Webby.Invocations.complete_audit(audit_id, "failed", "caller_down", 0)
-    end)
+    starter =
+      Application.get_env(:webby, :caller_down_audit_starter, fn operation ->
+        Task.Supervisor.start_child(Webby.ProbeSupervisor, operation)
+      end)
+
+    completion =
+      Application.get_env(
+        :webby,
+        :caller_down_audit_completion,
+        &Webby.Invocations.complete_audit/4
+      )
+
+    operation = fn -> completion.(audit_id, "failed", "caller_down", 0) end
+
+    case starter.(operation) do
+      {:ok, _pid} -> :ok
+      {:error, reason} -> complete_caller_down_audit_inline(operation, audit_id, reason)
+    end
+  end
+
+  defp complete_caller_down_audit_inline(operation, audit_id, launch_reason) do
+    case operation.() do
+      {:ok, _count} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("caller-down audit completion failed after task launch failure",
+          audit_id: audit_id,
+          launch_reason: inspect(launch_reason),
+          reason: inspect(reason)
+        )
+    end
+  rescue
+    exception ->
+      Logger.error("caller-down audit completion raised after task launch failure",
+        audit_id: audit_id,
+        launch_reason: inspect(launch_reason),
+        reason: Exception.message(exception)
+      )
   end
 
   defp drop_connection(state, browser_id, kind) do

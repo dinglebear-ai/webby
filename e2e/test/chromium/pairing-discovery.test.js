@@ -3,6 +3,7 @@ import {join} from "node:path"
 import test from "node:test"
 import {ArtifactRecorder} from "../../support/artifacts.js"
 import {ChromiumWorld} from "../../support/chromium-world.js"
+import {runCleanupPlan} from "../../support/cleanup-plan.js"
 import {DashboardDriver} from "../../support/dashboard-driver.js"
 import {MCPClient} from "../../support/mcp-client.js"
 import {WebbyWorld} from "../../support/world.js"
@@ -26,10 +27,12 @@ test("actual popup, pairing, discovery, Chrome events, dashboard, and broker rea
   let chromium
   let finalized = false
   t.after(async () => {
-    await chromium?.close().catch(() => {})
-    await fixture.close().catch(() => {})
-    if (!finalized) await recorder.finalize({status: "failed"}).catch(() => {})
-    await world?.teardown({remove: true}).catch(() => {})
+    await runCleanupPlan([
+      ["chromium", () => chromium?.close()],
+      ["fixture", () => fixture.close()],
+      ["recorder", () => finalized ? undefined : recorder.finalize({status: "failed"})],
+      ["world", () => world?.teardown({remove: true})],
+    ], {message: "Chromium pairing fallback cleanup failed"})
   })
 
   chromium = await ChromiumWorld.launch({world, recorder, broadHostPermissions: true})

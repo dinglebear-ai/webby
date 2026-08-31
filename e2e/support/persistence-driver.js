@@ -1,5 +1,5 @@
 import {execFile} from "node:child_process"
-import {access, stat, unlink} from "node:fs/promises"
+import {access, readFile, stat, unlink} from "node:fs/promises"
 import {promisify} from "node:util"
 import {processExists, processGroupMembers} from "./process-tree.js"
 
@@ -35,6 +35,20 @@ export async function checkpointedDiagnostics(world, {tables, recorder, name = "
 }
 
 export async function persistenceOperation(world, payload) {
+  if (payload?.op === "browser.erase") {
+    const response = await fetch(`${world.baseUrl}/e2e/persistence`, {
+      method: "POST",
+      headers: {"content-type": "application/json", "x-webby-e2e-capability": world.telemetryCapability},
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(60_000),
+    })
+    const result = await response.json()
+    if (!response.ok || result.status !== "ok") {
+      const diagnostics = await Promise.all([world.stdoutPath, world.stderrPath].map(path => readFile(path, "utf8").catch(() => "diagnostics unavailable")))
+      throw new Error(`in-world persistence operation failed: ${response.status} ${JSON.stringify(result)}\n${diagnostics.join("\n").slice(-12_000)}`)
+    }
+    return JSON.stringify(result.result)
+  }
   const env = {...world.environment(), PHX_SERVER: "false", WEBBY_E2E_PERSISTENCE_OPERATION: JSON.stringify(payload)}
   const {stdout, stderr} = await execFileAsync("mix", ["run", "--no-start", "e2e/support/persistence-probe.exs"], {
     cwd: new URL("../..", import.meta.url).pathname,

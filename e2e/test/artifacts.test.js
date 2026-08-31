@@ -200,3 +200,15 @@ test("nonessential quota overflow is deterministically omitted while first failu
   assert.equal(result.replay.first_failure.details.summary, "first failure")
   assert.equal(result.replay.omissions[0].reason, "scenario_quota")
 })
+
+test("passed finalization rejects omitted optional evidence and journal truncation", async t => {
+  const root = await workspace(t)
+  const evidence = join(root, "evidence.log"); await writeFile(evidence, "diagnostic")
+  const omitted = await new ArtifactRecorder({root: join(root, "omitted"), scenarioId: "omitted", worldId: "world", limits: {reserveBytes: Number.MAX_SAFE_INTEGER}}).open()
+  assert.deepEqual(await omitted.ingest(evidence, {kind: "trace"}), {omitted: true})
+  await assert.rejects(omitted.finalize({status: "passed"}), error => error.code === "required_artifact_omitted")
+
+  const overflow = await new ArtifactRecorder({root: join(root, "overflow"), scenarioId: "overflow", worldId: "world", limits: {events: 1, reserveBytes: 0}}).open()
+  await assert.rejects(overflow.journal.record("world", "too-many"), error => error.code === "artifact_overflow")
+  await assert.rejects(overflow.finalize({status: "passed"}), error => error.code === "artifact_overflow")
+})
