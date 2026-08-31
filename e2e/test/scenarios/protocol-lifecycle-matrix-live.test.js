@@ -12,6 +12,7 @@ import {DashboardDriver} from "../../support/dashboard-driver.js"
 import {MCPClient} from "../../support/mcp-client.js"
 import {assertProtocolLifecycleOutcome, protocolLifecycleRows} from "../../support/lifecycle-matrix.js"
 import {protocolBrowserRevokeOracle} from "../../support/lifecycle-parity.js"
+import {emitBoundLiveTestReceipt, producerRecord} from "../../support/live-producer-evidence.js"
 import {SimulatedBrowser} from "../../support/simulated-browser.js"
 import {WebbyWorld} from "../../support/world.js"
 
@@ -201,9 +202,12 @@ test("every lifecycle row owned by webby-ihb.16 executes against an isolated liv
   assert.equal(complete.length, 18)
   const rows = process.env.WEBBY_LIFECYCLE_TRANSITION ? complete.filter(row => row.transition === process.env.WEBBY_LIFECYCLE_TRANSITION) : complete
   assert.ok(rows.length > 0)
+  const outcomes = []
   for (const row of rows) await t.test(row.id, {timeout: 60_000}, async () => {
     const outcome = await liveRow(row)
+    outcomes.push(outcome)
     if (row.transition === "browser-revoke" && row.phase === "in-flight") assert.deepEqual(outcome.normalized, protocolBrowserRevokeOracle)
     assert.equal(assertProtocolLifecycleOutcome(row, outcome, {world_nonce: outcome.world_nonce, document_generation: outcome.document_generation, socket_generation: outcome.socket_generation}), outcome)
   })
+  if (!process.env.WEBBY_LIFECYCLE_TRANSITION) await emitBoundLiveTestReceipt({scenarioId: "e2e-lifecycle-removal", adapter: "protocol", receiptId: "lifecycle-removal-live", assertions: {rows_executed: outcomes.length, pending_calls: outcomes.reduce((sum, outcome) => sum + outcome.pending_calls, 0), open_resources: outcomes.reduce((sum, outcome) => sum + outcome.open_resources, 0)}, producerRecords: [producerRecord("sqlite_result", "lifecycle-live-worlds", "protocol-lifecycle-matrix", {rows: outcomes})]})
 })

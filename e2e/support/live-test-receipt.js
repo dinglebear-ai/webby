@@ -15,6 +15,7 @@ const schemas = Object.freeze({
   "chromium-persistence-live": ["retention_batches", "durable_identity", "startup_reconciled", "browser_erased"],
   "chromium-fresh-profile-live": ["public_key_rotated", "browser_identity_absent", "database_browser_rows"],
   "fixture-protocol-live": ["tool_outcomes", "transport_exchanges", "side_effects"],
+  "lifecycle-removal-live": ["rows_executed", "pending_calls", "open_resources"],
 })
 
 export function validateLiveReceiptAssertions(receiptId, assertions) {
@@ -26,6 +27,7 @@ export function validateLiveReceiptAssertions(receiptId, assertions) {
   if (["capacity-matrix-live", "concurrency-live", "persistence-matrix-live", "retention-erasure-live", "transport-security-live", "extension-controls-live", "chromium-persistence-live", "fixture-protocol-live"].includes(receiptId) && numbers.length === 0) throw new Error(`live test receipt requires measured numeric assertions: ${receiptId}`)
   if (receiptId === "capacity-matrix-live" && (assertions.rows_executed < 1 || assertions.pending_calls !== 0 || assertions.audit_delta_per_row !== 1)) throw new Error("capacity receipt measurements are not terminal")
   if (receiptId === "fixture-protocol-live" && (assertions.tool_outcomes !== 8 || assertions.transport_exchanges !== 8 || assertions.side_effects !== 1)) throw new Error("fixture receipt denominator is incomplete")
+  if (receiptId === "lifecycle-removal-live" && (assertions.rows_executed !== 18 || assertions.pending_calls !== 0 || assertions.open_resources !== 0)) throw new Error("lifecycle receipt denominator is incomplete or nonterminal")
   if (receiptId === "extension-controls-live" && (assertions.commands_executed < 1 || assertions.chrome_events_observed < 1 || assertions.dashboard_operations_observed < 1)) throw new Error("extension control receipt has no live measurements")
   return true
 }

@@ -117,6 +117,7 @@ test("explicit live test receipts require the exact nonce-bound assertion denomi
     ["e2e-capacity-concurrency", "concurrency-live", {scan_tabs: [10], peak_batch_limit: 128, active_sessions: 10}],
     ["e2e-command-ci-entrypoints", "ci-entrypoints-contract", {workflows_checked: 2, full_suites: 2, cleanup_gates: 4, mutation_guards: true}],
     ["e2e-fixture-tool-outcomes", "fixture-protocol-live", {tool_outcomes: 8, transport_exchanges: 8, side_effects: 1}],
+    ["e2e-lifecycle-removal", "lifecycle-removal-live", {rows_executed: 18, pending_calls: 0, open_resources: 0}],
     ["e2e-persistence-retention", "persistence-matrix-live", {restart_combinations: 1, schema_generation: 7}],
     ["e2e-persistence-retention", "retention-erasure-live", {retention_batches: 3, rows_deleted: 6, anonymized_browser: "a", deleted_browser: "b"}],
     ["e2e-transport-security", "transport-security-live", {cross_world_replays_rejected: 2, cross_contract_replays_rejected: 2, cleanup_audits: 0}],

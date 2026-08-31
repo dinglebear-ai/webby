@@ -83,6 +83,7 @@ export class SimulatedBrowser extends EventEmitter {
     if (accepted?.type !== "auth.accepted") throw new WireError("authentication_rejected")
     const welcome = await this.message("browser.hello", {})
     if (welcome?.type !== "browser.welcome") throw new WireError("missing_browser_welcome")
+    this.heartbeatIntervalMs = welcome.payload.heartbeat_interval_ms
     this.emit("authenticated", {browserId, welcome: welcome.payload}); return welcome.payload
   }
 
@@ -166,14 +167,24 @@ export class SimulatedBrowser extends EventEmitter {
     await this.gates.tab.wait()
     const observations = Array.from({length: count}, (_, index) => observation(index))
     let messages = 0
-    for (let index = 0; index < observations.length; index += batchSize) {
-      await this.observe(observations.slice(index, index + batchSize)); messages++
-      // Phoenix requires protocol heartbeats even while application messages
-      // are flowing. Large live scans can spend longer than the transport idle
-      // window persisting sequential batches, so the simulated extension must
-      // own the same keepalive boundary as the real extension.
-      await this.heartbeat()
+    const heartbeatTasks = new Set()
+    let heartbeatError
+    const cadence = Math.max(1_000, Math.floor((this.heartbeatIntervalMs ?? 30_000) / 2))
+    const timer = setInterval(() => {
+      const task = this.heartbeat().catch(error => { heartbeatError ??= error }).finally(() => heartbeatTasks.delete(task))
+      heartbeatTasks.add(task)
+    }, cadence)
+    try {
+      for (let index = 0; index < observations.length; index += batchSize) {
+        await this.observe(observations.slice(index, index + batchSize)); messages++
+        await this.heartbeat()
+        if (heartbeatError) throw heartbeatError
+      }
+    } finally {
+      clearInterval(timer)
+      await Promise.allSettled(heartbeatTasks)
     }
+    if (heartbeatError) throw heartbeatError
     return {count, messages, peakBatchSize: Math.min(count, batchSize), observations}
   }
   async close() { await this.disconnect(); this.calls.clear() }

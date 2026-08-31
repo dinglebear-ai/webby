@@ -146,6 +146,7 @@ const liveTestReceiptRequirements = Object.freeze({
     "e2e-capacity-concurrency": ["capacity-matrix-live", "concurrency-live"],
     "e2e-command-ci-entrypoints": ["ci-entrypoints-contract"],
     "e2e-fixture-tool-outcomes": ["fixture-protocol-live"],
+    "e2e-lifecycle-removal": ["lifecycle-removal-live"],
     "e2e-persistence-retention": ["persistence-matrix-live", "retention-erasure-live"],
     "e2e-transport-security": ["transport-security-live"],
   }),
