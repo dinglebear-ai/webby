@@ -35,6 +35,10 @@ export async function runStressChild(command, args, {signal, env, cwd, timeoutMs
   const nonce = `webby-stress-${randomUUID()}`
   const commandArgs = command === process.execPath ? [`--title=${nonce}`, ...args] : args
   const childProcess = spawn(command, commandArgs, {cwd, env: {...env, WEBBY_STRESS_PROCESS_NONCE: nonce}, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"]})
+  const exited = new Promise((resolveExit, reject) => {
+    childProcess.once("error", reject)
+    childProcess.once("exit", value => resolveExit(value ?? 1))
+  })
   let identity
   const chunks = []; let bytes = 0; const limit = 8 * 1024 * 1024
   for (const stream of [childProcess.stdout, childProcess.stderr]) stream.on("data", chunk => { process.stdout.write(chunk); if (bytes < limit) { const kept = chunk.subarray(0, limit - bytes); chunks.push(kept); bytes += kept.length } })
@@ -50,8 +54,7 @@ export async function runStressChild(command, args, {signal, env, cwd, timeoutMs
       if (signal?.aborted) { await termination; throw signal.reason ?? new Error("stress child cancelled") }
       throw error
     }
-    const exited = new Promise((resolveExit, reject) => { childProcess.once("error", reject); childProcess.once("exit", value => resolveExit(value ?? 1)) })
-    const boundedExit = new Promise((_, reject) => { exitTimer = setTimeout(() => reject(new Error(`${command} child did not exit after bounded reap`)), timeoutMs + 5_000); exitTimer.unref?.() })
+    const boundedExit = new Promise((_, reject) => { exitTimer = setTimeout(() => reject(new Error(`${command} child did not exit after bounded reap`)), timeoutMs + 5_000) })
     const code = await Promise.race([exited, boundedExit])
     const output = Buffer.concat(chunks)
     if (signal?.aborted) throw signal.reason ?? new Error("stress child cancelled")

@@ -31,8 +31,10 @@ test("stress collection records Webby and fixture listeners plus live pending an
   assert.deepEqual(resource.ports.sort(), [fixture.address().port, webby.address().port].sort()); assert.deepEqual(resource.pendingCalls, ["call-live"]); assert.deepEqual(resource.staleSessions, ["session-live"])
 })
 
-test("stress child timeout is nonce-verified and bounded through process-group reaping", {skip: process.platform === "win32"}, async () => {
-  const started = Date.now()
-  await assert.rejects(runStressChild(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {cwd: process.cwd(), env: process.env, timeoutMs: 50}), /timed out/)
-  assert.ok(Date.now() - started < 5_000)
+test("stress child timeout is nonce-verified and bounded through process-group reaping", {skip: process.platform === "win32", timeout: 30_000}, async () => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const started = Date.now()
+    await assert.rejects(runStressChild(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {cwd: process.cwd(), env: process.env, timeoutMs: 50}), /timed out/)
+    assert.ok(Date.now() - started < 5_000, `attempt ${attempt + 1} exceeded the bounded reap deadline`)
+  }
 })
