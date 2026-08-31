@@ -144,23 +144,27 @@ defmodule Webby.BrowserConnections do
     {:reply, length(ids), finish_calls(state, ids, :credential_revoked)}
   end
 
-  def handle_call({:begin_credential_revocation, credential_id}, _from, state) do
+  def handle_call({:begin_credential_revocation, credential_id}, from, state) do
     token = make_ref()
+    {owner, _tag} = from
 
     barrier =
-      Map.get(state.credential_barriers, credential_id, %{status: :revoking, owners: MapSet.new()})
+      Map.get(state.credential_barriers, credential_id, %{status: :revoking, owners: %{}})
 
-    barrier = %{barrier | owners: MapSet.put(barrier.owners, token)}
+    barrier = %{barrier | owners: Map.put(barrier.owners, token, Process.monitor(owner))}
     barriers = Map.put(state.credential_barriers, credential_id, barrier)
     {:reply, {:ok, token}, %{state | credential_barriers: barriers}}
   end
 
   def handle_call({:finish_credential_revocation, credential_id, token, :committed}, _from, state) do
-    ids = matching_calls(state, &match?({^credential_id, _request_id}, &1.external_key))
-    barrier = barrier_without_owner(state, credential_id, token, :revoked)
-    state = put_in(state, [:credential_barriers, credential_id], barrier)
+    case finish_credential_owner(state, credential_id, token, :revoked) do
+      {:ok, state} ->
+        ids = matching_calls(state, &match?({^credential_id, _request_id}, &1.external_key))
+        {:reply, :ok, finish_calls(state, ids, :credential_revoked)}
 
-    {:reply, :ok, finish_calls(state, ids, :credential_revoked)}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_call(
@@ -168,51 +172,52 @@ defmodule Webby.BrowserConnections do
         _from,
         state
       ) do
-    barrier = barrier_without_owner(state, credential_id, token, :revoking)
-
-    barriers =
-      if barrier.status == :revoking and MapSet.size(barrier.owners) == 0,
-        do: Map.delete(state.credential_barriers, credential_id),
-        else: Map.put(state.credential_barriers, credential_id, barrier)
-
-    {:reply, :ok, %{state | credential_barriers: barriers}}
+    case finish_credential_owner(state, credential_id, token, :revoking) do
+      {:ok, state} -> {:reply, :ok, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
   end
 
-  def handle_call({:begin_browser_erasure, browser_id}, _from, state) do
+  def handle_call({:begin_browser_erasure, browser_id}, from, state) do
     token = make_ref()
+    {owner, _tag} = from
 
     erasure =
-      Map.get(state.browser_erasures, browser_id, %{status: :erasing, owners: MapSet.new()})
+      Map.get(state.browser_erasures, browser_id, %{status: :erasing, owners: %{}})
 
-    erasure = %{erasure | owners: MapSet.put(erasure.owners, token)}
+    erasure = %{erasure | owners: Map.put(erasure.owners, token, Process.monitor(owner))}
 
     {:reply, {:ok, token}, put_in(state, [:browser_erasures, browser_id], erasure)}
   end
 
   def handle_call({:finish_browser_erasure, browser_id, token, :committed}, _from, state) do
-    with {:ok, erasure} <- finish_browser_erasure_owner(state, browser_id, token) do
-      case state.connections[browser_id] do
-        %{pid: pid} -> send(pid, :browser_erased)
-        nil -> :ok
-      end
+    case finish_browser_erasure_owner(state, browser_id, token) do
+      {:ok, erasure} ->
+        case state.connections[browser_id] do
+          %{pid: pid} -> send(pid, :browser_erased)
+          nil -> :ok
+        end
 
-      state = put_in(state, [:browser_erasures, browser_id], %{erasure | status: :erased})
-      {:reply, :ok, drop_connection(state, browser_id, "browser_erased")}
-    else
-      {:error, reason} -> {:reply, {:error, reason}, state}
+        state = put_in(state, [:browser_erasures, browser_id], %{erasure | status: :erased})
+        {:reply, :ok, drop_connection(state, browser_id, "browser_erased")}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
   def handle_call({:finish_browser_erasure, browser_id, token, :aborted}, _from, state) do
-    with {:ok, erasure} <- finish_browser_erasure_owner(state, browser_id, token) do
-      browser_erasures =
-        if erasure.status == :erasing and MapSet.size(erasure.owners) == 0,
-          do: Map.delete(state.browser_erasures, browser_id),
-          else: Map.put(state.browser_erasures, browser_id, erasure)
+    case finish_browser_erasure_owner(state, browser_id, token) do
+      {:ok, erasure} ->
+        browser_erasures =
+          if erasure.status == :erasing and map_size(erasure.owners) == 0,
+            do: Map.delete(state.browser_erasures, browser_id),
+            else: Map.put(state.browser_erasures, browser_id, erasure)
 
-      {:reply, :ok, %{state | browser_erasures: browser_erasures}}
-    else
-      {:error, reason} -> {:reply, {:error, reason}, state}
+        {:reply, :ok, %{state | browser_erasures: browser_erasures}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -280,9 +285,15 @@ defmodule Webby.BrowserConnections do
         {:noreply, drop_connection(state, browser_id, "browser_offline")}
 
       nil ->
-        ids = calls_for_monitor(state, monitor)
-        complete_caller_down_audits(state, ids)
-        {:noreply, finish_calls(state, ids, :caller_down)}
+        case release_barrier_owner(state, monitor) do
+          {:ok, state} ->
+            {:noreply, state}
+
+          :not_found ->
+            ids = calls_for_monitor(state, monitor)
+            complete_caller_down_audits(state, ids)
+            {:noreply, finish_calls(state, ids, :caller_down)}
+        end
     end
   end
 
@@ -381,10 +392,22 @@ defmodule Webby.BrowserConnections do
   defp matching_calls(state, predicate),
     do: for({id, call} <- state.calls, predicate.(call), do: id)
 
-  defp barrier_without_owner(state, credential_id, token, requested_status) do
-    barrier = Map.fetch!(state.credential_barriers, credential_id)
-    status = if barrier.status == :revoked, do: :revoked, else: requested_status
-    %{barrier | status: status, owners: MapSet.delete(barrier.owners, token)}
+  defp finish_credential_owner(state, credential_id, token, requested_status) do
+    with %{owners: owners} = barrier <- state.credential_barriers[credential_id],
+         {:ok, monitor} <- Map.fetch(owners, token) do
+      Process.demonitor(monitor, [:flush])
+      status = if barrier.status == :revoked, do: :revoked, else: requested_status
+      barrier = %{barrier | status: status, owners: Map.delete(owners, token)}
+
+      barriers =
+        if barrier.status == :revoking and map_size(barrier.owners) == 0,
+          do: Map.delete(state.credential_barriers, credential_id),
+          else: Map.put(state.credential_barriers, credential_id, barrier)
+
+      {:ok, %{state | credential_barriers: barriers}}
+    else
+      _missing -> {:error, :not_revocation_owner}
+    end
   end
 
   defp browser_erased?(state, browser_id) do
@@ -396,11 +419,62 @@ defmodule Webby.BrowserConnections do
 
   defp finish_browser_erasure_owner(state, browser_id, token) do
     with %{owners: owners} = erasure <- state.browser_erasures[browser_id],
-         true <- MapSet.member?(owners, token) do
-      {:ok, %{erasure | owners: MapSet.delete(owners, token)}}
+         {:ok, monitor} <- Map.fetch(owners, token) do
+      Process.demonitor(monitor, [:flush])
+      {:ok, %{erasure | owners: Map.delete(owners, token)}}
     else
       _missing -> {:error, :not_erasure_owner}
     end
+  end
+
+  defp release_barrier_owner(state, monitor) do
+    case find_barrier_owner(state.credential_barriers, monitor) do
+      {:ok, credential_id, token} ->
+        finish_dead_credential_owner(state, credential_id, token)
+
+      :not_found ->
+        case find_barrier_owner(state.browser_erasures, monitor) do
+          {:ok, browser_id, token} -> finish_dead_erasure_owner(state, browser_id, token)
+          :not_found -> :not_found
+        end
+    end
+  end
+
+  defp find_barrier_owner(barriers, monitor) do
+    Enum.find_value(barriers, :not_found, fn {id, %{owners: owners}} ->
+      with {:ok, token} <- owner_for_monitor(owners, monitor), do: {:ok, id, token}
+    end)
+  end
+
+  defp owner_for_monitor(owners, monitor) do
+    case Enum.find(owners, fn {_token, owner_monitor} -> owner_monitor == monitor end) do
+      {token, ^monitor} -> {:ok, token}
+      nil -> :not_found
+    end
+  end
+
+  defp finish_dead_credential_owner(state, credential_id, token) do
+    barrier = state.credential_barriers[credential_id]
+    barrier = %{barrier | owners: Map.delete(barrier.owners, token)}
+
+    barriers =
+      if barrier.status == :revoking and map_size(barrier.owners) == 0,
+        do: Map.delete(state.credential_barriers, credential_id),
+        else: Map.put(state.credential_barriers, credential_id, barrier)
+
+    {:ok, %{state | credential_barriers: barriers}}
+  end
+
+  defp finish_dead_erasure_owner(state, browser_id, token) do
+    erasure = state.browser_erasures[browser_id]
+    erasure = %{erasure | owners: Map.delete(erasure.owners, token)}
+
+    erasures =
+      if erasure.status == :erasing and map_size(erasure.owners) == 0,
+        do: Map.delete(state.browser_erasures, browser_id),
+        else: Map.put(state.browser_erasures, browser_id, erasure)
+
+    {:ok, %{state | browser_erasures: erasures}}
   end
 
   defp calls_for_monitor(state, monitor),

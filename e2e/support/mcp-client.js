@@ -145,13 +145,14 @@ export class MCPClient {
         headers["mcp-method"] = message.method
         if (message.method === "tools/call") headers["mcp-name"] = message.params.name
       }
-      return await this.raw("/mcp", {method: "POST", body: JSON.stringify(message), headers, requestKey: message.id, ...options})
+      const exchange = {id: message.id, transport_method: "POST", rpc_method: message.method, action: message.params?.arguments?.action, version: message.method === "initialize" ? message.params?.protocolVersion : this.version, path: "/mcp"}
+      return await this.raw("/mcp", {method: "POST", body: JSON.stringify(message), headers, requestKey: message.id, exchange, ...options})
     } finally {
       if (message.id !== undefined) this.pending.delete(message.id)
     }
   }
 
-  async raw(path, {method = "GET", body, headers = {}, token = this.token, origin, authenticate = true, signal, timeoutMs = this.limits.requestMs, requestKey = Symbol("request")} = {}) {
+  async raw(path, {method = "GET", body, headers = {}, token = this.token, origin, authenticate = true, signal, timeoutMs = this.limits.requestMs, requestKey = Symbol("request"), exchange} = {}) {
     this.assertUsable()
     if (body !== undefined && byteLength(body) > this.limits.bodyBytes) throw new MCPClientError("request_too_large", "request body exceeds client limit")
     if (body !== undefined) {
@@ -182,7 +183,7 @@ export class MCPClient {
         try { json = JSON.parse(text) } catch { throw new MCPClientError("invalid_json", "response was not valid JSON", {status: response.status}) }
         if (jsonDepth(json) > this.limits.jsonDepth) throw new MCPClientError("json_depth", "response JSON exceeds client depth limit")
       }
-      const result = {status: response.status, headers: Object.fromEntries(response.headers), body: json, text}
+      const result = {status: response.status, headers: Object.fromEntries(response.headers), body: json, text, ...(exchange === undefined ? {} : {exchange: Object.freeze({...exchange})})}
       await this.record("mcp.response", {status: result.status, body: redactBody(result.body)})
       return result
     } finally {

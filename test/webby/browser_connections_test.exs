@@ -156,6 +156,85 @@ defmodule Webby.BrowserConnectionsTest do
     assert :ok = BrowserConnections.browser_admissible?(browser_id)
   end
 
+  test "browser erasure barriers release dead owners without releasing live owners" do
+    browser_id = Ecto.UUID.generate()
+    parent = self()
+
+    dead_owner =
+      spawn(fn ->
+        assert {:ok, token} = BrowserConnections.begin_browser_erasure(browser_id)
+        send(parent, {:dead_erasure_owner_ready, token})
+        receive do: (:stop -> :ok)
+      end)
+
+    assert_receive {:dead_erasure_owner_ready, dead_token}
+    assert {:ok, live_token} = BrowserConnections.begin_browser_erasure(browser_id)
+
+    dead_monitor =
+      :sys.get_state(BrowserConnections).browser_erasures[browser_id].owners[dead_token]
+
+    :sys.replace_state(BrowserConnections, fn state ->
+      {:noreply, state} =
+        BrowserConnections.handle_info(
+          {:DOWN, dead_monitor, :process, dead_owner, :killed},
+          state
+        )
+
+      state
+    end)
+
+    assert {:error, :browser_erased} = BrowserConnections.browser_admissible?(browser_id)
+    assert %{owners: owners} = :sys.get_state(BrowserConnections).browser_erasures[browser_id]
+    refute Map.has_key?(owners, dead_token)
+    assert Map.has_key?(owners, live_token)
+    assert :ok = BrowserConnections.finish_browser_erasure(browser_id, live_token, :aborted)
+    assert :ok = BrowserConnections.browser_admissible?(browser_id)
+    send(dead_owner, :stop)
+  end
+
+  test "credential revocation barriers release when their owner dies" do
+    browser_id = Ecto.UUID.generate()
+    credential_id = Ecto.UUID.generate()
+    parent = self()
+    assert :ok = BrowserConnections.register(browser_id, self())
+
+    owner =
+      spawn(fn ->
+        assert {:ok, token} = BrowserConnections.begin_credential_revocation(credential_id)
+        send(parent, {:credential_owner_ready, token})
+        receive do: (:stop -> :ok)
+      end)
+
+    assert_receive {:credential_owner_ready, token}
+
+    assert {:error, "revoked", _message} =
+             BrowserConnections.call(browser_id, %{}, 100, nil, nil, credential_id)
+
+    owner_monitor =
+      :sys.get_state(BrowserConnections).credential_barriers[credential_id].owners[token]
+
+    :sys.replace_state(BrowserConnections, fn state ->
+      {:noreply, state} =
+        BrowserConnections.handle_info({:DOWN, owner_monitor, :process, owner, :killed}, state)
+
+      state
+    end)
+
+    call =
+      Task.async(fn -> BrowserConnections.call(browser_id, %{}, 500, nil, nil, credential_id) end)
+
+    assert_receive {:tool_call, %{"call_id" => call_id}}
+
+    BrowserConnections.complete(browser_id, %{
+      "type" => "tool.result",
+      "call_id" => call_id,
+      "result" => :ok
+    })
+
+    assert {:ok, :ok} = Task.await(call)
+    send(owner, :stop)
+  end
+
   test "rejects duplicate active external keys without disturbing the first call" do
     browser_id = Ecto.UUID.generate()
     key = {Ecto.UUID.generate(), 1}

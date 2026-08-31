@@ -441,11 +441,36 @@ async function scanAllOnce() {
   // every tab after the first would arrive with allowActiveTab truthy and skip
   // the canScanTab check -- incognito, ineligible URLs, and origins the user
   // never granted included.
+  await scanTabs(tabs);
+}
+
+/**
+ * Runs a bounded tab scan without letting one rejected tab abandon the rest of
+ * that worker's queue. The settled results retain one entry per tab so the
+ * caller gets a failure only after every tab has been attempted.
+ *
+ * @param {chrome.tabs.Tab[]} tabs
+ * @param {(tab: chrome.tabs.Tab) => Promise<unknown>} [scan]
+ * @param {number} [concurrency]
+ */
+export async function scanTabs(tabs, scan = scanTab, concurrency = SCAN_CONCURRENCY) {
   let next = 0;
-  const workers = Array.from({length: Math.min(SCAN_CONCURRENCY, tabs.length)}, async () => {
-    while (next < tabs.length) await scanTab(tabs[next++]);
+  /** @type {PromiseSettledResult<unknown>[]} */
+  const results = new Array(tabs.length);
+  const workers = Array.from({length: Math.min(concurrency, tabs.length)}, async () => {
+    while (next < tabs.length) {
+      const index = next++;
+      const tab = tabs[index];
+      if (!tab) continue;
+      try {
+        results[index] = {status: "fulfilled", value: await scan(tab)};
+      } catch (reason) {
+        results[index] = {status: "rejected", reason};
+      }
+    }
   });
-  reportRejected("full tab scan", await Promise.allSettled(workers));
+  await Promise.all(workers);
+  return reportRejected("full tab scan", results);
 }
 
 /**

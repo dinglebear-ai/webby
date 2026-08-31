@@ -197,6 +197,28 @@ defmodule Webby.DataRetentionTest do
     assert :ok = Webby.BrowserConnections.browser_admissible?(browser.id)
   end
 
+  test "browser erasure removes its tombstone when callback throws or exits" do
+    browser = insert_browser()
+
+    for {kind, callback} <- [
+          {:throw, fn -> throw(:forced_callback_throw) end},
+          {:exit, fn -> exit(:forced_callback_exit) end}
+        ] do
+      case kind do
+        :throw ->
+          assert catch_throw(DataRetention.erase_browser(browser.id, after_tombstone: callback)) ==
+                   :forced_callback_throw
+
+        :exit ->
+          assert catch_exit(DataRetention.erase_browser(browser.id, after_tombstone: callback)) ==
+                   :forced_callback_exit
+      end
+
+      assert Repo.get(Browser, browser.id)
+      assert :ok = Webby.BrowserConnections.browser_admissible?(browser.id)
+    end
+  end
+
   defp insert_browser do
     {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
 

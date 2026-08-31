@@ -152,10 +152,17 @@ async function scenarios() {
   }))
 }
 
-export async function writeShardManifest({lane, driver, shard = 1, total = 1, output}) {
+export async function writeShardManifest({lane, driver, shard = 1, total = 1, output, selectedIds}) {
   if (!Number.isInteger(shard) || !Number.isInteger(total) || shard < 1 || total < 1 || shard > total) throw new Error("invalid shard")
   const tiers = lane === "pr" ? new Set(["pr"]) : lane === "main" ? new Set(["pr", "main"]) : new Set(["pr", "main", "nightly"])
-  const inventory = (await scenarios()).filter(value => tiers.has(value.tier) && value.drivers.includes(driver))
+  let inventory = (await scenarios()).filter(value => tiers.has(value.tier) && value.drivers.includes(driver))
+  if (selectedIds !== undefined) {
+    if (!Array.isArray(selectedIds) || new Set(selectedIds).size !== selectedIds.length) throw new Error("selected scenario IDs must be unique")
+    const requested = new Set(selectedIds)
+    inventory = inventory.filter(value => requested.has(value.id))
+    const missing = selectedIds.filter(id => !inventory.some(value => value.id === id))
+    if (missing.length) throw new Error(`selected scenarios are ineligible for ${lane}/${driver}: ${missing.join(",")}`)
+  }
   const bins = Array.from({length: total}, (_, index) => ({index: index + 1, weight: 0, scenarios: []}))
   for (const scenario of inventory.sort((a, b) => b.weight - a.weight || a.id.localeCompare(b.id))) {
     const target = bins.sort((a, b) => a.weight - b.weight || a.index - b.index)[0]
@@ -219,7 +226,7 @@ export async function runSuite(name) {
   // contract, so its executable manifest must use the main denominator even
   // though the suite is a required pull-request gate.
   const lane = name === "protocol-pr" ? "pr" : "main"
-  await writeShardManifest({lane, driver, output: manifestPath})
+  await writeShardManifest({lane, driver, output: manifestPath, selectedIds: suiteScenarioDenominators[name]})
   const logPath = join(artifactRoot, "test-output.log")
   const scenarioTelemetryPath = join(runTemp, "scenario-runs.ndjson")
   const chunks = []; let bytes = 0; const limit = 8 * 1024 * 1024

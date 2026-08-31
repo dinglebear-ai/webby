@@ -131,6 +131,12 @@ defmodule Webby.DataRetention do
           Webby.BrowserConnections.finish_browser_erasure(browser_id, erasure_token, :aborted)
 
         reraise exception, __STACKTRACE__
+    catch
+      kind, reason ->
+        :ok =
+          Webby.BrowserConnections.finish_browser_erasure(browser_id, erasure_token, :aborted)
+
+        :erlang.raise(kind, reason, __STACKTRACE__)
     end
   end
 

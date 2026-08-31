@@ -31,12 +31,16 @@ test("multi-batch retention preserves active state and erasure is browser-isolat
   assert.deepEqual(await sqlite(world.databasePath, "SELECT id,status FROM browser_pairing_requests"), [{id: "pending-a", status: "pending"}])
   assert.deepEqual(await sqlite(world.databasePath, "SELECT id,outcome FROM invocation_audits"), [{id: "started-a", outcome: "started"}])
 
-  assert.match(await persistenceOperation(world, {op: "browser.erase", browser_id: "browser-a", audits: "anonymize"}), /audits: :anonymize/)
+  assert.deepEqual(JSON.parse(await persistenceOperation(world, {op: "browser.erase", browser_id: "browser-a", audits: "anonymize"})), {
+    browser_id: "browser-a", audits: "anonymize", deleted_audits: 0, deleted_pairings: 0,
+  })
   assert.deepEqual(await sqlite(world.databasePath, "SELECT id FROM browsers"), [{id: "browser-b"}])
   assert.deepEqual(await sqlite(world.databasePath, "SELECT id,browser_id FROM invocation_audits"), [{id: "started-a", browser_id: null}])
   assert.deepEqual(await sqlite(world.databasePath, "SELECT id,preferred_browser_id FROM page_registrations ORDER BY id"), [{id: "page-a", preferred_browser_id: null}, {id: "page-b", preferred_browser_id: "browser-b"}])
   await executeSql(world.databasePath, `INSERT INTO document_sessions(id,browser_id,registration_id,tab_id,document_id,current_origin,sanitized_path,page_title,catalog_revision,catalog_fingerprint,catalog_summary,connected_at,last_seen_at,status,inserted_at,updated_at) VALUES('session-b','browser-b','page-b',3,'document-b','https://b.test','/','B',1,'${"c".repeat(64)}','{}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'closed',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP); INSERT INTO invocation_audits(id,credential_id,registration_id,session_id,browser_id,tool_name,catalog_revision,outcome,error_kind,duration_ms,inserted_at) VALUES('audit-b',NULL,'page-b','session-b','browser-b','tool_0',1,'succeeded',NULL,1,CURRENT_TIMESTAMP);`)
-  assert.match(await persistenceOperation(world, {op: "browser.erase", browser_id: "browser-b", audits: "delete"}), /deleted_audits: 1/)
+  assert.deepEqual(JSON.parse(await persistenceOperation(world, {op: "browser.erase", browser_id: "browser-b", audits: "delete"})), {
+    browser_id: "browser-b", audits: "delete", deleted_audits: 1, deleted_pairings: 0,
+  })
   assert.deepEqual(await sqlite(world.databasePath, "SELECT id FROM invocation_audits ORDER BY id"), [{id: "started-a"}])
   assert.deepEqual(await sqlite(world.databasePath, "SELECT id,preferred_browser_id FROM page_registrations ORDER BY id"), [{id: "page-a", preferred_browser_id: null}, {id: "page-b", preferred_browser_id: null}])
   const recorder = await new ArtifactRecorder({root: `${world.workspace.artifacts}/retention-recorder`, scenarioId: "retention-erasure", worldId: world.worldId, secrets: [world.secret, world.telemetryCapability]}).open()

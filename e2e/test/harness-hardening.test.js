@@ -17,7 +17,7 @@ const proofFor = (surfaceId, sequence) => {
   if (category === "world-field" || category === "capability") return {kind: "manifest_field", manifest_path: "world-manifest.json", field: "field", value: true}
   if (category === "dashboard") return surfaceProof.dashboard({sequence, producer: "dashboard", type: "dashboard.operation.completed", data: {action: "test", entity_id: "entity-1"}})
   if (category === "chrome-event") return surfaceProof.chrome({sequence, producer: "extension", event_name: "chrome.test", identity: "tab-1"}, {eventName: "chrome.test", identity: "tab-1"})
-  if (category === "version" || category === "mcp" || category === "action") return surfaceProof.mcp({status: 200}, {method: "tools/call", version: "2025-06-18", action: "status"})
+  if (category === "version" || category === "mcp" || category === "action") return surfaceProof.mcp({status: 200, exchange: {id: sequence, transport_method: "POST", rpc_method: "tools/call", action: "status", version: "2025-06-18", path: "/mcp"}}, {method: "tools/call", version: "2025-06-18", action: "status"})
   return surfaceProof.journal({sequence, type: "surface.test.observed", producer: "test", data: {surface_id: surfaceId, correlation: {surface_id: surfaceId, sequence}}}, surfaceId)
 }
 const proofMap = surfaceIds => Object.fromEntries(surfaceIds.map((surfaceId, index) => [surfaceId, proofFor(surfaceId, index + 1)]))

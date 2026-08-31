@@ -3,9 +3,10 @@ defmodule WebbyWeb.E2EPersistenceController do
   use WebbyWeb, :controller
 
   def create(conn, params) do
-    with :ok <- authorize(conn) do
-      execute(conn, params)
-    else
+    case authorize(conn) do
+      :ok ->
+        execute(conn, params)
+
       {:error, :unauthorized} ->
         conn |> put_status(:not_found) |> json(%{error: "not_found"})
     end

@@ -149,6 +149,47 @@ defmodule Webby.MCP.CredentialsTest do
     assert :ok = Webby.BrowserConnections.register(first_browser, self())
   end
 
+  test "throwing and exiting persistence release the credential denial barrier" do
+    browser_id = Ecto.UUID.generate()
+    assert :ok = Webby.BrowserConnections.register(browser_id, self())
+
+    for {kind, failure} <- [
+          {:throw, fn -> throw(:persistence_threw) end},
+          {:exit, fn -> exit(:persistence_exited) end}
+        ] do
+      credential_id = Ecto.UUID.generate()
+
+      case kind do
+        :throw ->
+          assert catch_throw(
+                   Credentials.revoke(credential_id, persist: fn ^credential_id -> failure.() end)
+                 ) ==
+                   :persistence_threw
+
+        :exit ->
+          assert catch_exit(
+                   Credentials.revoke(credential_id, persist: fn ^credential_id -> failure.() end)
+                 ) ==
+                   :persistence_exited
+      end
+
+      call =
+        Task.async(fn ->
+          Webby.BrowserConnections.call(browser_id, %{}, 500, nil, nil, credential_id)
+        end)
+
+      assert_receive {:tool_call, %{"call_id" => call_id}}
+
+      Webby.BrowserConnections.complete(browser_id, %{
+        "type" => "tool.result",
+        "call_id" => call_id,
+        "result" => "allowed"
+      })
+
+      assert {:ok, "allowed"} = Task.await(call)
+    end
+  end
+
   test "a committed revocation cannot be undone by a concurrent revoker aborting" do
     browser_id = Ecto.UUID.generate()
     credential_id = Ecto.UUID.generate()

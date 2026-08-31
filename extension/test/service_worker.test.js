@@ -93,6 +93,35 @@ test("async Chrome listener failures are consumed and logged", async () => {
   assert.match(failures[0][1].message, /tab lookup failed/);
 });
 
+test("a full scan attempts every tab before reporting accumulated failures", async () => {
+  installChrome();
+  globalThis.WebSocket = FakeWebSocket;
+  const {scanTabs} = await import(`../src/service_worker.js?scan-barrier=${Date.now()}`);
+  const attempted = [];
+  const failures = [];
+  const originalError = console.error;
+  console.error = (...args) => failures.push(args);
+
+  try {
+    await assert.rejects(
+      scanTabs(
+        Array.from({length: 12}, (_unused, index) => ({id: index + 1})),
+        async ({id}) => {
+          attempted.push(id);
+          if (id === 2 || id === 9) throw new Error(`tab ${id} failed`);
+        },
+        3
+      ),
+      /full tab scan/
+    );
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.deepEqual(attempted.toSorted((left, right) => left - right), Array.from({length: 12}, (_unused, index) => index + 1));
+  assert.equal(failures.length, 2);
+});
+
 test("pairing terminal states clear only after durable approval and reject malformed replies", async () => {
   installChrome();
   globalThis.WebSocket = FakeWebSocket;

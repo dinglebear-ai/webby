@@ -96,6 +96,12 @@ defmodule Webby.MCP.Credentials do
           Webby.BrowserConnections.finish_credential_revocation(id, barrier_token, :aborted)
 
         reraise exception, __STACKTRACE__
+    catch
+      kind, reason ->
+        :ok =
+          Webby.BrowserConnections.finish_credential_revocation(id, barrier_token, :aborted)
+
+        :erlang.raise(kind, reason, __STACKTRACE__)
     end
   end
 

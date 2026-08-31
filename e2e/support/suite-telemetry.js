@@ -65,10 +65,11 @@ export async function writeSuiteTelemetry(path, options) {
   return telemetry
 }
 
-export async function readPlannedScenarioIds(path, instrumentedIds) {
+export async function readPlannedScenarioIds(path, expectedIds) {
   const manifest = JSON.parse(await readFile(path, "utf8"))
-  const eligible = new Set(manifest.selected)
-  const missing = instrumentedIds.filter(id => !eligible.has(id))
-  if (missing.length) throw new Error(`suite scenario denominator is absent from the selected manifest: ${missing.join(",")}`)
-  return [...instrumentedIds].sort()
+  assertUnique(manifest.selected, "manifest selected scenario IDs")
+  const selected = unique(manifest.selected)
+  const expected = unique(expectedIds)
+  if (JSON.stringify(selected) !== JSON.stringify(expected)) throw new Error(`suite scenario denominator differs from selected manifest: expected=${expected.join(",")} selected=${selected.join(",")}`)
+  return selected
 }
