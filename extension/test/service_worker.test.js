@@ -99,7 +99,7 @@ test("pairing terminal states clear only after durable approval and reject malfo
   const operations = [];
   chrome.storage.local.set = async (value) => { operations.push(["set", value]); };
   chrome.storage.local.remove = async (key) => { operations.push(["remove", key]); };
-  const {lookupExecutableTab, pairingTransition, persistApprovedPairing, reconcilePairingStatus, recoverPairingPersistence, transientCancellationDiagnostic, transientErrorKind} = await import(`../src/service_worker.js?pairing-status=${Date.now()}`);
+  const {lookupExecutableTab, pairingTransition, persistApprovedPairing, reconcilePairingStatus, recoverPairingPersistence, reportMissingObservationCancellation, transientCancellationDiagnostic, transientErrorKind} = await import(`../src/service_worker.js?pairing-status=${Date.now()}`);
   await tick();
 
   assert.deepEqual(pairingTransition({payload: {status: "pending"}}), {state: "pending", terminal: false});
@@ -172,6 +172,14 @@ test("pairing terminal states clear only after durable approval and reject malfo
     ),
     null
   );
+  const missingDiagnostics = [];
+  await reportMissingObservationCancellation(
+    {call_id: "missing-call", document_id: "missing-doc"},
+    {async cancellationTransient(value) { missingDiagnostics.push(value); }}
+  );
+  assert.deepEqual(missingDiagnostics, [{
+    callId: "missing-call", tabId: null, documentId: "missing-doc", kind: "observation_gone"
+  }]);
 
   chrome.tabs.get = async () => { throw new Error("No tab with id: 42"); };
   assert.equal(await lookupExecutableTab(42), undefined);

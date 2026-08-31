@@ -74,6 +74,21 @@ test("background diagnostic persistence failures fail the next awaited milestone
   assert.equal(writes, 1);
 });
 
+test("explicit final flush surfaces a tracked failure without a later milestone", async () => {
+  globalThis.chrome = {
+    runtime: {id: "a".repeat(32)}, tabs: {get: async id => ({id})},
+    storage: {local: {async get() { return {}; }, async set() { throw new Error("final diagnostic write failed"); }}}
+  };
+  const {createIsolatedE2EDiagnostics} = await import(`../src/diagnostics.js?flush=${Date.now()}`);
+  const diagnostics = createIsolatedE2EDiagnostics({
+    schema_version: 1, environment_marker: "isolated-e2e", expected_extension_id: chrome.runtime.id,
+    instance_nonce: "n".repeat(43), base_url: "http://127.0.0.1:65001", fixture_url: "http://127.0.0.1:65002"
+  });
+  diagnostics.chromeEvent("tabs.onRemoved");
+  await assert.rejects(diagnostics.flush(), /final diagnostic write failed/);
+  await assert.rejects(globalThis.__webbyE2EFlushDiagnostics(), /final diagnostic write failed/);
+});
+
 test("transient cancellation diagnostics are durably observable", async () => {
   const writes = [];
   globalThis.chrome = {

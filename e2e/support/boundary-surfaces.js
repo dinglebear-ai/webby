@@ -2,9 +2,9 @@ const boundaries = Object.freeze({
   "e2e-shared-vertical-slice": Object.freeze({
     "health.request": ["http:get-root", "http:get-health", "behavior:health", "capability:world-nonce", "world-field:manifest-version", "world-field:world-id", "world-field:base-url", "world-field:artifacts", "world-field:scenario-id", "artifact:timeline", "artifact:manifest"],
     "browser.pair": ["topic:auth", "topic:pairing", "in:pairing-request", "in:pairing-status", "in:auth-respond", "in:browser-hello", "out:auth-challenge", "out:auth-accepted", "out:pairing-pending", "out:pairing-status", "out:pairing-approved", "out:browser-welcome", "dashboard:approve"],
-    "discovery.publish": ["in:browser-resync", "in:discovery-observed", "out:ack", "action:browser-list", "action:discovery-list", "action:discovery-get", "action:page-list", "action:page-get", "dashboard:register"],
+    "discovery.publish": ["in:browser-resync", "in:discovery-observed", "out:ack", "dashboard:register"],
     "credential.create": ["dashboard:create-credential"],
-    "mcp.invoke": ["http:post-mcp", "in:tool-result", "out:tool-call", "mcp:initialize", "mcp:tools-list", "mcp:tools-call", "mcp:initialized", "action:status", "action:page-tools", "action:page-call", "version:2026", "version:2025-11", "version:2025-06", "version:2025-03", "fixture:side-effect"],
+    "mcp.invoke": ["http:post-mcp", "in:tool-result", "out:tool-call", "mcp:initialize", "mcp:tools-list", "mcp:tools-call", "mcp:initialized", "action:status", "action:browser-list", "action:discovery-list", "action:discovery-get", "action:page-list", "action:page-get", "action:page-tools", "action:page-call", "version:2026", "version:2025-11", "version:2025-06", "version:2025-03", "fixture:side-effect"],
     "audit.observe": ["artifact:server-log", "artifact:dashboard"],
   }),
   "e2e-lifecycle-removal": Object.freeze({
@@ -21,6 +21,12 @@ const boundaries = Object.freeze({
 
 export const instrumentedScenarioIds = Object.freeze(Object.keys(boundaries).sort())
 
+export function observeVerifiedSurfaces(boundary, surfaceIds, source) {
+  if (!boundary) return
+  if (typeof source !== "string" || source.length === 0) throw new Error("verified surface source is required")
+  for (const surfaceId of surfaceIds) boundary.observe(surfaceId, {source: `${source} [${surfaceId}]`, verified: true})
+}
+
 export function observedBoundarySurfaces(scenarioId, operation) {
   const scenario = boundaries[scenarioId]
   if (!scenario) return undefined
@@ -36,15 +42,29 @@ export function observedBoundarySurfaces(scenarioId, operation) {
 export function createBoundaryObservation(scenarioId, operation) {
   const surfaces = observedBoundarySurfaces(scenarioId, operation)
   if (surfaces === undefined) return undefined
+  const allowed = new Set(surfaces)
+  const observed = new Map()
+  let sealed = false
   let evidence
   return Object.freeze({
+    observe(surfaceId, proof) {
+      if (sealed) throw new Error(`${scenarioId}/${operation}: boundary evidence is already sealed`)
+      if (!allowed.has(surfaceId)) throw new Error(`${scenarioId}/${operation}: undeclared boundary surface: ${surfaceId}`)
+      if (!proof || typeof proof !== "object" || typeof proof.source !== "string" || proof.source.length === 0 || proof.verified !== true) {
+        throw new Error(`${scenarioId}/${operation}/${surfaceId}: verified runtime proof is required`)
+      }
+      if (observed.has(surfaceId)) throw new Error(`${scenarioId}/${operation}: boundary surface was observed more than once: ${surfaceId}`)
+      observed.set(surfaceId, Object.freeze({...proof}))
+      return surfaceId
+    },
     complete() {
-      if (evidence) throw new Error(`${scenarioId}/${operation}: boundary completion was emitted more than once`)
-      evidence = Object.freeze({schema_version: 1, scenario_id: scenarioId, operation, state: "verified", surface_ids: Object.freeze([...surfaces])})
+      if (sealed) throw new Error(`${scenarioId}/${operation}: boundary completion was emitted more than once`)
+      sealed = true
+      evidence = Object.freeze({schema_version: 1, scenario_id: scenarioId, operation, state: "verified", surface_ids: Object.freeze([...observed.keys()]), proofs: Object.freeze(Object.fromEntries(observed))})
       return evidence
     },
     consume() {
-      if (!evidence) throw new Error(`${scenarioId}/${operation}: verified boundary completion evidence is missing`)
+      if (!sealed) throw new Error(`${scenarioId}/${operation}: verified boundary completion evidence is missing`)
       return evidence
     },
   })

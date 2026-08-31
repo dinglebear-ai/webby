@@ -315,7 +315,10 @@ async function executeToolCall(payload) {
  */
 export async function cancelToolCall(payload) {
   const observation = [...observations.values()].find((entry) => entry.document_id === payload.document_id);
-  if (!observation) return;
+  if (!observation) {
+    await reportMissingObservationCancellation(payload);
+    return;
+  }
   try {
     await chrome.scripting.executeScript({
       target: {tabId: observation.tab_id, documentIds: [observation.document_id]},
@@ -335,6 +338,19 @@ export async function cancelToolCall(payload) {
     });
     throw error;
   }
+}
+
+/**
+ * @param {{call_id: string, document_id: string}} payload
+ * @param {{cancellationTransient: (value: any) => Promise<unknown>}} [target]
+ */
+export function reportMissingObservationCancellation(payload, target = extensionDiagnostics()) {
+  return target.cancellationTransient({
+    callId: payload.call_id,
+    tabId: null,
+    documentId: payload.document_id,
+    kind: "observation_gone"
+  });
 }
 
 /** Build explicit evidence for cancellation races that are safe to suppress. */

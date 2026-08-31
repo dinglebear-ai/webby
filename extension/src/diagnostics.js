@@ -1,4 +1,4 @@
-/** @typedef {{active: boolean, workerNonce?: string, chromeEvent: (name: string) => void, socketAttempt: () => void, protocolOut: (frame: any) => void, protocolIn: (frame: any) => void, cancellationTransient: (value: any) => Promise<unknown>, channelReady: () => Promise<unknown>, authenticated: (browserId?: string) => Promise<unknown>, scanCompleted: (value: any) => Promise<unknown>, scanAllCompleted: () => Promise<unknown>, selectScanTarget: (fallback: () => any) => Promise<any>, scanError: (error: unknown) => unknown, socketAttempts?: () => number, binding?: Record<string, string>}} ExtensionDiagnostics */
+/** @typedef {{active: boolean, workerNonce?: string, chromeEvent: (name: string) => void, socketAttempt: () => void, protocolOut: (frame: any) => void, protocolIn: (frame: any) => void, cancellationTransient: (value: any) => Promise<unknown>, flush: () => Promise<void>, channelReady: () => Promise<unknown>, authenticated: (browserId?: string) => Promise<unknown>, scanCompleted: (value: any) => Promise<unknown>, scanAllCompleted: () => Promise<unknown>, selectScanTarget: (fallback: () => any) => Promise<any>, scanError: (error: unknown) => unknown, socketAttempts?: () => number, binding?: Record<string, string>}} ExtensionDiagnostics */
 
 /** @type {Readonly<ExtensionDiagnostics>} */
 const DEFAULT_DIAGNOSTICS = Object.freeze({
@@ -9,6 +9,7 @@ const DEFAULT_DIAGNOSTICS = Object.freeze({
   protocolOut() {},
   protocolIn() {},
   async cancellationTransient() {},
+  async flush() {},
   async channelReady() {},
   async authenticated() {},
   async scanCompleted() {},
@@ -88,16 +89,19 @@ export function createIsolatedE2EDiagnostics(candidate) {
     return write;
   };
   const persistMilestone = async (/** @type {Record<string, any>} */ value) => {
+    await flush();
+    await persist(value);
+  };
+  const flush = async () => {
     await Promise.all([...pendingWrites]);
     if (persistenceFailure) throw persistenceFailure;
-    await persist(value);
   };
   const recordProtocol = (/** @type {any} */ value) => {
     protocolEvents.push({...value, sequence: protocolEvents.length + 1});
     trackPersist({e2eProtocolEvents: protocolEvents.slice(-256)});
   };
 
-  return Object.freeze({
+  const implementation = Object.freeze({
     active: true,
     workerNonce,
     chromeEvent(/** @type {string} */ name) {
@@ -123,6 +127,7 @@ export function createIsolatedE2EDiagnostics(candidate) {
     cancellationTransient(/** @type {any} */ value) {
       return persistMilestone({e2eLastTransientCancellation: value});
     },
+    flush,
     channelReady() { return persistMilestone({e2eChannelReadyNonce: workerNonce}); },
     authenticated(/** @type {string | undefined} */ browserId) { return persistMilestone({e2eAuthenticatedBrowserId: browserId, e2eAuthenticatedWorkerNonce: workerNonce}); },
     scanCompleted(/** @type {any} */ {tabId, result, observation}) {
@@ -136,4 +141,6 @@ export function createIsolatedE2EDiagnostics(candidate) {
     scanError(/** @type {unknown} */ error) { return error instanceof Error ? `${error.name}:${error.message}` : String(error); },
     binding
   });
+  e2eGlobal.__webbyE2EFlushDiagnostics = flush;
+  return implementation;
 }

@@ -25,8 +25,7 @@ test("authoritative lifecycle owners and measured Chromium projection fail close
   try {
     const world = {worldId: "world-lifecycle-parity", instanceNonce: "w".repeat(43), seed: 19019}
     const recorder = await new ArtifactRecorder({root: join(root, "runner"), scenarioId: scenario.id, worldId: world.worldId, seed: world.seed}).open()
-    const result = await runLifecycleScenario({scenario, driver: "chromium", world, recorder, normalized: protocolBrowserRevokeOracle, cleanup})
-    assert.deepEqual(result.normalized, projectLifecycleParity(protocolBrowserRevokeOracle))
+    await assert.rejects(runLifecycleScenario({scenario, driver: "chromium", world, recorder, normalized: protocolBrowserRevokeOracle, cleanup}), /runtime surface evidence/)
     await recorder.finalize({status: "passed"})
     const common = {scenario, sourceRevision: "a".repeat(40), seed: world.seed, worldNonce: world.instanceNonce}
     const protocol = lifecycleParityResult({...common, driver: "protocol", normalized: protocolBrowserRevokeOracle})

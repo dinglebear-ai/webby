@@ -19,6 +19,8 @@ const ownershipMarker = ".webby-e2e-owned-root.json"
 
 async function writeEmptyCleanupAudit(report, details = {}) {
   Object.assign(report, {empty_audit: true}, details)
+  await rm(join(artifactRoot, "upload"), {recursive: true, force: true})
+  await rm(join(artifactRoot, "cleanup-attested"), {recursive: true, force: true})
   await mkdir(artifactRoot, {recursive: true, mode: 0o700})
   await writeFile(join(artifactRoot, "cleanup-report.json"), JSON.stringify(report, null, 2) + "\n", {mode: 0o600})
   process.stdout.write(`${JSON.stringify(report)}\n`)

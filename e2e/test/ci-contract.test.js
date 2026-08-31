@@ -104,7 +104,13 @@ test("external cleanup refuses arbitrary and unowned roots and removes an empty 
 
 test("contracts-only and already-removed recorded roots produce a successful empty cleanup audit", async t => {
   const artifactDirectory = join(root, "e2e", "artifacts"); await rm(artifactDirectory, {recursive: true, force: true})
+  await mkdir(join(artifactDirectory, "upload", "cleanup"), {recursive: true})
+  await mkdir(join(artifactDirectory, "cleanup-attested"), {recursive: true})
+  await writeFile(join(artifactDirectory, "upload", "cleanup", "upload-attestation.json"), "stale")
+  await writeFile(join(artifactDirectory, "cleanup-attested", "stale.json"), "stale")
   assert.equal(await cleanupWorlds(), 0)
+  await assert.rejects(stat(join(artifactDirectory, "upload")), error => error.code === "ENOENT")
+  await assert.rejects(stat(join(artifactDirectory, "cleanup-attested")), error => error.code === "ENOENT")
   let report = JSON.parse(await readFile(join(artifactDirectory, "cleanup-report.json"), "utf8")); assert.equal(report.empty_audit, true)
   const removed = await initializeOwnedTempRoot(); await rm(removed, {recursive: true, force: true})
   assert.equal(await cleanupWorlds({recordedRoot: removed}), 0)

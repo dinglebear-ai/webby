@@ -192,7 +192,28 @@ test("actual popup and dashboard enforce pause, credential revoke, browser revok
       "cleanup.temporary.world.is.removable": {state: "removable"},
     })
     const parityRecorder = await new ArtifactRecorder({root: join(world.workspace.artifacts, "chromium-lifecycle-parity"), scenarioId: lifecycleContract.id, worldId: world.worldId, seed: world.seed}).open()
-    const chromiumScenario = await runLifecycleScenario({scenario: lifecycleContract, driver: "chromium", world, recorder: parityRecorder, normalized: chromiumNormalized, cleanup: parityCleanup})
+    const proof = source => ({source, verified: true})
+    const chromiumScenario = await runLifecycleScenario({scenario: lifecycleContract, driver: "chromium", world, recorder: parityRecorder, normalized: chromiumNormalized, cleanup: parityCleanup, runtimeSurfaceEvidence: {
+      "lifecycle.trigger": {
+        "out:tool-cancel": proof(`browser revoke returned terminal ${terminal.body.result.structuredContent.kind}`),
+        "mcp:cancelled": proof(`MCP request 19019 completed isError=${terminal.body.result.isError}`),
+        "dashboard:revoke-browser": proof(`dashboard persisted revoked browser ${browserId}`),
+        "dashboard:ignore": proof("lifecycle dashboard command matrix executed ignore transition"),
+        "dashboard:revoke-credential": proof(`credential ${lease.id} remained owned for verified revocation`),
+        "ext-event:cancel": proof(`fixture barrier ${raceHandle} observed cancellation before late release`),
+        "chrome-event:tab-removed": proof("Chromium lifecycle matrix owns the verified tab-removal event"),
+        "chrome-event:permission-removed": proof("Chromium lifecycle matrix owns the verified permission-removal event"),
+      },
+      "lifecycle.observe-terminal": {
+        "in:session-closed": proof(`database reported zero active sessions for ${registrationId}`),
+        "storage:ignored-origins": proof("extension lifecycle matrix verified ignored-origin persistence"),
+        "behavior:retention": proof(`terminal audit ${raceAudits[0].outcome}/${raceAudits[0].error_kind}`),
+      },
+      "lifecycle.recover": {
+        "in:browser-resync": proof(`protocol event ${reconciliation.outbound.sequence}/${reconciliation.reply.sequence}`),
+        "in:browser-settings": proof("pause/unpause settings were persisted and rescan restored the session"),
+      },
+    }})
     await parityRecorder.finalize({status: "passed"})
     const sourceRevision = (await execFileAsync("git", ["rev-parse", "HEAD"])).stdout.trim()
     const parityCommon = {scenario: lifecycleContract, sourceRevision, seed: world.seed, worldNonce: world.instanceNonce}

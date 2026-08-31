@@ -1,9 +1,12 @@
 import assert from "node:assert/strict"
 import {execFile} from "node:child_process"
 import {promisify} from "node:util"
+import {join} from "node:path"
+import {ArtifactRecorder} from "./artifacts.js"
 import {MCPClient} from "./mcp-client.js"
 import {processExists} from "./process-tree.js"
 import {openFileHandles} from "./temp-workspace.js"
+import {observeVerifiedSurfaces} from "./boundary-surfaces.js"
 
 const execFileAsync = promisify(execFile)
 
@@ -42,14 +45,33 @@ export class ChromiumScenarioAdapter {
   }
 
   async health({boundary}) {
+    const root = await fetch(this.world.baseUrl)
+    assert.equal(root.ok, true)
     const response = await fetch(`${this.world.baseUrl}/health`)
+    assert.equal(response.ok, true)
     const ready = {state: response.ok ? "ready" : "failed", value: response.ok}
+    observeVerifiedSurfaces(boundary, ["http:get-root", "http:get-health", "behavior:health"], "successful live root and health responses")
+    const manifest = this.world.manifest
+    assert.equal(manifest.manifest_version, 1); assert.equal(manifest.world_id, this.world.worldId); assert.equal(manifest.scenario_id, this.scenario.id)
+    assert.equal(manifest.base_url, this.world.baseUrl); assert.ok(manifest.instance_nonce.length >= 32); assert.ok(manifest.artifact_directory)
+    const proof = await new ArtifactRecorder({root: join(this.world.workspace.artifacts, "health-artifact-proof"), scenarioId: this.scenario.id, worldId: `${this.world.worldId}-health-proof`}).open()
+    await proof.producers.world.event("health.boundary.verified", {status: response.status})
+    await proof.producers.world.artifact(this.world.manifestPath, {name: "world-manifest-live.json", kind: "manifest", essential: true})
+    const attested = await proof.finalize({status: "passed"})
+    assert.ok(attested.attestation.files.some(file => file.path.endsWith("events.ndjson")))
+    assert.ok(attested.attestation.files.some(file => file.path.endsWith("world-manifest-live.json")))
+    observeVerifiedSurfaces(boundary, ["capability:world-nonce", "world-field:manifest-version", "world-field:world-id", "world-field:base-url", "world-field:artifacts", "world-field:scenario-id"], "validated live world manifest fields")
+    observeVerifiedSurfaces(boundary, ["artifact:timeline", "artifact:manifest"], `artifact attestation ${attested.attestation.attestation_sha256}`)
     boundary.complete()
     return {handles: {world: this.world.worldId}, observations: {"health.ready": ready, "wait.shared-vertical-slice.health": ready}}
   }
 
   async pair({boundary}) {
     const pending = await this.chromium.driver.pair("Chrome")
+    const pairingEvents = await this.chromium.driver.protocolEvents()
+    await this.chromium.driver.suspendAndReacquireWorker()
+    await this.chromium.driver.waitForProtocolReply("pairing.status", 0, {timeoutMs: 10_000})
+    assert.equal(await this.chromium.driver.waitForStorageValue("pairingId"), pending.pairing_id)
     const pairingSocketAttempts = await this.chromium.driver.socketAttempts()
     const approved = this.chromium.driver.waitForStorageValue("browserId", {timeoutMs: 2_000})
     await this.dashboard.refresh()
@@ -59,6 +81,18 @@ export class ChromiumScenarioAdapter {
     await this.chromium.driver.waitForSocketAttempts(pairingSocketAttempts + 1)
     assert.equal(await this.chromium.driver.waitForStorageValue("e2eAuthenticatedBrowserId", {timeoutMs: 5_000}), this.browserId)
     const authenticated = {state: "recovered", value: true}
+    const events = [...pairingEvents, ...await this.chromium.driver.protocolEvents()]
+    const request = type => events.findLast(event => event.direction === "out" && event.type === type)
+    const reply = outbound => outbound && events.find(event => event.direction === "in" && event.ref === outbound.ref && event.status === "ok")
+    const pairingRequest = request("pairing.request"), pairingStatus = request("pairing.status"), authResponse = request("auth.respond"), hello = request("browser.hello")
+    for (const [name, value] of Object.entries({pairingRequest, pairingStatus, authResponse, hello})) assert.ok(value?.sequence, `${name} producer token is missing`)
+    for (const outbound of [pairingRequest, pairingStatus, authResponse, hello]) assert.ok(reply(outbound)?.sequence, `${outbound.type} reply token is missing`)
+    observeVerifiedSurfaces(boundary, ["topic:pairing"], `pairing socket attempt ${pairingSocketAttempts}`)
+    observeVerifiedSurfaces(boundary, ["in:pairing-request", "out:pairing-pending"], `protocol request/reply ${pairingRequest.sequence}/${reply(pairingRequest).sequence}`)
+    observeVerifiedSurfaces(boundary, ["in:pairing-status", "out:pairing-status"], `protocol request/reply ${pairingStatus.sequence}/${reply(pairingStatus).sequence}`)
+    observeVerifiedSurfaces(boundary, ["dashboard:approve", "out:pairing-approved"], `dashboard persisted browser ${this.browserId}`)
+    observeVerifiedSurfaces(boundary, ["topic:auth", "out:auth-challenge", "in:auth-respond", "out:auth-accepted"], `authenticated socket request/reply ${authResponse.sequence}/${reply(authResponse).sequence}`)
+    observeVerifiedSurfaces(boundary, ["in:browser-hello", "out:browser-welcome"], `hello request/reply ${hello.sequence}/${reply(hello).sequence}`)
     boundary.complete()
     return {handles: {pairing: pending.pairing_id, browser: this.browserId}, observations: {
       "browser.authenticated": authenticated,
@@ -87,6 +121,15 @@ export class ChromiumScenarioAdapter {
     const storage = await this.chromium.driver.storage("browserId")
     const probe = await this.chromium.driver.capabilityProbe(this.fixturePage)
     const available = {state: "present", value: this.registrationId}
+    const protocolEvents = await this.chromium.driver.protocolEvents()
+    const resync = protocolEvents.findLast(event => event.direction === "out" && event.type === "browser.resync")
+    const discoveryObserved = protocolEvents.findLast(event => event.direction === "out" && event.type === "discovery.observed")
+    const acknowledgement = discoveryObserved && protocolEvents.find(event => event.direction === "in" && event.ref === discoveryObserved.ref && event.status === "ok")
+    assert.ok(resync?.sequence); assert.ok(discoveryObserved?.sequence); assert.ok(acknowledgement?.sequence)
+    observeVerifiedSurfaces(boundary, ["in:browser-resync"], `extension protocol event ${resync.sequence} sent browser.resync`)
+    observeVerifiedSurfaces(boundary, ["in:discovery-observed"], `extension protocol event ${discoveryObserved.sequence} sent discovery.observed`)
+    observeVerifiedSurfaces(boundary, ["out:ack"], `extension protocol event ${acknowledgement.sequence} acknowledged discovery ref ${discoveryObserved.ref}`)
+    observeVerifiedSurfaces(boundary, ["dashboard:register"], `dashboard registered discovery ${this.discoveryId} as ${this.registrationId}`)
     boundary.complete()
     return {handles: {page: this.registrationId, document: probe.page_instance_id, session: `${storage.browserId}:${probe.tab_id}:${probe.page_instance_id}`}, observations: {
       "page.available": available, "wait.shared-vertical-slice.discover": available,
@@ -96,6 +139,7 @@ export class ChromiumScenarioAdapter {
   async credential({boundary}) {
     this.credentialLease = await this.dashboard.acquireCredential("call")
     this.credentialId = this.credentialLease.id
+    observeVerifiedSurfaces(boundary, ["dashboard:create-credential"], "dashboard created a scoped credential lease")
     boundary.complete()
     return {handles: {credential: this.credentialId}, observations: {"wait.shared-vertical-slice.credential": {state: "present", value: true}}}
   }
@@ -104,13 +148,23 @@ export class ChromiumScenarioAdapter {
     return this.credentialLease.use(async token => {
       assert.equal(handles.get("browser", "browser"), this.browserId)
       assert.equal(handles.get("credential", "credential"), this.credentialId)
+      for (const [version, surfaceId] of [["2026-07-28", "version:2026"], ["2025-11-25", "version:2025-11"], ["2025-06-18", "version:2025-06"], ["2025-03-26", "version:2025-03"]]) {
+        const compatibility = new MCPClient({baseUrl: this.world.baseUrl, token, version})
+        try { assert.equal((await compatibility.initialize()).status, 200); observeVerifiedSurfaces(boundary, [surfaceId], `negotiated MCP ${version}`) }
+        finally { compatibility.close() }
+      }
       this.mcp = new MCPClient({baseUrl: this.world.baseUrl, token, version: this.mcpVersion, recorder: {record: this.recorder.producers.mcp.event}})
       const initialized = await this.mcp.initialize()
       assert.equal(initialized.status, 200)
       assert.equal((await this.mcp.listTools()).status, 200)
+      assert.equal((await this.mcp.call({action: "status"})).status, 200)
+      assert.equal((await this.mcp.call({action: "browser.list"})).status, 200)
+      assert.equal((await this.mcp.call({action: "discovery.list"})).status, 200)
+      assert.equal((await this.mcp.call({action: "discovery.get", params: {discovery: this.discoveryId}})).status, 200)
       const pages = await this.mcp.call({action: "page.list"})
       const pageList = pages.body.result.structuredContent ?? JSON.parse(pages.body.result.content[0].text)
       assert.equal(pageList.find(item => item.id === this.registrationId)?.available, true)
+      assert.equal((await this.mcp.call({action: "page.get", params: {page: this.registrationId}})).status, 200)
       const tools = await this.mcp.call({action: "page.tools", params: {page: this.registrationId}})
       const session = tools.body.result.structuredContent.sessions[0]
       assert.ok(session.tools.some(tool => tool.name === "echo"))
@@ -121,6 +175,7 @@ export class ChromiumScenarioAdapter {
       assert.deepEqual(terminalResult, effect)
       const snapshot = await this.fixturePage.evaluate(() => globalThis.__webbyFixture.snapshot())
       assert.equal(snapshot.calls.filter(([, call]) => call.name === "echo" && call.status === "completed").length, 1)
+      observeVerifiedSurfaces(boundary, ["http:post-mcp", "in:tool-result", "out:tool-call", "mcp:initialize", "mcp:tools-list", "mcp:tools-call", "mcp:initialized", "action:status", "action:browser-list", "action:discovery-list", "action:discovery-get", "action:page-list", "action:page-get", "action:page-tools", "action:page-call", "fixture:side-effect"], "live MCP initialization, list/get actions, invocation, browser result, and fixture side effect succeeded")
       this.callResponse = response
       this.mcp.close(); this.mcp.token = undefined
       boundary.complete()
@@ -136,6 +191,15 @@ export class ChromiumScenarioAdapter {
     assert.equal(audits.length, 1); assert.equal(audits[0].browser_id, this.browserId)
     assert.equal(audits[0].registration_id, this.registrationId); assert.equal(audits[0].outcome, "succeeded"); assert.equal(audits[0].tool_name, "echo")
     this.auditId = audits[0].id
+    const dashboardArtifact = await this.chromium.screenshot(this.dashboard.page, "dashboard-snapshot.png")
+    assert.ok(dashboardArtifact?.sha256 && !dashboardArtifact.omitted)
+    const proof = await new ArtifactRecorder({root: join(this.world.workspace.artifacts, "audit-artifact-proof"), scenarioId: this.scenario.id, worldId: `${this.world.worldId}-audit-proof`}).open()
+    await proof.producers.world.artifact(this.world.stdoutPath, {name: "server-stdout-live.log", kind: "log", essential: true})
+    await proof.producers.chromium.artifact(dashboardArtifact.staged, {name: "dashboard-snapshot.png", kind: "screenshot", essential: true})
+    const attested = await proof.finalize({status: "passed"})
+    assert.ok(attested.attestation.files.some(file => file.path.endsWith("server-stdout-live.log")))
+    assert.ok(attested.attestation.files.some(file => file.path.endsWith("dashboard-snapshot.png")))
+    observeVerifiedSurfaces(boundary, ["artifact:server-log", "artifact:dashboard"], `artifact attestation ${attested.attestation.attestation_sha256}`)
     boundary.complete()
     return {handles: {audit: this.auditId}, observations: {
       "audit.once": {state: "present", value: 1}, "wait.shared-vertical-slice.audit": {state: "present", value: true},

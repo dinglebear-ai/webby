@@ -34,7 +34,8 @@ export function projectLifecycleParity(normalized) {
   }
 }
 
-export async function runLifecycleScenario({scenario, driver, world, recorder, normalized, cleanup}) {
+export async function runLifecycleScenario({scenario, driver, world, recorder, normalized, cleanup, runtimeSurfaceEvidence}) {
+  if (!runtimeSurfaceEvidence || typeof runtimeSurfaceEvidence !== "object") throw new Error("lifecycle runtime surface evidence from the executing adapter is required")
   const projected = projectLifecycleParity(normalized)
   const observations = Object.fromEntries(scenario.outcomes.map(item => {
     const value = projected[item.key]
@@ -44,15 +45,20 @@ export async function runLifecycleScenario({scenario, driver, world, recorder, n
     return [item.predicate.subject, value]
   }))
   const runner = new ScenarioRunner({scenario, driver, world, recorder, actions: {
-    "lifecycle.trigger": async ({boundary}) => { boundary.complete(); return {observations: {"wait.lifecycle-removal.trigger": {state: "terminal", terminal: true}}} },
-    "lifecycle.observe-terminal": async ({boundary}) => { boundary.complete(); return {observations: {...observations, "wait.lifecycle-removal.terminal": {state: "terminal", terminal: true}}} },
-    "lifecycle.recover": async ({boundary}) => { boundary.complete(); return {observations: {"wait.lifecycle-removal.recover": {state: "recovered", terminal: true}}} },
+    "lifecycle.trigger": async ({boundary}) => { observeLifecycleProofs(boundary, runtimeSurfaceEvidence["lifecycle.trigger"]); boundary.complete(); return {observations: {"wait.lifecycle-removal.trigger": {state: "terminal", terminal: true}}} },
+    "lifecycle.observe-terminal": async ({boundary}) => { observeLifecycleProofs(boundary, runtimeSurfaceEvidence["lifecycle.observe-terminal"]); boundary.complete(); return {observations: {...observations, "wait.lifecycle-removal.terminal": {state: "terminal", terminal: true}}} },
+    "lifecycle.recover": async ({boundary}) => { observeLifecycleProofs(boundary, runtimeSurfaceEvidence["lifecycle.recover"]); boundary.complete(); return {observations: {"wait.lifecycle-removal.recover": {state: "recovered", terminal: true}}} },
   }, observe: async () => ({}), cleanup})
   const result = await runner.run()
   return {...result, normalized: Object.fromEntries(lifecycleParityKeys.map(key => {
     const value = result.normalized[key]
     return [key, ["rejected", "closed", "terminal"].includes(value?.state) && value?.value && typeof value.value === "object" ? value.value : value]
   }))}
+}
+
+function observeLifecycleProofs(boundary, proofs) {
+  if (!proofs || typeof proofs !== "object" || Array.isArray(proofs)) throw new Error("typed lifecycle boundary proofs are required")
+  for (const [surfaceId, proof] of Object.entries(proofs)) boundary.observe(surfaceId, proof)
 }
 
 export function lifecycleParityResult({driver, normalized, scenario, sourceRevision, seed, worldNonce}) {

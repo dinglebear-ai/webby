@@ -169,6 +169,12 @@ export class ExtensionDriver {
     throw new Error(`full scan completion did not advance beyond ${after}`)
   }
   async protocolEvents() { return (await this.extensionWorker()).evaluate(() => chrome.storage.local.get("e2eProtocolEvents")).then(values => values.e2eProtocolEvents ?? []) }
+  async flushDiagnostics() {
+    return (await this.extensionWorker()).evaluate(() => {
+      if (typeof globalThis.__webbyE2EFlushDiagnostics !== "function") throw new Error("E2E diagnostics flush is unavailable")
+      return globalThis.__webbyE2EFlushDiagnostics()
+    })
+  }
   async waitForProtocolReply(type, afterSequence = 0, {timeoutMs = this.workerTimeoutMs, documentId, sanitizedUrl} = {}) {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {

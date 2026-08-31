@@ -141,6 +141,7 @@ export class ChromiumWorld {
     const context = this.context
     const errors = []
     try {
+      await this.driver.flushDiagnostics()
       await this.artifacts.drain()
       if (!this.traceCaptured) await this.captureTrace()
     } catch (error) { errors.push(error) }

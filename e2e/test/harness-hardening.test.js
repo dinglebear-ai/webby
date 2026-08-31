@@ -37,19 +37,27 @@ test("adapter surface evidence must exactly equal declarations and inventory map
   const evidence = await writeSurfaceEvidence(path, {scenario, driver: "protocol", observed: scenario.surface_ids, inventory})
   assert.equal(evidence.coverage_percent, 100); assert.equal(evidence.observed_surface_ids.length, scenario.surface_ids.length)
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.slice(1), inventory}), /missing=/)
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.filter(id => id !== "artifact:manifest"), inventory}), /missing=artifact:manifest/)
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.filter(id => id !== "version:2025-03"), inventory}), /missing=version:2025-03/)
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: [...scenario.surface_ids, "surface:invented"], inventory}), /undeclared=.*surface:invented/)
   const unmapped = structuredClone(inventory); unmapped.surfaces.find(row => row.id === scenario.surface_ids[0]).scenarios = []
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, inventory: unmapped}), /inventory does not map/)
 })
 
-test("runtime boundary evidence exists only after the adapter emits verified completion", () => {
+test("runtime boundary completion seals only individually proven surfaces", () => {
   const boundary = createBoundaryObservation("e2e-shared-vertical-slice", "health.request")
   assert.throws(() => boundary.consume(), /completion evidence is missing/)
+  boundary.observe("http:get-health", {source: "GET /health returned 200", verified: true})
+  assert.throws(() => boundary.observe("http:get-root", undefined), /verified runtime proof is required/)
+  assert.throws(() => boundary.observe("surface:invented", {source: "invented", verified: true}), /undeclared boundary surface/)
   const evidence = boundary.complete()
   assert.equal(boundary.consume(), evidence)
   assert.equal(evidence.state, "verified")
-  assert.ok(evidence.surface_ids.includes("http:get-health"))
+  assert.deepEqual(evidence.surface_ids, ["http:get-health"])
+  assert.equal(evidence.proofs["http:get-health"].source, "GET /health returned 200")
+  assert.equal(evidence.surface_ids.includes("http:get-root"), false)
   assert.throws(() => boundary.complete(), /more than once/)
+  assert.throws(() => boundary.observe("http:get-root", {source: "late", verified: true}), /already sealed/)
 })
 
 test("scheduled self-test executes deliberate fail-closed seams", async () => {

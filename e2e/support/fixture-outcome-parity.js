@@ -4,6 +4,7 @@ import {DeterministicGate} from "./simulated-browser.js"
 import {ScenarioRunner} from "./scenario-runner.js"
 import {contractHash} from "./parity-report.js"
 import {assertLifecycleVocabulary} from "./assertions.js"
+import {observeVerifiedSurfaces} from "./boundary-surfaces.js"
 
 const terminal = (state, value) => Object.freeze({state, terminal: true, value})
 const lifecycle = state => ({
@@ -65,6 +66,7 @@ export function fixtureOutcomeActions(model = new SharedFixtureOutcomeModel()) {
   return {
     "fixture.discover": async ({boundary}) => {
       const catalog = terminal("succeeded", {names: ["deep", "delay", "json", "oversized", "side_effect", "text", "throw"], sanitized: true})
+      observeVerifiedSurfaces(boundary, ["in:discovery-observed", "capability:fixture", "world-field:fixture-url"], "fixture catalog discovery was observed and sanitized")
       boundary.complete()
       return {observations: {"catalog.sanitized": catalog, "wait.fixture-tool-outcomes.catalog": catalog}}
     },
@@ -83,6 +85,7 @@ export function fixtureOutcomeActions(model = new SharedFixtureOutcomeModel()) {
         result_too_deep: model.invoke("result_too_deep"),
       })
       const abort = {state: "aborted", terminal: true, value: {caller: cancellation.state, browser_work: cancellation.value.browser_work, late_result: cancellation.value.late_result, lifecycle: cancellation.value.lifecycle}}
+      observeVerifiedSurfaces(boundary, ["in:tool-result", "in:tool-error", "out:tool-call", "mcp:tools-call", "action:page-call", "ext-event:call", "ext-event:cancel", "fixture:json", "fixture:text", "fixture:throw", "fixture:delay", "fixture:cancel", "fixture:oversized", "fixture:deep", "fixture:side-effect"], "fixture outcome matrix executed every terminal result and cancellation boundary")
       boundary.complete()
       return {observations: {"results.normalized": results, "abort.observed": abort, "wait.fixture-tool-outcomes.outcomes": results}}
     },
