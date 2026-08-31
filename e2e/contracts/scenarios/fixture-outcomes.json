@@ -1,6 +1,7 @@
 {
   "contract_version": 1,
   "id": "e2e-fixture-tool-outcomes",
+  "surface_ids": ["in:discovery-observed", "in:tool-result", "in:tool-error", "out:tool-call", "mcp:tools-call", "action:page-call", "ext-event:call", "ext-event:cancel", "fixture:json", "fixture:text", "fixture:throw", "fixture:delay", "fixture:cancel", "fixture:oversized", "fixture:deep", "fixture:side-effect", "capability:fixture", "world-field:fixture-url"],
   "title": "WebMCP fixture catalog and tool outcome boundaries",
   "description": "Exercises deterministic fixture discovery, execution, mutation, errors, cancellation, large values, and page-visible effects.",
   "tier": "pr",

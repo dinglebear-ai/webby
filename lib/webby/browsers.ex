@@ -189,14 +189,19 @@ defmodule Webby.Browsers do
 
   defp normalize_authentication(result), do: result
 
-  defp verify_signature(challenge, signature) do
+  defp verify_signature(
+         %{browser: %{public_key: public_key}} = challenge,
+         signature
+       )
+       when is_binary(public_key) and byte_size(public_key) == 32 and is_binary(signature) and
+              byte_size(signature) == 64 do
     :crypto.verify(:eddsa, :none, signed_message(challenge), signature, [
-      challenge.browser.public_key,
+      public_key,
       :ed25519
     ])
-  rescue
-    _ -> false
   end
+
+  defp verify_signature(_challenge, _signature), do: false
 
   defp revoke_and_close(browser) do
     Repo.transaction(fn ->

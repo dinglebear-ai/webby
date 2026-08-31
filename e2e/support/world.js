@@ -6,7 +6,7 @@ import {join, resolve} from "node:path"
 import {spawn} from "node:child_process"
 import {fileURLToPath} from "node:url"
 import {atomicPrivateWrite, assertInside, assertOwnedRegular, createTempWorkspace, diskBytes, removeOwnedWorkspace} from "./temp-workspace.js"
-import {captureProcessIdentity, processExists, reapProcessGroup} from "./process-tree.js"
+import {captureProcessIdentity, processExists, processGroupMembers, reapProcessGroup} from "./process-tree.js"
 import {assertWorldManifest, readWorldManifest} from "./runtime-contracts.js"
 
 const supportDirectory = fileURLToPath(new URL(".", import.meta.url))
@@ -97,9 +97,34 @@ class TransformStreamShim extends Writable {
   _write(chunk, _encoding, callback) { try { this.writeChunk(chunk); callback() } catch (error) { callback(error) } }
 }
 
-async function readRssKb(pid) {
+export async function readRssKb(pid) {
   const {execFile} = await import("node:child_process")
-  return new Promise(resolveRss => execFile("ps", ["-o", "rss=", "-p", String(pid)], (_error, stdout) => resolveRss(Number(stdout.trim()) || 0)))
+  return new Promise((resolveRss, reject) => execFile("ps", ["-o", "rss=", "-p", String(pid)], (error, stdout) => {
+    if (error) return reject(new Error(`failed to measure RSS for process ${pid}`, {cause: error}))
+    const rssKb = Number(stdout.trim())
+    if (!Number.isFinite(rssKb) || rssKb <= 0) return reject(new Error(`invalid RSS measurement for process ${pid}: ${stdout.trim() || "empty"}`))
+    resolveRss(rssKb)
+  }))
+}
+
+async function unlinkIfPresent(path) {
+  try { await unlink(path) }
+  catch (error) { if (error.code !== "ENOENT") throw error }
+}
+
+export async function forceReapSpawnedGroup(child, pid, {signal = process.kill, graceMs = 2_000} = {}) {
+  if (!child || child.pid !== pid) throw new Error("cannot reap an unidentified process without its spawn handle")
+  const exited = child.exitCode !== null || child.signalCode !== null
+    ? Promise.resolve()
+    : new Promise(resolveExit => child.once("exit", resolveExit))
+  try { signal(-pid, "SIGKILL") }
+  catch (error) { if (error.code !== "ESRCH" && error.code !== "EPERM") throw error }
+  const deadline = Date.now() + graceMs
+  while ((await processGroupMembers(pid)).length > 0) {
+    if (Date.now() >= deadline) throw new Error("unidentified spawned process group survived SIGKILL")
+    await delay(20)
+  }
+  await exited
 }
 
 async function waitForReadiness(world, timeoutMs) {
@@ -210,7 +235,7 @@ export class WebbyWorld {
     const stdout = timestampedLog(this.stdoutPath)
     const stderr = timestampedLog(this.stderrPath)
     this.logs = {stdout, stderr}
-    let env = this.environment()
+    const env = this.environment()
     try {
       const migrationStarted = performance.now()
       await run("mix", ["ecto.create", "--quiet"], {env, stdout: stdout.stream, stderr: stderr.stream})
@@ -224,7 +249,15 @@ export class WebbyWorld {
       this.child.stderr.pipe(stderr.stream, {end: false})
       await new Promise((resolveSpawn, reject) => { this.child.once("spawn", resolveSpawn); this.child.once("error", reject) })
       this.pid = this.child.pid
-      this.identity = await captureProcessIdentity(this.pid, this.instanceNonce)
+      try {
+        this.identity = await captureProcessIdentity(this.pid, this.instanceNonce)
+      } catch (identityError) {
+        try { await forceReapSpawnedGroup(this.child, this.pid) }
+        catch (reapError) {
+          throw new AggregateError([identityError, reapError], "process identity capture failed and spawned process group could not be reaped", {cause: identityError})
+        }
+        throw identityError
+      }
       const portDeadline = Date.now() + this.startupTimeoutMs
       while (Date.now() < portDeadline) {
         try {
@@ -247,9 +280,6 @@ export class WebbyWorld {
       await this.writeManifest()
       return this
     } catch (error) {
-      if (!this.identity && this.pid && await processExists(this.pid)) {
-        this.identity = await captureProcessIdentity(this.pid, this.instanceNonce).catch(() => undefined)
-      }
       try { await this.teardown({remove: false}) }
       catch (cleanupError) { throw new AggregateError([error, cleanupError], `${error.message}; startup cleanup failed; diagnostics: ${this.stdoutPath}, ${this.stderrPath}`, {cause: error}) }
       throw new Error(`${error.message}; diagnostics: ${this.stdoutPath}, ${this.stderrPath}`, {cause: error})
@@ -300,10 +330,9 @@ export class WebbyWorld {
       await atomicPrivateWrite(this.healthFaultPath, `${this.instanceNonce}\n`)
       await assertOwnedRegular(this.healthFaultPath, {mode: 0o600})
     } else {
-      try {
-        await assertOwnedRegular(this.healthFaultPath, {mode: 0o600})
-        await unlink(this.healthFaultPath)
-      } catch (error) { if (error.code !== "ENOENT") throw error }
+      try { await assertOwnedRegular(this.healthFaultPath, {mode: 0o600}) }
+      catch (error) { if (error.code === "ENOENT") return; throw error }
+      await unlinkIfPresent(this.healthFaultPath)
     }
   }
 
@@ -318,10 +347,10 @@ export class WebbyWorld {
     const previousRoot = this.root
     const previousPort = this.port
     await this.teardown({remove: !preserveState})
-    const replacement = new WebbyWorld({scenarioId: this.scenarioId, seed: this.seed, startupTimeoutMs: this.startupTimeoutMs, preserveArtifacts: this.preserveArtifacts, workspace: preserveState ? this.workspace : undefined, authorityPort: this.authorityPort, listenPort: preserveState ? previousPort : 0})
+    const replacement = new WebbyWorld({scenarioId: this.scenarioId, seed: this.seed, startupTimeoutMs: this.startupTimeoutMs, preserveArtifacts: this.preserveArtifacts, workspace: preserveState ? this.workspace : undefined, authorityPort: this.authorityPort, listenPort: preserveState ? previousPort : 0, invocationTimeoutMs: this.invocationTimeoutMs})
     if (preserveState) {
       replacement.databasePath = previousDatabase
-      for (const path of [join(previousRoot, "world.json"), join(previousRoot, "config", "bound-port"), join(previousRoot, "config", "secret-key-base"), join(previousRoot, "config", "telemetry-capability"), join(previousRoot, "artifacts", "telemetry.ndjson"), join(previousRoot, "artifacts", "stdout.log"), join(previousRoot, "artifacts", "stderr.log")]) await unlink(path).catch(() => {})
+      for (const path of [join(previousRoot, "world.json"), join(previousRoot, "config", "bound-port"), join(previousRoot, "config", "secret-key-base"), join(previousRoot, "config", "telemetry-capability"), join(previousRoot, "artifacts", "telemetry.ndjson"), join(previousRoot, "artifacts", "stdout.log"), join(previousRoot, "artifacts", "stderr.log")]) await unlinkIfPresent(path)
     }
     await replacement.start()
     return replacement
@@ -331,7 +360,10 @@ export class WebbyWorld {
     const failures = []
     try { await this.setHealthDegraded(false) } catch (error) { failures.push(error) }
     try { await this.fixtureReservation?.release() } catch (error) { failures.push(error) }
-    try { if (this.identity) await reapProcessGroup(this.identity, this.instanceNonce) } catch (error) { failures.push(error) }
+    try {
+      if (this.identity) await reapProcessGroup(this.identity, this.instanceNonce)
+      else if (this.pid && await processExists(this.pid)) throw new Error("refusing successful teardown of a live process without captured identity")
+    } catch (error) { failures.push(error) }
     try { await this.logs?.stdout.close() } catch (error) { failures.push(error) }
     try { await this.logs?.stderr.close() } catch (error) { failures.push(error) }
     this.logs = undefined

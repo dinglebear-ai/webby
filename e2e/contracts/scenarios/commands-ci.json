@@ -1,6 +1,7 @@
 {
   "contract_version": 1,
   "id": "e2e-command-ci-entrypoints",
+  "surface_ids": ["world-field:versions", "world-field:stdout", "world-field:stderr", "command:mix", "command:mix-ecto-setup", "command:mix-ecto-reset", "command:mix-test", "command:assets-setup", "command:assets-build", "command:assets-deploy", "command:precommit", "command:mix-e2e-validate", "command:mix-e2e-protocol", "command:mix-e2e-chromium", "command:mix-e2e-mcp", "command:contracts", "command:extension-test", "command:extension-typecheck", "command:e2e-test", "command:e2e-test-chromium", "command:e2e-test-mcp-official", "command:e2e-typecheck-chromium", "command:e2e-validate", "command:e2e-parity", "command:e2e-ci-contract", "command:e2e-protocol-pr", "command:e2e-protocol-full", "command:e2e-chromium-smoke", "command:e2e-chromium-full", "command:e2e-mcp-compat", "command:e2e-manifest", "command:e2e-cleanup", "command:e2e-toolchains", "command:e2e-replay", "command:e2e-stress", "command:e2e-test-stress", "command:e2e-test-stress-live", "command:e2e-typecheck-stress", "command:e2e-harness-self-test", "ci:elixir", "ci:extension", "ci:upstream", "ci:e2e-contracts", "ci:e2e-protocol-pr", "ci:e2e-chromium-pr", "ci:e2e-full", "ci:e2e-compatibility", "ci:e2e-nightly", "ci:e2e-harness-self-test"],
   "title": "Developer commands and CI entrypoint contract",
   "description": "Ensures documented Mix npm E2E and CI entrypoints exist and select deterministic scenario tiers.",
   "tier": "pr",

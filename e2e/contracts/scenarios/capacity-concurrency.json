@@ -1,6 +1,7 @@
 {
   "contract_version": 1,
   "id": "e2e-capacity-concurrency",
+  "surface_ids": ["out:tool-cancel", "mcp:cancelled", "world-field:seed", "world-field:telemetry", "world-field:metrics"],
   "title": "Bounded calls pairing and concurrent identities",
   "description": "Proves pending-call and pairing limits, duplicate identities, concurrent callers, cancellation races, and capacity recovery.",
   "owner": "webby-ihb.14",

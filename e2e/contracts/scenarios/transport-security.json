@@ -1,6 +1,7 @@
 {
   "contract_version": 1,
   "id": "e2e-transport-security",
+  "surface_ids": ["http:get-mcp", "http:post-mcp", "topic:auth", "topic:pairing", "in:auth-respond", "in:heartbeat", "in:tool-error", "out:auth-challenge", "out:pairing-rejected", "mcp:ping", "dashboard:reject", "dashboard:revoke-credential", "fixture:oversized", "fixture:deep", "behavior:loopback", "capability:world-nonce", "capability:fixture", "world-field:nonce", "world-field:environment", "world-field:telemetry-capability", "artifact:protocol"],
   "title": "Transport authentication and malformed input boundaries",
   "description": "Exercises loopback, Origin, bearer scope, protocol version, payload size, malformed frame, and replay defenses.",
   "owner": "webby-ihb.13",

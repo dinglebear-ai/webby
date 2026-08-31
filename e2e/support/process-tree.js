@@ -60,11 +60,34 @@ export async function processExists(pid) {
 }
 
 export async function processGroupMembers(pgid) {
-  const {stdout} = await execFileAsync("ps", ["-axo", "pid=,pgid=,state=,uid=,command="])
+  const {stdout} = await execFileAsync("ps", ["-axo", "pid=,ppid=,pgid=,state=,uid=,lstart=,command="])
   return stdout.split("\n").map(line => line.trim()).filter(Boolean).map(line => {
-    const match = line.match(/^(\d+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(.*)$/)
-    return match && {pid: Number(match[1]), pgid: Number(match[2]), state: match[3], uid: Number(match[4]), command: match[5]}
+    const match = line.match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(.*)$/)
+    return match && {pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), state: match[4], uid: Number(match[5]), started: match[6], command: match[7]}
   }).filter(member => member && member.pgid === pgid && !member.state.startsWith("Z"))
+}
+
+function verifiedDescendants(members, identity) {
+  const byPid = new Map(members.map(member => [member.pid, member]))
+  const expected = new Map()
+  for (const member of members) {
+    let current = member
+    const seen = new Set()
+    while (current && current.pid !== identity.pid && !seen.has(current.pid)) {
+      seen.add(current.pid)
+      current = byPid.get(current.ppid)
+    }
+    if (!current || current.pid !== identity.pid || member.uid !== identity.uid) throw new Error("process group ownership changed during reap")
+    expected.set(member.pid, {uid: member.uid, started: member.started})
+  }
+  return expected
+}
+
+export function assertVerifiedSurvivors(survivors, expected) {
+  for (const member of survivors) {
+    const before = expected.get(member.pid)
+    if (!before || before.uid !== member.uid || before.started !== member.started) throw new Error("process group ownership changed during reap")
+  }
 }
 
 async function listenerPids(pgid) {
@@ -85,27 +108,30 @@ async function waitForEmptyGroup(pgid, deadline) {
   return true
 }
 
-export async function reapProcessGroup(identity, nonce, {graceMs = 2_000} = {}) {
+export async function reapProcessGroup(identity, nonce, {graceMs = 2_000, signal = process.kill} = {}) {
   const leaderVerified = await verifyProcess(identity, nonce)
   const members = await processGroupMembers(identity.pgid)
+  let expectedMembers
   if (!leaderVerified) {
     if (await processExists(identity.pid)) throw new Error("process identity mismatch; refusing to signal")
     if (members.length === 0) return {alreadyGone: true}
     if (members.some(member => member.uid !== identity.uid || !member.command.includes(nonce))) {
       throw new Error("orphan process group identity mismatch; refusing to signal")
     }
-  }
-  try { process.kill(-identity.pgid, "SIGTERM") }
+  } else expectedMembers = verifiedDescendants(members, identity)
+  try { signal(-identity.pgid, "SIGTERM") }
   catch (error) {
     if (error.code === "ESRCH") return {alreadyGone: true}
+    if (error.code === "EPERM" && await waitForEmptyGroup(identity.pgid, Date.now() + graceMs)) return {alreadyGone: true}
     throw error
   }
   if (!(await waitForEmptyGroup(identity.pgid, Date.now() + graceMs))) {
     const survivors = await processGroupMembers(identity.pgid)
-    if (survivors.some(member => member.uid !== identity.uid)) throw new Error("process group ownership changed during reap")
-    try { process.kill(-identity.pgid, "SIGKILL") }
+    if (expectedMembers) assertVerifiedSurvivors(survivors, expectedMembers)
+    else if (survivors.some(member => member.uid !== identity.uid || !member.command.includes(nonce))) throw new Error("process group ownership changed during reap")
+    try { signal(-identity.pgid, "SIGKILL") }
     catch (error) {
-      if (error.code !== "ESRCH") throw error
+      if (error.code !== "ESRCH" && !(error.code === "EPERM" && await waitForEmptyGroup(identity.pgid, Date.now() + graceMs))) throw error
     }
     if (!(await waitForEmptyGroup(identity.pgid, Date.now() + graceMs))) throw new Error("process group or listener survived SIGKILL")
   }

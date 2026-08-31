@@ -11,7 +11,7 @@ Run the contract gate from this directory:
 ```bash
 npm ci
 npm run validate
-npm test
+npm test                 # deterministic unit/contract suite only
 ```
 
 Stable lane commands live in this package and are the only commands CI calls:
@@ -26,6 +26,12 @@ npm run mcp:compat        # pinned official MCP client
 npm run replay -- artifacts/attested/sanitized-staging
 npm run cleanup           # external reaper and final leak audit
 ```
+
+The default `npm test` command intentionally excludes tests that launch a Webby
+world, official MCP client, or Chromium. Live qualification is explicit through
+the named lane commands above. Each lane runs serially in a private, attested
+temporary namespace, so invoking the default test command cannot accidentally
+start overlapping worlds or contend for shared Mix and artifact state.
 
 The root `scripts/e2e` and Mix aliases only forward to these package commands;
 they do not maintain a second scenario selection policy.

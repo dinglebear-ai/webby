@@ -1,6 +1,19 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import {assertExactTerminal, auditState, beginAdmittedCalls, beginCalls, completeCalls, measuredState, openCapacityFixture, rawMcpCall, toolOutcome} from "./protocol-capacity-fixture.js"
+import {assertExactTerminal, auditState, beginAdmittedCalls, beginCalls, cleanupCapacityFixture, completeCalls, measuredState, openCapacityFixture, rawMcpCall, toolOutcome} from "./protocol-capacity-fixture.js"
+
+test("capacity cleanup continues after a client close failure", async () => {
+  const calls = []
+  const fail = new Error("client close failed")
+  await assert.rejects(cleanupCapacityFixture({
+    credentials: [{client: {close() { calls.push("client"); throw fail }}}],
+    browsers: [{browser: {async close() { calls.push("browser") }}}],
+    recorder: {async finalize() { calls.push("recorder") }},
+    world: {async teardown() { calls.push("world") }},
+    root: "/path/that/does/not/exist",
+  }), error => error === fail && error.cleanup_label === "client-1")
+  assert.deepEqual(calls, ["client", "browser", "recorder", "world"])
+})
 
 test("exact terminal assertion rejects leaked work, started audits, and double audit completion", () => {
   const clean = {browser_pending: 0, client_pending: 0, client_active: 0}

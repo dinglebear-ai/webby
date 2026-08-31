@@ -21,6 +21,7 @@ export function classifyBrowserError({kind, text, expectedNetworkOutage = false,
   if (expectedNetworkOutage && /^Webby tab scan failed.*Frame with ID .* is showing error page/.test(message)) return {severity: "expected", code: "expected_restart_error_page"}
   const exactWorkerIdentity = /(?:^|\/)service_worker\.js(?:\?|$)/.test(url) || (expectedExtensionId && /^[a-p]{32}$/.test(expectedExtensionId))
   const intentionalRevokedWorker = expectedBrowserRevocation && kind === "worker_console" && exactWorkerIdentity
+  if (intentionalRevokedWorker && /^Webby removed tab close failed Error: channel_(?:not_ready|disconnected)(?:\n|$)/.test(message)) return {severity: "expected", code: "expected_revoked_tab_close"}
   if (intentionalRevokedWorker && /^Webby observation close failed; resync required(?:\s|$)/.test(message)) return {severity: "expected", code: "expected_revoked_observation_close"}
   if (intentionalRevokedWorker && /^Webby channel event failed \{(?:callId: [0-9a-f-]{36}, )?error: Error: channel_disconnected(?:\n|\}|$)/.test(message)) return {severity: "expected", code: "expected_revoked_channel_disconnect"}
   if (intentionalRevokedWorker && /^Webby channel event failed \{callId: [0-9a-f-]{36}, error: Error: channel_not_ready(?:\n|\}|$)/.test(message)) return {severity: "expected", code: "expected_revoked_channel_not_ready"}

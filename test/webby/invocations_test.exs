@@ -72,9 +72,16 @@ defmodule Webby.InvocationsTest do
         end)
       end
 
-    assert_receive {:entered, "first"}
-    assert_receive {:entered, "second"}
+    assert MapSet.new(receive_entered(2)) == MapSet.new(["first", "second"])
     Enum.each(tasks, &send(&1.pid, :release))
     Enum.each(tasks, &assert({:ok, :completed} = Task.await(&1)))
+  end
+
+  defp receive_entered(0), do: []
+
+  defp receive_entered(remaining) do
+    receive do
+      {:entered, id} -> [id | receive_entered(remaining - 1)]
+    end
   end
 end

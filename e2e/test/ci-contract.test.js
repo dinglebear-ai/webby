@@ -11,6 +11,10 @@ const requiredE2EPaths = ["lib/**", "test/**", "config/**", "priv/**", "assets/*
 const requiredStressEntries = ["schedule:", "workflow_dispatch:", "npm --prefix e2e run typecheck:stress", "npm --prefix e2e run test:stress", "npm --prefix e2e run test:stress:live", "./scripts/e2e-repeat", "if: always()", "npm --prefix e2e run cleanup"]
 const contractsJobBeamSetup = "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
 const compatibilityBrowserSetup = "npx --prefix e2e playwright install --with-deps chromium"
+const fullPullRequestCondition = "github.event_name == 'push' || github.event_name == 'pull_request'"
+const fullSuites = '["protocol:full", "chromium:full"]'
+const telemetryUpload = "Upload non-secret suite cost and stability telemetry"
+const harnessCommand = "npm --prefix e2e run harness:self-test"
 
 function assertTriggerAndStressContracts(primary, stress) {
   for (const path of requiredE2EPaths) assert.ok(primary.includes(`\"${path}\"`), `missing E2E trigger path ${path}`)
@@ -19,8 +23,16 @@ function assertTriggerAndStressContracts(primary, stress) {
   assert.ok(contractsJob.includes(contractsJobBeamSetup), "contracts job must install pinned Elixir for AST extraction")
   const protocolJob = primary.slice(primary.indexOf("  protocol-pr:"), primary.indexOf("  chromium-pr:"))
   assert.ok(protocolJob.includes(compatibilityBrowserSetup), "protocol job must install Chromium for revocation lifecycle coverage")
+  const fullJob = primary.slice(primary.indexOf("  full:"), primary.indexOf("  compatibility:"))
+  assert.ok(fullJob.includes(fullPullRequestCondition), "full job must run on pull requests")
+  assert.ok(fullJob.includes(fullSuites), "full job must run protocol and Chromium suites")
+  assert.ok(fullJob.includes(compatibilityBrowserSetup), "full Chromium suite must install Chromium")
+  assert.match(fullJob, /- name: External reaper and leak audit\n\s+if: always\(\)\n\s+run: npm --prefix e2e run cleanup/, "full job must always run cleanup")
+  assert.ok(fullJob.includes(telemetryUpload) && fullJob.includes("suite-telemetry.json") && fullJob.includes("retention-days: 30"), "full job must publish telemetry")
   const compatibilityJob = primary.slice(primary.indexOf("  compatibility:"))
   assert.ok(compatibilityJob.includes(compatibilityBrowserSetup), "compatibility job must install Chromium for live browser work")
+  const harnessJob = stress.slice(stress.indexOf("  harness-self-test:"), stress.indexOf("  nightly:"))
+  for (const entry of [contractsJobBeamSetup, compatibilityBrowserSetup, harnessCommand, "if: always()", "npm --prefix e2e run cleanup"]) assert.ok(harnessJob.includes(entry), `harness self-test must include ${entry}`)
 }
 
 test("weighted manifests prove complete disjoint scenario assignment", async t => {
@@ -55,6 +67,14 @@ test("every E2E trigger path and deterministic, seam, live, and cleanup command 
   assert.throws(() => assertTriggerAndStressContracts(primary.replace(contractsJobBeamSetup, "removed/setup-beam@0000000000000000000000000000000000000000"), stress), /contracts job must install pinned Elixir/)
   const protocolJob = primary.slice(primary.indexOf("  protocol-pr:"), primary.indexOf("  chromium-pr:"))
   assert.throws(() => assertTriggerAndStressContracts(primary.replace(protocolJob, protocolJob.replace(compatibilityBrowserSetup, "removed browser setup")), stress), /protocol job must install Chromium/)
+  const fullJob = primary.slice(primary.indexOf("  full:"), primary.indexOf("  compatibility:"))
+  assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace(fullPullRequestCondition, "github.event_name == 'push'")), stress), /full job must run on pull requests/)
+  assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace(fullSuites, '["protocol:full"]')), stress), /full job must run protocol and Chromium suites/)
+  assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace(compatibilityBrowserSetup, "removed browser setup")), stress), /full Chromium suite must install Chromium/)
+  assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace("if: always()", "if: success()")), stress), /full job must always run cleanup/)
+  assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace(telemetryUpload, "removed telemetry")), stress), /full job must publish telemetry/)
+  const harnessJob = stress.slice(stress.indexOf("  harness-self-test:"), stress.indexOf("  nightly:"))
+  for (const entry of [contractsJobBeamSetup, compatibilityBrowserSetup, harnessCommand, "npm --prefix e2e run cleanup"]) assert.throws(() => assertTriggerAndStressContracts(primary, stress.replace(harnessJob, harnessJob.replace(entry, "removed seam"))), /harness self-test must include/)
   const compatibilityJob = primary.slice(primary.indexOf("  compatibility:"))
   assert.throws(() => assertTriggerAndStressContracts(primary.replace(compatibilityJob, compatibilityJob.replace(compatibilityBrowserSetup, "removed browser setup")), stress), /compatibility job must install Chromium/)
 })
@@ -88,6 +108,11 @@ test("contracts-only and already-removed recorded roots produce a successful emp
   assert.equal(await cleanupWorlds({recordedRoot: removed}), 0)
   report = JSON.parse(await readFile(join(artifactDirectory, "cleanup-report.json"), "utf8")); assert.equal(report.recorded_root_absent, true)
   t.after(() => rm(artifactDirectory, {recursive: true, force: true}))
+})
+
+test("structured scenario telemetry is consumed before the external residual audit", async () => {
+  const runner = await readFile(join(root, "e2e/support/ci-runner.js"), "utf8")
+  assert.match(runner, /finally \{ await rm\(scenarioTelemetryPath, \{force: true\}\) \}/)
 })
 
 test("cleanup narrowly removes inert run-owned Mix residue", async () => {

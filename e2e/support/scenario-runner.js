@@ -1,8 +1,10 @@
 import {createHash} from "node:crypto"
-import {readFile, readdir} from "node:fs/promises"
+import {appendFile, readFile, readdir} from "node:fs/promises"
 import {join} from "node:path"
 import {assertPredicate} from "./assertions.js"
 import {assertScenarioContract, readScenarioContract} from "./runtime-contracts.js"
+import {loadSurfaceInventory, validateObservedSurfaces} from "./surface-evidence.js"
+import {observedBoundarySurfaces, validateBoundaryDenominator} from "./boundary-surfaces.js"
 
 const handleKinds = new Set(["world", "browser", "pairing", "credential", "page", "session", "document", "call", "audit"])
 const sha256 = value => createHash("sha256").update(value).digest("hex")
@@ -53,7 +55,9 @@ export class ScenarioRunner {
     if (typeof actions !== "object" || typeof observe !== "function" || typeof cleanup !== "function") throw new ScenarioInfrastructureError("invalid_runner", "actions, observer, and cleanup are required")
     this.scenario = scenario; this.driver = driver; this.world = world; this.recorder = recorder; this.actions = actions; this.observe = observe; this.cleanup = cleanup; this.defaultTimeoutMs = defaultTimeoutMs
     this.handles = new LogicalHandles({world, contract: scenario})
-    this.observations = {}; this.lastSequence = recorder.journal.sequence
+    this.observations = {}; this.observedSurfaceIds = new Set(); this.lastSequence = recorder.journal.sequence
+    this.boundaryEvidenceRequired = observedBoundarySurfaces(scenario.id, scenario.steps[0].action.op) !== undefined
+    if (this.boundaryEvidenceRequired) validateBoundaryDenominator(scenario)
     if (!scenario.artifacts?.includes("timeline") || !scenario.artifacts?.includes("world-manifest")) throw new ScenarioInfrastructureError("missing_artifact_requirement", "scenario must require timeline and world manifest artifacts")
   }
 
@@ -94,6 +98,7 @@ export class ScenarioRunner {
   }
 
   async run() {
+    const startedAt = Date.now()
     await this.event("scenario.started", {scenario_id: this.scenario.id, driver: this.driver, seed: this.world.seed, contract_hash: this.handles.contractHash})
     let completed
     let primaryError
@@ -103,6 +108,7 @@ export class ScenarioRunner {
         if (!action) throw new ScenarioInfrastructureError("missing_action", `no action registered for ${step.action.op}`)
         await this.event("scenario.step.started", {step_id: step.id, operation: step.action.op})
         const result = await this.bounded(signal => action({params: step.action.params ?? {}, handles: this.handles, observations: this.observations, signal}), step.wait.timeout_ms, step.id)
+        for (const surfaceId of observedBoundarySurfaces(this.scenario.id, step.action.op) ?? []) this.observedSurfaceIds.add(surfaceId)
         if (result?.handles) for (const [name, value] of Object.entries(result.handles)) this.handles.bind(name, this.scenario.handles[name], String(value))
         Object.assign(this.observations, result?.observations)
         Object.assign(this.observations, await this.bounded(signal => this.observe(step, this, signal), step.wait.timeout_ms, `${step.id} observation`))
@@ -113,6 +119,11 @@ export class ScenarioRunner {
       for (const outcome of this.scenario.outcomes) {
         if (!Object.hasOwn(this.observations, outcome.predicate.subject)) throw new ScenarioInfrastructureError("missing_observation", `outcome subject was not observed: ${outcome.predicate.subject}`)
         assertPredicate(outcome.predicate, this.observations, outcome.key)
+      }
+      if (this.boundaryEvidenceRequired) {
+        if (this.observedSurfaceIds.size === 0) throw new ScenarioInfrastructureError("missing_surface_evidence", `${this.driver}/${this.scenario.id}: runtime surface evidence is required`)
+        const surfaceEvidence = validateObservedSurfaces({scenario: this.scenario, driver: this.driver, observed: [...this.observedSurfaceIds], inventory: await loadSurfaceInventory()})
+        await this.recorder.producers.world.diagnostic("surface-evidence.json", surfaceEvidence, Object.keys(surfaceEvidence))
       }
       await this.event("scenario.completed", {scenario_id: this.scenario.id, outcome_keys: this.scenario.outcomes.map(item => item.key)})
       await this.assertJournalContinuity()
@@ -127,6 +138,10 @@ export class ScenarioRunner {
       const cleanup = await this.bounded(signal => this.cleanup(this, signal), this.defaultTimeoutMs, "scenario cleanup")
       for (const predicate of this.scenario.cleanup) assertPredicate(predicate, cleanup, predicate.subject)
     } catch (error) { cleanupError = error }
+    const telemetryDenominator = new Set((process.env.WEBBY_E2E_SCENARIO_DENOMINATOR ?? "").split(",").filter(Boolean))
+    if (this.boundaryEvidenceRequired && process.env.WEBBY_E2E_SCENARIO_TELEMETRY && telemetryDenominator.has(`${this.driver}:${this.scenario.id}`)) {
+      await appendFile(process.env.WEBBY_E2E_SCENARIO_TELEMETRY, JSON.stringify({scenario_id: this.scenario.id, adapter: this.driver, duration_ms: Date.now() - startedAt, status: primaryError || cleanupError ? "failed" : "passed"}) + "\n", {mode: 0o600})
+    }
     if (primaryError && cleanupError) throw new AggregateError([primaryError, cleanupError], "Scenario and cleanup both failed", {cause: primaryError})
     if (primaryError) throw primaryError
     if (cleanupError) throw cleanupError

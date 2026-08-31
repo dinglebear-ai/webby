@@ -4,6 +4,13 @@ import {cancelWebMcp, invokeWebMcp, probeWebMcp} from "./probe.js";
 import {reconcileModeAfterRemoval} from "./permissions.js";
 import {parseLoopbackBaseUrl} from "./base_url.js";
 import {closeObservations, executionAllowed, publishCurrentObservation, requireSettledSuccess, ScanScheduler} from "./orchestration.js";
+import {createIsolatedE2EDiagnostics, extensionDiagnostics, installExtensionDiagnostics} from "./diagnostics.js";
+import {E2E_BINDING} from "./e2e_binding.js";
+
+const diagnosticsReady = E2E_BINDING ? (() => {
+  installExtensionDiagnostics(createIsolatedE2EDiagnostics(E2E_BINDING));
+  return chrome.storage.local.set({e2eBinding: E2E_BINDING, baseUrl: E2E_BINDING.base_url});
+})() : Promise.resolve();
 
 /** @typedef {{url: string, title: string, tools: unknown[], tab_id: number, document_id: string}} Observation */
 
@@ -20,6 +27,7 @@ let observations = new Map();
 /** @type {Map<number, number>} */
 const scanGenerations = new Map();
 const SCAN_CONCURRENCY = 8;
+const BROWSER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 /** @type {Map<number, string>} */
 const pendingClosures = new Map();
 
@@ -35,36 +43,45 @@ function requireChannel() {
   return channel;
 }
 
-chrome.runtime.onInstalled.addListener(() => initialize());
-chrome.runtime.onStartup.addListener(() => initialize());
+chrome.runtime.onInstalled.addListener(() => { extensionDiagnostics().chromeEvent("runtime.onInstalled"); runListener("installation initialization", initialize); });
+chrome.runtime.onStartup.addListener(() => { extensionDiagnostics().chromeEvent("runtime.onStartup"); runListener("startup initialization", initialize); });
 chrome.tabs.onUpdated.addListener((_tabId, change, tab) => {
-  if (change.status === "complete") scanTab(tab);
+  extensionDiagnostics().chromeEvent("tabs.onUpdated");
+  if (change.status === "complete") runListener("updated tab scan", () => scanTab(tab));
 });
-chrome.tabs.onActivated.addListener(async ({tabId}) => scanTab(await chrome.tabs.get(tabId)));
-chrome.tabs.onRemoved.addListener(async (tabId) => {
-  await closeObservation(tabId);
-});
+chrome.tabs.onActivated.addListener(({tabId}) => runListener("activated tab scan", async () => {
+  extensionDiagnostics().chromeEvent("tabs.onActivated");
+  let tab;
+  try { tab = await chrome.tabs.get(tabId); }
+  catch (error) { if (transientErrorKind("activation_lookup", error) === "tab_gone") return; throw error; }
+  return scanTab(tab);
+}));
+chrome.tabs.onRemoved.addListener((tabId) => { extensionDiagnostics().chromeEvent("tabs.onRemoved"); runListener("removed tab close", () => closeObservation(tabId)); });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "webby-periodic-scan") scanAll();
+  extensionDiagnostics().chromeEvent("alarms.onAlarm");
+  if (alarm.name === "webby-periodic-scan") runListener("periodic scan", scanAll);
 });
-chrome.permissions.onAdded.addListener(() => scanAll());
-chrome.permissions.onRemoved.addListener(async () => {
+chrome.permissions.onAdded.addListener(() => { extensionDiagnostics().chromeEvent("permissions.onAdded"); runListener("permission-added scan", scanAll); });
+chrome.permissions.onRemoved.addListener(() => runListener("permission removal reconciliation", async () => {
+  extensionDiagnostics().chromeEvent("permissions.onRemoved");
   await reconcileModeAfterRemoval(chrome.permissions, chrome.storage.local);
   await closeIneligibleObservations();
   await scanAll();
-});
+}));
 chrome.storage.onChanged.addListener((changes) => {
   const relevant = ["baseUrl", "browserId", "scanningMode", "scanningPaused"];
   if (!relevant.some((key) => key in changes)) return;
-  if (("baseUrl" in changes || "browserId" in changes) && channel) {
-    channel.close();
+  extensionDiagnostics().chromeEvent("storage.onChanged");
+  if ("baseUrl" in changes || "browserId" in changes) {
+    channel?.close();
     channel = undefined;
     initializationGeneration += 1;
     initialization = undefined;
   }
-  initialize();
+  runListener("settings-change initialization", initialize);
 });
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  extensionDiagnostics().chromeEvent("runtime.onMessage");
   handleUiMessage(message)
     .then(sendResponse)
     .catch((error) => sendResponse({ok: false, kind: error.message || "request_failed"}));
@@ -72,6 +89,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 async function initialize() {
+  await diagnosticsReady;
   if (initialization) return initialization;
   const generation = ++initializationGeneration;
   initialization = initializeGeneration(generation).finally(() => {
@@ -82,25 +100,34 @@ async function initialize() {
 
 /** @param {number} generation */
 async function initializeGeneration(generation) {
-  await chrome.alarms.create("webby-periodic-scan", {periodInMinutes: 1});
   const settings = {...DEFAULTS, ...await chrome.storage.local.get(Object.keys(DEFAULTS))};
+  if (generation !== initializationGeneration) return;
   try { settings.baseUrl = parseLoopbackBaseUrl(settings.baseUrl); } catch {
     settings.baseUrl = DEFAULTS.baseUrl;
+    if (generation !== initializationGeneration) return;
     await chrome.storage.local.set({baseUrl: settings.baseUrl});
   }
+  if (generation !== initializationGeneration) return;
   const identity = await ensureIdentity();
-  if (!channel && generation === initializationGeneration) {
+  if (generation !== initializationGeneration) return;
+  await chrome.alarms.create("webby-periodic-scan", {periodInMinutes: 1});
+  if (generation !== initializationGeneration) return;
+  if (!channel) {
     const candidate = new WebbyChannel({
       baseUrl: settings.baseUrl,
       extensionId: chrome.runtime.id,
       browserId: identity.browserId,
       onChallenge: authenticate,
-      onReady: resumeAndScan,
+      onReady: async () => {
+        await extensionDiagnostics().channelReady();
+        return resumeAndScan();
+      },
       onEvent: handleServerEvent
     });
     if (generation !== initializationGeneration || channel) candidate.close();
     else { channel = candidate; candidate.connect(); }
   }
+  if (generation !== initializationGeneration) return;
   if (settings.scanningPaused) await closeAllObservations();
   else if (identity.browserId) await scanAll();
 }
@@ -134,22 +161,78 @@ async function authenticate(challenge) {
   const signature = await crypto.subtle.sign("Ed25519", key, new TextEncoder().encode(challenge.signed_message));
   await requireChannel().messageNow("auth.respond", {challenge_id: challenge.challenge_id, signature: encode(signature)});
   const welcome = await requireChannel().messageNow("browser.hello", {});
+  await extensionDiagnostics().authenticated(requireChannel().browserId);
   await persistIgnoredOrigins(welcome);
 }
 
 async function resumeAndScan() {
   const {browserId, pairingId} = await chrome.storage.local.get(["browserId", "pairingId"]);
+  await recoverPairingPersistence({browserId, pairingId});
   if (!browserId && pairingId) {
-    const reply = await requireChannel().message("pairing.status", {pairing_id: pairingId}).catch(() => null);
-    if (reply?.payload?.status === "approved" && reply.payload.browser_id) {
-      await handleServerEvent({type: "pairing.approved", payload: reply.payload});
-      return;
-    }
+    const reply = await requireChannel().message("pairing.status", {pairing_id: pairingId});
+    if (await reconcilePairingStatus(reply)) return;
   }
   if (browserId) {
     await syncBrowserSettings();
     await resync();
   }
+}
+
+/**
+ * Completes the second half of an approved transition after an interrupted
+ * browserId -> pairingId-removal durability sequence.
+ * @param {{browserId?: unknown, pairingId?: unknown}} state
+ */
+export async function recoverPairingPersistence(state) {
+  if (typeof state.browserId === "string" && BROWSER_ID.test(state.browserId) && typeof state.pairingId === "string" && state.pairingId) {
+    await chrome.storage.local.remove("pairingId");
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @param {{payload?: {status?: unknown, browser_id?: unknown}} | undefined} reply
+ * @returns {{state: "pending", terminal: false}|{state: "approved", terminal: true, browserId: string}|{state: "rejected"|"expired", terminal: true}}
+ */
+export function pairingTransition(reply) {
+  const payload = reply?.payload;
+  if (payload?.status === "pending") return {state: "pending", terminal: false};
+  if (payload?.status === "approved" && typeof payload.browser_id === "string" && BROWSER_ID.test(payload.browser_id)) {
+    return {state: "approved", terminal: true, browserId: payload.browser_id};
+  }
+  if (payload?.status === "rejected") return {state: "rejected", terminal: true};
+  if (payload?.status === "expired") return {state: "expired", terminal: true};
+  throw Object.assign(new Error("invalid_pairing_status"), {code: "invalid_pairing_status"});
+}
+
+/** @param {{payload?: {status?: unknown, browser_id?: unknown}} | undefined} reply */
+export async function reconcilePairingStatus(reply) {
+  const transition = pairingTransition(reply);
+  if (transition.state === "approved") {
+    await handleServerEvent({type: "pairing.approved", payload: {browser_id: transition.browserId}});
+    await chrome.storage.local.remove("pairingId");
+    return true;
+  }
+  if (transition.state === "rejected" || transition.state === "expired") {
+    await chrome.storage.local.remove("pairingId");
+    console.info("Webby pairing reached a terminal state", {status: transition.state});
+    return false;
+  }
+  return false;
+}
+
+/**
+ * Chrome ignores promises returned by most event listeners. Always attach a
+ * rejection handler inside the listener turn so failures are observable and
+ * do not become unhandled rejections in the service worker.
+ * @param {string} operation
+ * @param {() => Promise<unknown> | unknown} callback
+ */
+function runListener(operation, callback) {
+  Promise.resolve()
+    .then(callback)
+    .catch((error) => console.error(`Webby ${operation} failed`, error));
 }
 
 async function syncBrowserSettings() {
@@ -234,7 +317,7 @@ async function cancelToolCall(payload) {
       world: "MAIN", func: cancelWebMcp, args: [payload.call_id]
     });
   } catch (error) {
-    if (expectedGoneDocumentError(error)) return;
+    if (transientErrorKind("tool_cancellation", error)) return;
     console.error("Webby tool cancellation failed", {
       callId: payload.call_id,
       tabId: observation.tab_id,
@@ -283,15 +366,17 @@ function knownToolError(kind) {
 
 /** @param {unknown} error @param {string | undefined} message @returns {string} */
 function classifyToolError(error, message) {
-  if (expectedGoneDocumentError(error)) return "stale_document";
+  if (transientErrorKind("tool_execution", error)) return "stale_document";
   if (message && /render(?:er)? process (?:gone|crashed)|render frame.*crashed/i.test(message)) return "renderer_crashed";
   if (message && /service worker.*(?:stopped|crashed|terminated)/i.test(message)) return "worker_crashed";
   if (message && /signal is aborted/i.test(message)) return "AbortError";
   return knownToolError(message) ? /** @type {string} */ (message) : "tool_failed";
 }
 
-function scanAll() {
-  return fullScanScheduler.run();
+async function scanAll() {
+  const result = await fullScanScheduler.run();
+  await extensionDiagnostics().scanAllCompleted();
+  return result;
 }
 
 const fullScanScheduler = new ScanScheduler(scanAllOnce);
@@ -334,6 +419,7 @@ async function scanTab(tab, allowActiveTab = false) {
     const [result] = await chrome.scripting.executeScript({target: {tabId: tab.id}, world: "MAIN", func: probeWebMcp});
     if (scanGenerations.get(tabId) !== generation) return;
     const observation = buildObservation(tab, result);
+    await extensionDiagnostics().scanCompleted({tabId, result, observation});
     if (!observation) {
       if (result?.documentId) await closeObservation(tab.id);
       return;
@@ -351,8 +437,8 @@ async function scanTab(tab, allowActiveTab = false) {
       }
     );
   } catch (error) {
-    if (expectedScanError(error)) return {status: "gone"};
-    console.error("Webby tab scan failed", {tabId: tab.id, error});
+    if (transientErrorKind("scan_injection", error)) return {status: "gone"};
+    console.error("Webby tab scan failed", {tabId: tab.id, error: extensionDiagnostics().scanError(error)});
     throw error;
   }
 }
@@ -375,7 +461,7 @@ async function closeObservation(tabId) {
       pendingClosures.delete(/** @type {number} */ (tabId));
     }
   } catch (error) {
-    if (expectedGoneDocumentError(error)) {
+    if (transientErrorKind("observation_close", error)) {
       if (observations.get(tabId)?.document_id === observation.document_id) observations.delete(tabId);
       if (pendingClosures.get(/** @type {number} */ (tabId)) === observation.document_id) pendingClosures.delete(/** @type {number} */ (tabId));
       return {status: "gone"};
@@ -395,7 +481,7 @@ async function closeIneligibleObservations() {
     try {
       tab = tabId === undefined ? undefined : await chrome.tabs.get(tabId);
     } catch (error) {
-      if (!expectedGoneDocumentError(error)) throw error;
+      if (!transientErrorKind("eligibility_lookup", error)) throw error;
     }
     if (!(await canScanTab(tab, chrome.permissions))) await closeObservation(tabId);
   })));
@@ -425,7 +511,7 @@ async function handleUiMessage(message) {
     return reply;
   }
   if (message.type === "scan-now") {
-    const [activeTab] = await chrome.tabs.query({active: true, currentWindow: true});
+    const activeTab = await extensionDiagnostics().selectScanTarget(async () => (await chrome.tabs.query({active: true, currentWindow: true}))[0]);
     return scanTab(activeTab, true);
   }
   return {ok: true};
@@ -459,23 +545,21 @@ function reportRejected(operation, results) {
   return requireSettledSuccess(operation, results);
 }
 
-/** @param {unknown} error @returns {boolean} */
-function expectedScanError(error) {
+/**
+ * @param {"activation_lookup"|"scan_injection"|"tool_cancellation"|"tool_execution"|"observation_close"|"eligibility_lookup"} operation
+ * @param {unknown} error
+ * @returns {"tab_gone"|"frame_gone"|null}
+ */
+export function transientErrorKind(operation, error) {
   const message = error instanceof Error ? error.message : String(error);
-  return [
-    "Cannot access contents of url",
-    "No tab with id",
-    "The tab was closed",
-    "Frame with ID 0 was removed",
-    "The frame was removed"
-  ].some((expected) => message.includes(expected));
+  const tabGone = ["No tab with id", "The tab was closed"].some(expected => message.includes(expected));
+  const frameGone = ["Frame with ID 0 was removed", "The frame was removed"].some(expected => message.includes(expected));
+  if (operation === "activation_lookup") return tabGone ? "tab_gone" : null;
+  if (["scan_injection", "tool_cancellation", "tool_execution", "observation_close", "eligibility_lookup"].includes(operation)) {
+    if (tabGone) return "tab_gone";
+    if (frameGone) return "frame_gone";
+  }
+  return null;
 }
 
-/** @param {unknown} error @returns {boolean} */
-function expectedGoneDocumentError(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  return ["No tab with id", "The tab was closed", "Frame with ID 0 was removed", "The frame was removed"]
-    .some((expected) => message.includes(expected));
-}
-
-initialize();
+runListener("worker initialization", initialize);

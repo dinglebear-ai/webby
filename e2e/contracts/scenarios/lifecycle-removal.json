@@ -1,6 +1,7 @@
 {
   "contract_version": 1,
   "id": "e2e-lifecycle-removal",
+  "surface_ids": ["in:browser-resync", "in:browser-settings", "in:session-closed", "out:tool-cancel", "mcp:cancelled", "dashboard:revoke-browser", "dashboard:ignore", "dashboard:revoke-credential", "ext-event:cancel", "chrome-event:tab-removed", "chrome-event:permission-removed", "storage:ignored-origins", "behavior:retention"],
   "title": "Lifecycle removal terminal-state contract",
   "description": "Applies the six mandatory terminal assertions to every lifecycle transition in the lifecycle matrix.",
   "owner": "webby-ihb.16",

@@ -1,6 +1,7 @@
 {
   "contract_version": 1,
   "id": "e2e-extension-controls",
+  "surface_ids": ["in:pairing-status", "in:browser-settings", "out:pairing-approved", "popup:base-url", "popup:mode", "popup:paused", "popup:save", "popup:scan", "popup:pair", "ext-command:pair", "ext-command:scan", "ext-event:approved", "chrome-event:installed", "chrome-event:startup", "chrome-event:tab-updated", "chrome-event:tab-activated", "chrome-event:alarm", "chrome-event:permission-added", "chrome-event:permission-removed", "chrome-event:storage", "chrome-event:message", "storage:base-url", "storage:browser-id", "storage:scanning-mode", "storage:scanning-paused", "storage:public-key", "storage:private-key", "storage:pairing-id", "storage:ignored-origins", "manifest:key", "manifest:generated-copy", "world-field:profile", "artifact:extension", "artifact:trace"],
   "title": "Chromium extension controls permissions and worker lifecycle",
   "description": "Drives every popup control and service-worker command/event against an unpacked extension and deterministic page.",
   "tier": "main",

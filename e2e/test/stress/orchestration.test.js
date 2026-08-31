@@ -4,10 +4,23 @@ import {tmpdir} from "node:os"
 import {join} from "node:path"
 import test from "node:test"
 import {runStress, stressScenarios, summarizeAttempts} from "../../support/stress-runner.js"
-import {scenarioTimeoutMs, throwStressFailures, validateScenarioEvidence} from "../../support/stress-cli.js"
+import {finalizeStressResources, scenarioTimeoutMs, throwStressFailures, validateScenarioEvidence} from "../../support/stress-cli.js"
 import {stressScenarioFiles, validateRequiredMeasurements} from "../../support/stress-scenarios.js"
 
 const clean = {processes: [], listeners: [], handles: [], workspaces: [], profiles: [], databases: [], pending_calls: [], stale_sessions: []}
+
+test("final stress cleanup attempts collection and cleanup for every resource and preserves order", async () => {
+  const calls = []
+  const resources = [{workerTmp: "one"}, {workerTmp: "two"}]
+  const failures = await finalizeStressResources(resources, {
+    collect: async worker => { calls.push(`collect:${worker}`); if (worker === "one") throw new Error("collect one") },
+    cleanup: async resource => { calls.push(`cleanup:${resource.workerTmp}`); if (resource.workerTmp === "two") throw new Error("cleanup two") },
+  })
+  assert.deepEqual(calls, ["collect:one", "cleanup:one", "collect:two", "cleanup:two"])
+  assert.deepEqual(failures.map(error => [error.cleanup_label, error.message]), [
+    ["resource-1-collect", "collect one"], ["resource-2-cleanup", "cleanup two"],
+  ])
+})
 
 test("randomized existing scenario orchestration isolates workers and records ceilings", async () => {
   const root = await mkdtemp(join(tmpdir(), "webby-stress-orchestrate-")); const seen = []

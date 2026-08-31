@@ -7,6 +7,7 @@ import {promisify} from "node:util"
 import test from "node:test"
 import {ArtifactRecorder} from "../../support/artifacts.js"
 import {ChromiumWorld} from "../../support/chromium-world.js"
+import {cleanupRunStatus, collectCleanup, throwCleanupFailures} from "../../support/cleanup-plan.js"
 import {DashboardDriver} from "../../support/dashboard-driver.js"
 import {MCPClient} from "../../support/mcp-client.js"
 import {assertProtocolLifecycleOutcome, protocolLifecycleRows} from "../../support/lifecycle-matrix.js"
@@ -22,7 +23,7 @@ async function liveRow(row) {
   const world = await WebbyWorld.start({scenarioId: `lc_${row.transition.replaceAll("-", "_")}_${row.phase.replaceAll("-", "_")}`, seed: 1600, preserveArtifacts: true})
   const recorder = await new ArtifactRecorder({root: join(root, "recorder"), scenarioId: row.scenario_id, worldId: world.worldId, seed: world.seed, secrets: [world.secret, world.telemetryCapability]}).open()
   const browser = new SimulatedBrowser({baseUrl: world.baseUrl, producer: recorder.producers.protocol})
-  let chromium; let client; let credential; let finalized = false; let claimedOutcome
+  let chromium; let client; let credential; let finalized = false; let claimedOutcome; let primaryError
   try {
     chromium = await ChromiumWorld.launch({world, recorder})
     const page = await chromium.context.newPage()
@@ -105,19 +106,40 @@ async function liveRow(row) {
     const outcome = row.phase === "idle" ? idleOutcome(row, world, browser, recorder, "invalidated", measured) : pendingOutcome(row, world, browser, recorder, audits, measured)
     claimedOutcome = outcome
     return claimedOutcome
+  } catch (error) {
+    primaryError = error
   } finally {
-    client?.close(); await credential?.revoke().catch(() => {}); await browser.close().catch(() => {}); await chromium?.close(); chromium = undefined
-    await world.teardown({remove: true})
+    const cleanupSteps = [
+      ...(client ? [["mcp-client", () => client.close(), () => { client = undefined }]] : []),
+      ...(credential ? [["credential", () => credential.revoke(), () => { credential = undefined }]] : []),
+      ["simulated-browser", () => browser.close()],
+      ...(chromium ? [["chromium", () => chromium.close(), () => { chromium = undefined }]] : []),
+      ["world", () => world.teardown({remove: true})],
+    ]
+    const initialCleanup = await collectCleanup(cleanupSteps)
+    const cleanupFailures = initialCleanup.failures
+    const residualResources = Number(Boolean(client) || Boolean(credential) || Boolean(chromium) || !world.rootRemoved || (browser.wire && !browser.wire.closed))
+    if (residualResources > 0) {
+      const residual = new Error(`lifecycle cleanup left ${residualResources} measured resource set open`)
+      residual.cleanup_label = "residual-audit"
+      cleanupFailures.push(residual)
+    }
     if (!finalized) {
-      const artifact = await recorder.finalize({cleanup: {scenario: "closed"}})
+      const finalization = await collectCleanup([["recorder", async () => {
+      const cleanup = {scenario: cleanupFailures.length === 0 ? "closed" : "failed", failures: cleanupFailures.map(error => error.message)}
+      const artifact = await recorder.finalize({status: cleanupRunStatus({primaryError, failures: cleanupFailures}), cleanup})
       if (claimedOutcome) claimedOutcome.artifacts_attested = artifact.attestation.files.some(file => file.path.endsWith("events.ndjson"))
       finalized = true
+      }]])
+      cleanupFailures.push(...finalization.failures)
     }
-    await rm(root, {recursive: true, force: true})
+    const removal = await collectCleanup([["temporary-root", () => rm(root, {recursive: true, force: true})]])
+    cleanupFailures.push(...removal.failures)
     if (claimedOutcome) {
-      claimedOutcome.open_resources = Number(Boolean(chromium) || !world.rootRemoved || (browser.wire && !browser.wire.closed))
+      claimedOutcome.open_resources = residualResources
       claimedOutcome.evidence.resources_measured = true
     }
+    throwCleanupFailures(cleanupFailures, "Lifecycle scenario execution and cleanup failed", {primaryError})
   }
 }
 

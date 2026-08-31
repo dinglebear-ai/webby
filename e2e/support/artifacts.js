@@ -138,7 +138,7 @@ export class ArtifactRecorder {
     try {
       await sanitizeSqliteDump(databasePath, staged, {tables, registry: this.registry, maxBuffer: this.limits.fileBytes})
       const info = await stat(staged)
-      if (!(await this.checkCapacity(info.size, true))) throw new Error("unreachable")
+      await this.checkCapacity(info.size, true)
       const item = {id, producer, kind: "database", name, staged, bytes: info.size, expanded_bytes: info.size, sha256: await hashFile(staged), essential: true}
       await this.journal.record(producer, "database.sanitized", {id, name, bytes: info.size, sha256: item.sha256})
       this.items.push(item)

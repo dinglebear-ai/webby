@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "suite", "status", "started_at", "finished_at", "setup_ms", "elapsed_ms", "attempts", "retries", "rerun_rate", "flake", "planned_scenario_ids", "observed_scenario_ids", "evidence_complete", "scenario_runs"],
+  "properties": {
+    "schema_version": {"const": 1}, "suite": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"}, "status": {"enum": ["passed", "failed"]},
+    "started_at": {"type": "string", "format": "date-time"}, "finished_at": {"type": "string", "format": "date-time"},
+    "setup_ms": {"type": "integer", "minimum": 0}, "elapsed_ms": {"type": "integer", "minimum": 0}, "attempts": {"type": "integer", "minimum": 1}, "retries": {"type": "integer", "minimum": 0}, "rerun_rate": {"type": "number", "minimum": 0, "maximum": 1}, "flake": {"type": "boolean"},
+    "planned_scenario_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}, "observed_scenario_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}, "evidence_complete": {"type": "boolean"},
+    "infrastructure_error": {"type": "string", "maxLength": 512},
+    "scenario_runs": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["scenario_id", "adapter", "duration_ms", "status"], "properties": {"scenario_id": {"type": "string"}, "adapter": {"enum": ["protocol", "chromium"]}, "duration_ms": {"type": "integer", "minimum": 0}, "status": {"enum": ["passed", "failed"]}}}}
+  }
+}

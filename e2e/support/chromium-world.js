@@ -34,6 +34,29 @@ async function forceCloseBrowser(context, timeoutMs) {
   }
 }
 
+export async function cleanupFailedChromiumLaunch(context, artifacts, timeoutMs) {
+  if (!context) return []
+  const failures = []
+  let timeout
+  const operation = () => context.close()
+  const shutdown = artifacts ? artifacts.duringExpectedBrowserShutdown(operation) : operation()
+  const closed = await Promise.race([
+    shutdown.then(() => true),
+    new Promise(resolveClose => { timeout = setTimeout(() => {
+      failures.push(Object.assign(new Error("Chromium launch close timed out"), {code: "chromium_launch_close_timeout"}))
+      resolveClose(false)
+    }, timeoutMs) }),
+  ]).catch(error => { failures.push(error); return false }).finally(() => clearTimeout(timeout))
+  if (!closed) {
+    try {
+      const force = () => forceCloseBrowser(context, timeoutMs)
+      if (artifacts) await artifacts.duringExpectedBrowserShutdown(force)
+      else await force()
+    } catch (error) { failures.push(error) }
+  }
+  return failures
+}
+
 export async function prepareChromiumAssets({producer, root = repositoryRoot, timeoutMs = 120_000, execute = execFileAsync, builds = assetBuilds} = {}) {
   if (!producer?.event || !producer?.diagnostic) throw new Error("Chromium artifact producer is required")
   let preparation = builds.get(root)
@@ -91,21 +114,8 @@ export class ChromiumWorld {
       await recorder.producers.chromium.event("browser.launched", {extension_id: generated.binding.expected_extension_id, profile: "isolated", channel: "chromium"})
       return instance
     } catch (error) {
-      let timeout
-      const close = async () => {
-        if (!context) return true
-        const operation = () => context.close()
-        const shutdown = artifacts ? artifacts.duringExpectedBrowserShutdown(operation) : operation()
-        return Promise.race([
-          shutdown.then(() => true),
-          new Promise(resolveClose => { timeout = setTimeout(() => resolveClose(false), closeTimeoutMs) }),
-        ]).catch(() => false).finally(() => clearTimeout(timeout))
-      }
-      const closed = await close()
-      if (!closed) {
-        if (typeof world?.reap === "function") await world.reap().catch(() => {})
-        else if (typeof world?.teardown === "function") await world.teardown({remove: false}).catch(() => {})
-      }
+      const cleanupFailures = await cleanupFailedChromiumLaunch(context, artifacts, closeTimeoutMs)
+      if (cleanupFailures.length) throw new AggregateError([error, ...cleanupFailures], "Chromium launch and cleanup failed", {cause: error})
       throw error
     }
   }

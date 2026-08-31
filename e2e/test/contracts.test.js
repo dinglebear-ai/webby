@@ -19,7 +19,7 @@ test("all committed contracts are schema-valid, mapped, and fail-closed", () => 
   const result = validateContracts();
   assert.deepEqual(result.errors, []);
   assert.equal(result.report.coverage_percent, 100);
-  assert.equal(result.report.surfaces, 180);
+  assert.equal(result.report.surfaces, 182);
 });
 
 test("scenario schema rejects missing IDs, drivers, outcomes, timeouts, and cleanup", () => {
@@ -95,6 +95,37 @@ test("an unmapped discovered route makes inventory validation fail", () => {
   const result = validateContracts({inventory: candidate});
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error) => error.includes("http_route")));
+});
+
+test("surface coverage fails when executable scenario evidence is removed or drifts", () => {
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "webby-surface-evidence-"));
+  try {
+    fs.cpSync(e2eRoot, path.join(temporaryRoot, "e2e"), {recursive: true, filter: (source) => !source.includes("node_modules")});
+    const scenarioPath = path.join(temporaryRoot, "e2e/contracts/scenarios/shared-vertical-slice.json");
+    const scenario = readJson(scenarioPath);
+    scenario.surface_ids = scenario.surface_ids.filter((id) => id !== "http:get-root");
+    fs.writeFileSync(scenarioPath, JSON.stringify(scenario));
+    const missing = validateContracts({root: temporaryRoot, inventory: structuredClone(inventory)});
+    assert.equal(missing.ok, false);
+    assert.ok(missing.errors.some((error) => error.includes("http:get-root") && error.includes("does not claim executable surface evidence")));
+
+    scenario.surface_ids.push("surface:not-in-inventory");
+    fs.writeFileSync(scenarioPath, JSON.stringify(scenario));
+    const extra = validateContracts({root: temporaryRoot, inventory: structuredClone(inventory)});
+    assert.equal(extra.ok, false);
+    assert.ok(extra.errors.some((error) => error.includes("surface:not-in-inventory") && error.includes("absent from inventory")));
+  } finally {
+    fs.rmSync(temporaryRoot, {recursive: true, force: true});
+  }
+});
+
+test("surface coverage rejects an executable claim missing its inventory backreference", () => {
+  const candidate = structuredClone(inventory);
+  const surface = candidate.surfaces.find(({id}) => id === "http:get-root");
+  surface.scenarios = surface.scenarios.filter((id) => id !== "e2e-shared-vertical-slice");
+  const result = validateContracts({inventory: candidate});
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.includes("http:get-root") && error.includes("executable claim from e2e-shared-vertical-slice is missing from inventory mapping")));
 });
 
 test("extractor denominator shrink and unknown contract versions fail closed", () => {

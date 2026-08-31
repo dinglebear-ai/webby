@@ -114,7 +114,7 @@ jobs:
 
   full:
     name: Main full ${{ matrix.suite }}
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tier == 'main')
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.tier == 'main')
     needs: contracts
     strategy:
       fail-fast: false
@@ -142,6 +142,10 @@ jobs:
       - name: External reaper and leak audit
         if: always()
         run: npm --prefix e2e run cleanup
+      - name: Upload non-secret suite cost and stability telemetry
+        if: always() && hashFiles('e2e/artifacts/suite-telemetry.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with: {name: "full-${{ strategy.job-index }}-telemetry", path: e2e/artifacts/suite-telemetry.json, retention-days: 30, if-no-files-found: error, compression-level: 6}
       - name: Upload attested sanitized failure evidence
         if: failure() && hashFiles('e2e/artifacts/upload/upload-attestation.json') != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

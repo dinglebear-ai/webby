@@ -7,6 +7,7 @@ import {fileURLToPath, pathToFileURL} from "node:url"
 import {promisify} from "node:util"
 import {ArtifactRecorder} from "./artifacts.js"
 import {initializeOwnedTempRoot, stageAttested} from "./ci-runner.js"
+import {collectCleanup, throwCleanupFailures} from "./cleanup-plan.js"
 import {detectLeaks} from "./leak-detector.js"
 import {captureProcessIdentity, reapProcessGroup} from "./process-tree.js"
 import {readReplayManifest} from "./seed-replay.js"
@@ -80,6 +81,20 @@ async function cleanupResources(resource) {
   if (failures.length) throw new Error(`stress final cleanup failed: ${failures.join("; ")}`)
 }
 
+export async function finalizeStressResources(resources, {collect = collectStressResources, cleanup = cleanupResources} = {}) {
+  const failures = []
+  let index = 0
+  for (const resource of resources) {
+    index += 1
+    const result = await collectCleanup([
+      [`resource-${index}-collect`, () => collect(resource.workerTmp, resource)],
+      [`resource-${index}-cleanup`, () => cleanup(resource)],
+    ])
+    failures.push(...result.failures)
+  }
+  return failures
+}
+
 export async function scenarioTimeoutMs(files) {
   let total = 60_000
   for (const file of files) {
@@ -118,9 +133,7 @@ export async function validateScenarioEvidence(evidence, scenarioIds, artifact) 
 }
 
 export function throwStressFailures(primary, finalErrors = []) {
-  const failures = [primary, ...finalErrors].filter(Boolean)
-  if (failures.length === 1) throw failures[0]
-  if (failures.length > 1) throw new AggregateError(failures, "stress scenario execution and finalization failed", {cause: failures[0]})
+  throwCleanupFailures(finalErrors, "stress scenario execution and finalization failed", {primaryError: primary})
 }
 
 async function runStressScenario({id, attemptRoot, workerTmp, recorder, signal, env}) {
@@ -149,7 +162,7 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   const runTempRoot = await initializeOwnedTempRoot("webby-ci-run-stress-"); await writeFile(join(root, "artifacts", "run-temp-path"), `${runTempRoot}\n`, {mode: 0o600})
   const controller = new AbortController(); const handlers = Object.fromEntries(["SIGTERM", "SIGINT"].map(name => [name, () => controller.abort(new Error(`stress runner received ${name}`))]))
   for (const [name, handler] of Object.entries(handlers)) process.once(name, handler)
-  const resources = new Map(); let result; let failure; let cleanupFailure
+  const resources = new Map(); let result; let failure; let cleanupFailures = []
   try {
     result = await runStress({...config, artifactRoot, signal: controller.signal,
       execute: async ({run, attempt, seed, scenarioIds, root: attemptRoot, signal}) => {
@@ -176,14 +189,15 @@ export async function main(args = process.argv.slice(2), env = process.env) {
       }, leakProbe: async ({run}) => detectLeaks(resources.get(run))})
   } catch (error) { failure = error }
   finally {
-    for (const resource of resources.values()) try { await collectStressResources(resource.workerTmp, resource); await cleanupResources(resource) } catch (error) { cleanupFailure ??= error }
+    cleanupFailures = await finalizeStressResources(resources.values())
     for (const [name, handler] of Object.entries(handlers)) process.removeListener(name, handler)
-    if (!cleanupFailure) await rm(runTempRoot, {recursive: true, force: true})
+    if (cleanupFailures.length === 0) {
+      const removal = await collectCleanup([["stress-temporary-root", () => rm(runTempRoot, {recursive: true, force: true})]])
+      cleanupFailures.push(...removal.failures)
+    }
   }
   if (result) process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`)
-  if (failure && cleanupFailure) throw new AggregateError([failure, cleanupFailure], "stress execution and cleanup both failed")
-  if (failure) throw failure
-  if (cleanupFailure) throw cleanupFailure
+  throwCleanupFailures(cleanupFailures, "stress execution and cleanup failed", {primaryError: failure})
   if (result.report.initial_failures) process.exitCode = 1
   return result
 }

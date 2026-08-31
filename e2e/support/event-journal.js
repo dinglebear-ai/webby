@@ -1,4 +1,5 @@
 import {open, writeFile} from "node:fs/promises"
+import {collectCleanup, throwCleanupFailures} from "./cleanup-plan.js"
 
 export class ArtifactOverflowError extends Error {
   constructor(message, details) { super(message); this.name = "ArtifactOverflowError"; this.code = "artifact_overflow"; this.details = details }
@@ -88,12 +89,9 @@ export class EventJournal {
     }
     catch (error) { primaryError = error }
     finally {
-      let exitError
-      try { await this.record("harness", "secret_zone.exited", {label, capture_suspended: true}) } catch (error) { exitError = error }
+      const exit = await collectCleanup([["secret-zone-exit", () => this.record("harness", "secret_zone.exited", {label, capture_suspended: true})]])
       this.secretDepth -= 1
-      if (primaryError && exitError) throw new AggregateError([primaryError, exitError], "Secret-zone operation and exit journal both failed", {cause: primaryError})
-      if (primaryError) throw primaryError
-      if (exitError) throw exitError
+      throwCleanupFailures(exit.failures, "Secret-zone operation and exit journal both failed", {primaryError})
     }
     return result
   }

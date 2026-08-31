@@ -49,6 +49,35 @@ test("rejects and removes requests that exceed the reply deadline", async () => 
   assert.equal(channel.pending.size, 0);
 });
 
+test("close is safe before connect and remains idempotent", () => {
+  const channel = new WebbyChannel({
+    baseUrl: "http://127.0.0.1:6477",
+    extensionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  });
+
+  assert.doesNotThrow(() => channel.close());
+  assert.doesNotThrow(() => channel.close());
+  assert.equal(channel.pending.size, 0);
+});
+
+test("close rejects messages waiting for readiness", async () => {
+  class FakeWebSocket {
+    static OPEN = 1;
+    readyState = 0;
+    send() {}
+    close() {}
+  }
+  globalThis.WebSocket = FakeWebSocket;
+  const channel = new WebbyChannel({
+    baseUrl: "http://127.0.0.1:6477",
+    extensionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  });
+  channel.connect();
+  const waiting = channel.message("browser.hello", {});
+  channel.close();
+  await assert.rejects(waiting, /channel_closed/);
+});
+
 test("a join timeout rejects readiness instead of leaving later messages pending", async () => {
   class FakeWebSocket {
     static OPEN = 1;
@@ -152,6 +181,22 @@ test("reports invalid frame shapes and unexpected topics", () => {
   channel.receive([null, 1, "browser:auth", "message", {}]);
   channel.receive([null, "1", "other", "message", {}]);
   assert.deepEqual(failures.map(({context}) => context.kind), ["invalid_frame", "invalid_frame", "invalid_frame"]);
+});
+
+test("records protocol evidence only after frame and topic validation", () => {
+  const recorded = [];
+  const diagnostics = {
+    socketAttempt() {}, protocolOut() {}, protocolIn: frame => recorded.push(frame)
+  };
+  const channel = new WebbyChannel({
+    baseUrl: "http://127.0.0.1:6477", extensionId: "a", diagnostics,
+    onError() {}
+  });
+  channel.topic = "browser:auth";
+  channel.receive([null, 1, "browser:auth", "message", {secret: "invalid-ref"}]);
+  channel.receive([null, "1", "other", "message", {secret: "wrong-topic"}]);
+  channel.receive([null, "2", "browser:auth", "message", {type: "heartbeat"}]);
+  assert.deepEqual(recorded, [{ref: "2", event: "message", payload: {type: "heartbeat"}}]);
 });
 
 test("reports invalid JSON with raw frame context", async () => {

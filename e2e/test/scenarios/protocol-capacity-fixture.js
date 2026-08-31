@@ -8,6 +8,7 @@ import {randomUUID} from "node:crypto"
 import {promisify} from "node:util"
 import {ArtifactRecorder} from "../../support/artifacts.js"
 import {ChromiumWorld} from "../../support/chromium-world.js"
+import {runCleanupPlan} from "../../support/cleanup-plan.js"
 import {DashboardDriver} from "../../support/dashboard-driver.js"
 import {MCPClient} from "../../support/mcp-client.js"
 import {SimulatedBrowser} from "../../support/simulated-browser.js"
@@ -15,6 +16,17 @@ import {WebbyWorld} from "../../support/world.js"
 
 const execFileAsync = promisify(execFile)
 export const CAPACITY_SEED = 8675309
+
+export async function cleanupCapacityFixture({credentials, browsers, chromium, recorder, world, root}) {
+  return runCleanupPlan([
+    ...credentials.map(({client}, index) => [`client-${index + 1}`, () => client.close()]),
+    ...browsers.map(({browser}, index) => [`browser-${index + 1}`, () => browser.close()]),
+    ...(chromium ? [["chromium", () => chromium.close()]] : []),
+    ["recorder", () => recorder.finalize({cleanup: {clients: "closed", browsers: "closed", chromium: chromium ? "closed" : "not-started"}})],
+    ["world", () => world.teardown()],
+    ["temporary-root", () => rm(root, {recursive: true, force: true})],
+  ], {message: "capacity fixture cleanup failed"})
+}
 
 export async function sqlite(database, sql) {
   return JSON.parse((await execFileAsync("sqlite3", ["-json", database, sql])).stdout || "[]")
@@ -42,20 +54,7 @@ export async function openCapacityFixture(t, scenarioId, {browserCount = 1, cred
   let dashboard
   const browsers = []
   const credentials = []
-  t.after(async () => {
-    const failures = []
-    for (const {client} of credentials) client.close()
-    for (const operation of [
-      ...browsers.map(({browser}) => () => browser.close()),
-      ...(chromium ? [() => chromium.close()] : []),
-      () => recorder.finalize({cleanup: {clients: "closed", browsers: "closed", chromium: chromium ? "closed" : "not-started"}}),
-      () => world.teardown(),
-      () => rm(root, {recursive: true, force: true}),
-    ]) {
-      try { await operation() } catch (error) { failures.push(error) }
-    }
-    if (failures.length) throw new AggregateError(failures, "capacity fixture cleanup failed")
-  })
+  t.after(() => cleanupCapacityFixture({credentials, browsers, chromium, recorder, world, root}))
   if (dashboardSetup) {
     chromium = await ChromiumWorld.launch({world, recorder})
     const page = await chromium.context.newPage()

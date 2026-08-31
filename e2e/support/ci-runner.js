@@ -9,6 +9,8 @@ import {ArtifactRecorder} from "./artifacts.js"
 import {openFileHandles, removeOwnedWorkspace} from "./temp-workspace.js"
 import {reapManifest} from "./world.js"
 import {readScenarioContract} from "./runtime-contracts.js"
+import {parseScenarioTelemetry, readPlannedScenarioIds, writeSuiteTelemetry} from "./suite-telemetry.js"
+import {instrumentedScenarioIds} from "./boundary-surfaces.js"
 
 const e2eRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repositoryRoot = resolve(e2eRoot, "..")
@@ -97,6 +99,13 @@ const suites = {
   ],
   "mcp-compat": ["test/mcp-official-client.test.js"],
 }
+const suiteScenarioDenominators = Object.freeze({
+  "protocol-pr": ["e2e-shared-vertical-slice"],
+  "protocol-full": instrumentedScenarioIds,
+  "chromium-smoke": ["e2e-shared-vertical-slice", "e2e-lifecycle-removal"],
+  "chromium-full": instrumentedScenarioIds,
+  "mcp-compat": [],
+})
 
 function sha256(bytes) { return createHash("sha256").update(bytes).digest("hex") }
 function safe(value) {
@@ -118,8 +127,9 @@ export async function writeShardManifest({lane, driver, shard = 1, total = 1, ou
   const inventory = (await scenarios()).filter(value => tiers.has(value.tier) && value.drivers.includes(driver))
   const bins = Array.from({length: total}, (_, index) => ({index: index + 1, weight: 0, scenarios: []}))
   for (const scenario of inventory.sort((a, b) => b.weight - a.weight || a.id.localeCompare(b.id))) {
-    bins.sort((a, b) => a.weight - b.weight || a.index - b.index)[0].scenarios.push(scenario)
-    bins.find(bin => bin.scenarios.includes(scenario)).weight += scenario.weight
+    const target = bins.sort((a, b) => a.weight - b.weight || a.index - b.index)[0]
+    target.scenarios.push(scenario)
+    target.weight += scenario.weight
   }
   bins.sort((a, b) => a.index - b.index)
   const selected = bins.flatMap(bin => bin.scenarios.map(value => value.id))
@@ -151,6 +161,7 @@ export async function stageAttested(recorder, upload = join(artifactRoot, "uploa
 }
 
 export async function runSuite(name) {
+  const invokedAt = Date.now()
   const files = suites[name]
   if (!files) throw new Error(`unknown suite: ${name}`)
   await rm(artifactRoot, {recursive: true, force: true})
@@ -159,19 +170,38 @@ export async function runSuite(name) {
   const runTemp = await initializeOwnedTempRoot()
   await writeFile(join(artifactRoot, "run-temp-path"), `${await realpath(runTemp)}\n`, {mode: 0o600})
   const driver = name.startsWith("chromium") ? "chromium" : "protocol"
-  const lane = name.endsWith("pr") || name.endsWith("smoke") ? "pr" : "main"
+  // Chromium smoke deliberately includes the main-tier lifecycle-removal
+  // contract, so its executable manifest must use the main denominator even
+  // though the suite is a required pull-request gate.
+  const lane = name === "protocol-pr" ? "pr" : "main"
   await writeShardManifest({lane, driver, output: manifestPath})
   const logPath = join(artifactRoot, "test-output.log")
+  const scenarioTelemetryPath = join(runTemp, "scenario-runs.ndjson")
   const chunks = []; let bytes = 0; const limit = 8 * 1024 * 1024
-  const child = spawn(process.execPath, ["--test", "--test-concurrency=1", ...files], {
-    cwd: e2eRoot, env: {...process.env, TMPDIR: runTemp, WEBBY_E2E_TMP_ROOT: runTemp, MCP_TELEMETRY: "0", MCP_UPDATE_CHECK: "0"}, stdio: ["ignore", "pipe", "pipe"],
-  })
+  const startedAt = new Date()
   const capture = stream => stream.on("data", chunk => {
     process.stdout.write(chunk); if (bytes < limit) { const kept = chunk.subarray(0, limit - bytes); chunks.push(kept); bytes += kept.length }
   })
-  capture(child.stdout); capture(child.stderr)
-  const status = await new Promise((resolveStatus, reject) => { child.once("error", reject); child.once("exit", code => resolveStatus(code ?? 1)) })
+  let status = 1; let infrastructureError
+  try {
+    const child = spawn(process.execPath, ["--test", "--test-concurrency=1", ...files], {
+      cwd: e2eRoot, env: {...process.env, TMPDIR: runTemp, WEBBY_E2E_TMP_ROOT: runTemp, WEBBY_E2E_SCENARIO_TELEMETRY: scenarioTelemetryPath, WEBBY_E2E_SCENARIO_DENOMINATOR: suiteScenarioDenominators[name].map(id => `${driver}:${id}`).join(","), MCP_TELEMETRY: "0", MCP_UPDATE_CHECK: "0"}, stdio: ["ignore", "pipe", "pipe"],
+    })
+    capture(child.stdout); capture(child.stderr)
+    status = await new Promise(resolveStatus => { child.once("error", error => { infrastructureError = error.message; resolveStatus(1) }); child.once("exit", code => resolveStatus(code ?? 1)) })
+  } catch (error) { infrastructureError = error.message }
   await writeFile(logPath, Buffer.concat(chunks), {mode: 0o600})
+  const finishedAt = new Date()
+  let scenarioRuns = []
+  try { scenarioRuns = parseScenarioTelemetry(await readFile(scenarioTelemetryPath, "utf8")) } catch (error) { if (error.code !== "ENOENT") { infrastructureError ??= error.message; status = 1 } }
+  finally { await rm(scenarioTelemetryPath, {force: true}) }
+  const plannedScenarioIds = await readPlannedScenarioIds(manifestPath, suiteScenarioDenominators[name])
+  const observedScenarioIds = [...new Set(scenarioRuns.map(run => run.scenario_id))].sort()
+  if (status === 0 && JSON.stringify(plannedScenarioIds) !== JSON.stringify(observedScenarioIds)) { status = 1; infrastructureError = `scenario telemetry denominator drifted: planned=${plannedScenarioIds.join(",")} observed=${observedScenarioIds.join(",")}` }
+  await writeSuiteTelemetry(join(artifactRoot, "suite-telemetry.json"), {
+    suite: name, status: status === 0 ? "passed" : "failed", startedAt, finishedAt,
+    setupMs: startedAt.getTime() - invokedAt, attempts: 1, retries: 0, plannedScenarioIds, scenarioRuns, infrastructureError,
+  })
   if (status !== 0) {
     const root = join(artifactRoot, "attested")
     const secrets = Object.entries(process.env).filter(([key, value]) => value && String(value).length >= 4 && /token|secret|password|authorization|cookie|signature|api[_-]?key/i.test(key)).map(([, value]) => String(value))

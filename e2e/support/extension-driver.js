@@ -43,6 +43,15 @@ export class ExtensionDriver {
 
   async worker() {
     const worker = await this.extensionWorker()
+    await worker.evaluate(async ({expected, timeoutMs}) => {
+      const deadline = Date.now() + timeoutMs
+      while (Date.now() < deadline) {
+        const {e2eBinding} = await chrome.storage.local.get("e2eBinding")
+        if (e2eBinding?.instance_nonce === expected.instance_nonce && e2eBinding?.base_url === expected.base_url) return
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      throw new Error("bound E2E worker did not finish initialization")
+    }, {expected: this.binding, timeoutMs: this.workerTimeoutMs})
     const response = await fetch(`${this.binding.base_url}/health`)
     if (!response.ok) throw new Error(`bound Webby health failed: ${response.status}`)
     const health = await response.json()
@@ -223,14 +232,17 @@ export class ExtensionDriver {
     const existing = new Set(this.context.pages())
     const pageEvent = this.context.waitForEvent("page", {predicate: candidate => !existing.has(candidate)})
     const created = await (await this.worker()).evaluate(url => chrome.tabs.create({url, active: true}), target)
-    const eventPage = await pageEvent
-    const page = this.context.pages().find(candidate => !existing.has(candidate) && candidate.url() === target) ?? eventPage
-    if (created.id !== undefined) {
-      const actualId = await (await this.worker()).evaluate(url => chrome.tabs.query({}).then(tabs => tabs.find(tab => tab.url === url)?.id), target)
-      if (actualId !== created.id) { await page.close().catch(() => {}); throw new Error("created fixture tab target mismatch") }
+    await pageEvent
+    const deadline = Date.now() + this.workerTimeoutMs
+    let page
+    while (Date.now() < deadline) {
+      page = this.context.pages().find(candidate => !existing.has(candidate) && candidate.url() === target)
+      if (page) break
+      await new Promise(resolve => setImmediate(resolve))
     }
-    await page.waitForURL(target)
+    if (!page) throw new Error("created fixture page did not reach its bound target")
     await page.waitForLoadState("load")
+    if (created.id === undefined) throw new Error("created fixture tab did not expose an ID")
     this.tabIds.set(page, created.id)
     return page
   }

@@ -1,6 +1,7 @@
 {
   "contract_version": 1,
   "id": "e2e-shared-vertical-slice",
+  "surface_ids": ["http:get-root", "http:get-health", "http:post-mcp", "topic:auth", "topic:pairing", "in:pairing-request", "in:pairing-status", "in:auth-respond", "in:browser-hello", "in:browser-resync", "in:discovery-observed", "in:tool-result", "out:auth-challenge", "out:auth-accepted", "out:pairing-pending", "out:pairing-status", "out:pairing-approved", "out:browser-welcome", "out:ack", "out:tool-call", "mcp:initialize", "mcp:tools-list", "mcp:tools-call", "mcp:initialized", "action:status", "action:browser-list", "action:discovery-list", "action:discovery-get", "action:page-list", "action:page-get", "action:page-tools", "action:page-call", "version:2026", "version:2025-11", "version:2025-06", "version:2025-03", "dashboard:approve", "dashboard:register", "dashboard:create-credential", "fixture:side-effect", "behavior:health", "capability:world-nonce", "world-field:manifest-version", "world-field:world-id", "world-field:base-url", "world-field:artifacts", "world-field:scenario-id", "artifact:timeline", "artifact:server-log", "artifact:dashboard", "artifact:manifest"],
   "title": "Complete browser-to-MCP vertical slice",
   "description": "Proves the public happy path through a live server, dashboard, browser adapter, SQLite, and MCP transport.",
   "tier": "pr",

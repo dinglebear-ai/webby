@@ -6,8 +6,8 @@ import {promisify} from "node:util"
 import test from "node:test"
 import Ajv2020 from "ajv/dist/2020.js"
 import addFormats from "ajv-formats"
-import {WebbyWorld, reapManifest, reserveLoopbackPort} from "../support/world.js"
-import {captureProcessIdentity, processExists, processGroupMembers, reapProcessGroup} from "../support/process-tree.js"
+import {forceReapSpawnedGroup, WebbyWorld, readRssKb, reapManifest, reserveLoopbackPort} from "../support/world.js"
+import {assertVerifiedSurvivors, captureProcessIdentity, processExists, processGroupMembers, reapProcessGroup} from "../support/process-tree.js"
 import {atomicPrivateWrite, createTempWorkspace, diskBytes, openFileHandles, removeOwnedWorkspace} from "../support/temp-workspace.js"
 
 const execFileAsync = promisify(execFile)
@@ -26,7 +26,12 @@ async function stop(world, options) {
 }
 
 test.afterEach(async () => {
-  await Promise.all([...worlds].map(world => stop(world).catch(() => {})))
+  const active = [...worlds]
+  const results = await Promise.allSettled(active.map(world => stop(world)))
+  worlds.clear()
+  const failures = results.filter(result => result.status === "rejected").map(result => result.reason)
+  if (failures.length === 1) throw failures[0]
+  if (failures.length > 1) throw new AggregateError(failures, "World test teardown had multiple failures", {cause: failures[0]})
 })
 
 test("private workspaces and exclusive writes reject symlink substitution", async () => {
@@ -180,7 +185,7 @@ test("capability-authenticated telemetry records real repository queries", {time
 })
 
 test("preserved restart retains durable browser state while fresh restart does not", {timeout: 120_000}, async () => {
-  let world = await start({scenarioId: "restart", seed: 7})
+  let world = await start({scenarioId: "restart", seed: 7, invocationTimeoutMs: 12_345})
   const now = "2026-08-27T12:00:00"
   await execFileAsync("sqlite3", [world.databasePath, `INSERT INTO browsers(id,display_name,extension_id,public_key,scanning_mode,paired_at,inserted_at,updated_at) VALUES('00000000-0000-0000-0000-000000000001','E2E','extension-preserved',X'01','granted_sites','${now}','${now}','${now}')`])
   await execFileAsync("sqlite3", [world.databasePath, `INSERT INTO page_registrations(id,slug,display_name,origin,url_pattern,preferred_browser_id,auto_attach,enabled,exposure_mode,inserted_at,updated_at) VALUES('00000000-0000-0000-0000-000000000002','live-page','Live Page','https://fixture.test','/*','00000000-0000-0000-0000-000000000001',1,1,'broker','${now}','${now}'); INSERT INTO document_sessions(id,browser_id,registration_id,tab_id,document_id,current_origin,sanitized_path,page_title,catalog_revision,catalog_fingerprint,catalog_summary,connected_at,last_seen_at,status,inserted_at,updated_at) VALUES('00000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002',1,'doc-live','https://fixture.test','/','Live',1,'fingerprint','{"tools":[]}','${now}','${now}','active','${now}','${now}')`])
@@ -190,6 +195,7 @@ test("preserved restart retains durable browser state while fresh restart does n
   worlds.delete(world)
   world = await world.restart({preserveState: true})
   worlds.add(world)
+  assert.equal(world.invocationTimeoutMs, 12_345)
   assert.equal((await execFileAsync("sqlite3", [world.databasePath, "SELECT count(*) FROM browsers WHERE extension_id='extension-preserved'"])).stdout.trim(), "1")
   assert.equal((await execFileAsync("sqlite3", [world.databasePath, "SELECT status FROM document_sessions WHERE document_id='doc-live'"])).stdout.trim(), "closed")
   assert.equal(world.metrics.startup_kind, "warm")
@@ -200,9 +206,43 @@ test("preserved restart retains durable browser state while fresh restart does n
   worlds.delete(world)
   world = await world.restart({preserveState: false})
   worlds.add(world)
+  assert.equal(world.invocationTimeoutMs, 12_345)
   assert.notEqual(world.root, preservedRoot)
   assert.equal(world.metrics.startup_kind, "cold")
   assert.equal((await execFileAsync("sqlite3", [world.databasePath, "SELECT count(*) FROM browsers WHERE extension_id='extension-preserved'"])).stdout.trim(), "0")
+})
+
+test("RSS measurement fails explicitly instead of reporting a fake zero", async () => {
+  assert.ok(await readRssKb(process.pid) > 0)
+  await assert.rejects(readRssKb(999_999_999), /failed to measure RSS/)
+})
+
+test("health fault cleanup surfaces non-ENOENT filesystem failures", async () => {
+  const world = new WebbyWorld({scenarioId: "health-unlink-error"})
+  await world.prepare()
+  await mkdir(world.healthFaultPath, {mode: 0o700})
+  try {
+    await assert.rejects(world.setHealthDegraded(false), /owned regular file|regular file/)
+  } finally {
+    await world.releaseFixturePort()
+    await removeOwnedWorkspace(world.root)
+  }
+})
+
+test("teardown refuses to report success for a live process without identity", async () => {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {detached: true, stdio: "ignore"})
+  await new Promise((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject) })
+  const world = new WebbyWorld({scenarioId: "missing-identity"})
+  await world.prepare()
+  world.pid = child.pid
+  try {
+    await assert.rejects(world.teardown({remove: false}), /live process without captured identity/)
+    assert.equal(await processExists(child.pid), true)
+  } finally {
+    process.kill(-child.pid, "SIGKILL")
+    await new Promise(resolve => child.once("exit", resolve))
+    await removeOwnedWorkspace(world.root)
+  }
 })
 
 test("identity-verified reaping is idempotent and refuses stale manifests", {timeout: 60_000}, async () => {
@@ -227,6 +267,64 @@ test("reaper empties a process group after its leader exits with a listening des
   await reapProcessGroup(identity, nonce)
   assert.deepEqual(await processGroupMembers(identity.pgid), [])
   await assert.rejects(fetch(`http://127.0.0.1:${port}`))
+})
+
+test("reaper accepts raced EPERM only after the verified process group is empty", {timeout: 30_000}, async () => {
+  const nonce = `eperm-race-${Date.now()}`
+  const leader = spawn(process.execPath, [new URL("../support/process-tree-fixture.js", import.meta.url).pathname, "leader", nonce], {detached: true, stdio: ["pipe", "pipe", "inherit"]})
+  const identity = await captureProcessIdentity(leader.pid, nonce)
+  await new Promise(resolve => leader.stdout.once("data", resolve))
+  leader.stdin.write("exit\n")
+  await new Promise(resolve => leader.once("exit", resolve))
+  assert.ok((await processGroupMembers(identity.pgid)).length > 0)
+  let killAttempted = false
+  const signal = (target, name) => {
+    if (name === "SIGTERM") return
+    killAttempted = true
+    process.kill(target, name)
+    throw Object.assign(new Error("simulated raced permission result"), {code: "EPERM"})
+  }
+  try {
+    assert.deepEqual(await reapProcessGroup(identity, nonce, {graceMs: 250, signal}), {alreadyGone: false})
+    assert.equal(killAttempted, true)
+    assert.deepEqual(await processGroupMembers(identity.pgid), [])
+  } finally {
+    try { process.kill(-identity.pgid, "SIGKILL") } catch (error) { if (error.code !== "ESRCH") throw error }
+  }
+})
+
+test("reaper rejects EPERM while a verified process-group member survives", {timeout: 30_000}, async () => {
+  const nonce = `eperm-survivor-${Date.now()}`
+  const leader = spawn(process.execPath, [new URL("../support/process-tree-fixture.js", import.meta.url).pathname, "leader", nonce], {detached: true, stdio: ["pipe", "pipe", "inherit"]})
+  const identity = await captureProcessIdentity(leader.pid, nonce)
+  await new Promise(resolve => leader.stdout.once("data", resolve))
+  const denied = () => { throw Object.assign(new Error("permission denied"), {code: "EPERM"}) }
+  try {
+    await assert.rejects(reapProcessGroup(identity, nonce, {graceMs: 50, signal: denied}), error => error.code === "EPERM")
+    assert.ok((await processGroupMembers(identity.pgid)).length > 0)
+  } finally {
+    process.kill(-identity.pgid, "SIGKILL")
+    await new Promise(resolve => leader.once("exit", resolve))
+  }
+})
+
+test("reaper refuses a same-uid survivor absent from the verified pre-signal group", () => {
+  const expected = new Map([[41, {uid: 501, started: "Mon Aug 31 01:02:03 2026"}]])
+  assert.doesNotThrow(() => assertVerifiedSurvivors([{pid: 41, uid: 501, started: "Mon Aug 31 01:02:03 2026"}], expected))
+  assert.throws(() => assertVerifiedSurvivors([{pid: 42, uid: 501, started: "Mon Aug 31 01:02:03 2026"}], expected), /ownership changed/)
+  assert.throws(() => assertVerifiedSurvivors([{pid: 41, uid: 501, started: "Mon Aug 31 01:02:04 2026"}], expected), /ownership changed/)
+})
+
+test("startup force reaper accepts raced EPERM only after its group is empty", {timeout: 30_000}, async () => {
+  const nonce = `startup-eperm-${Date.now()}`
+  const child = spawn(process.execPath, ["--title", nonce, new URL("../support/process-tree-fixture.js", import.meta.url).pathname, "listener", nonce], {detached: true, stdio: ["ignore", "pipe", "inherit"]})
+  await new Promise(resolve => child.stdout.once("data", resolve))
+  const signal = (target, name) => {
+    process.kill(target, name)
+    throw Object.assign(new Error("simulated startup race"), {code: "EPERM"})
+  }
+  assert.equal(await forceReapSpawnedGroup(child, child.pid, {signal, graceMs: 500}), undefined)
+  assert.deepEqual(await processGroupMembers(child.pid), [])
 })
 
 test("a separate external reaper cleans a world after controller death", {timeout: 60_000}, async () => {

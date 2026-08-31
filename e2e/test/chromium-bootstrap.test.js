@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
+import {EventEmitter} from "node:events"
 import {lstat, mkdtemp, readFile, readdir, rm} from "node:fs/promises"
 import {tmpdir} from "node:os"
 import {join, resolve} from "node:path"
 import test from "node:test"
 import {ArtifactRecorder} from "../support/artifacts.js"
 import {BrowserArtifacts, classifyBrowserError} from "../support/browser-artifacts.js"
-import {ChromiumWorld} from "../support/chromium-world.js"
+import {ChromiumWorld, cleanupFailedChromiumLaunch} from "../support/chromium-world.js"
 import {validateBoundWorld} from "../support/extension-driver.js"
 import {extensionIdForKey, generateTestExtension, hashExtensionTree, RUNTIME_EXTENSION_FILES, TEST_MANIFEST_KEY} from "../support/test-manifest.js"
 import {WebbyWorld} from "../support/world.js"
@@ -46,9 +47,11 @@ test("generated copy only adds approved manifest and isolated binding material",
     assert.deepEqual(generated.manifest.host_permissions, ["http://127.0.0.1/*"])
     assert.equal(generated.binding.expected_extension_id, extensionIdForKey())
     const generatedWorker = await readFile(join(destination, "src", "service_worker.js"), "utf8")
-    assert.match(generatedWorker, /initializeBoundE2EWorker/)
-    assert.match(generatedWorker, /e2eAuthenticatedBrowserId/)
-    assert.match(generatedWorker, /e2eLastScan/)
+    assert.match(generatedWorker, /createIsolatedE2EDiagnostics/)
+    assert.doesNotMatch(generatedWorker, /import\("\.\/service_worker\.js"\)/)
+    assert.match(await readFile(join(destination, "src", "e2e_binding.js"), "utf8"), /isolated-e2e/)
+    assert.equal(generated.manifest.background.service_worker, "src/service_worker.js")
+    assert.equal(generated.manifest.version_name, "isolated-e2e")
     const walk = async (directory, prefix = "") => (await Promise.all((await readdir(directory, {withFileTypes: true})).map(async entry => {
       const relative = join(prefix, entry.name)
       const path = join(directory, entry.name)
@@ -59,6 +62,30 @@ test("generated copy only adds approved manifest and isolated binding material",
     assert.equal(copied.some(path => path.startsWith("node_modules/")), false)
     assert.deepEqual(copied, [...RUNTIME_EXTENSION_FILES, "e2e-binding.json"].sort())
   } finally { await rm(root, {recursive: true, force: true}) }
+})
+
+test("failed Chromium launch cleanup records timeout and force-closes the browser", async () => {
+  const context = new EventEmitter()
+  context.close = () => new Promise(() => {})
+  context.pages = () => [{}]
+  let forced = 0
+  context.newCDPSession = async () => ({
+    async send(command) {
+      assert.equal(command, "Browser.close")
+      forced += 1
+      queueMicrotask(() => context.emit("close"))
+    },
+    async detach() {}
+  })
+  const artifacts = {duringExpectedBrowserShutdown: operation => operation()}
+  const failures = await cleanupFailedChromiumLaunch(context, artifacts, 5)
+  assert.equal(forced, 1)
+  assert.equal(failures.length, 1)
+  assert.equal(failures[0].code, "chromium_launch_close_timeout")
+
+  context.newCDPSession = async () => ({async send() { throw new Error("forced close failed") }, async detach() {}})
+  const failedForce = await cleanupFailedChromiumLaunch(context, artifacts, 5)
+  assert.deepEqual(failedForce.map(error => error.code ?? error.message), ["chromium_launch_close_timeout", "forced close failed"])
 })
 
 test("binding rejects wrong worlds, stale copies, remote/developer/default endpoints, and authority collapse", () => {
@@ -88,6 +115,8 @@ test("central classifier narrowly recognizes restart transients and rejects real
   assert.equal(classifyBrowserError({...aborted, expectedNetworkOutage: true}).code, "expected_restart_outage")
   const errorPage = {kind: "worker_console", text: {level: "error", message: "Webby tab scan failed {error: Error:Frame with ID 1 is showing error page}"}}
   assert.equal(classifyBrowserError(errorPage).severity, "failure")
+  const revokedTabClose = {kind: "worker_console", text: {level: "error", message: "Webby removed tab close failed Error: channel_not_ready", url: `chrome-extension://${extensionIdForKey()}/src/service_worker.js`}, expectedExtensionId: extensionIdForKey(), expectedBrowserRevocation: true}
+  assert.equal(classifyBrowserError(revokedTabClose).code, "expected_revoked_tab_close")
   assert.equal(classifyBrowserError({...errorPage, expectedNetworkOutage: true}).code, "expected_restart_error_page")
   const revokedClose = {kind: "worker_console", text: {level: "error", message: "Webby observation close failed; resync required {error: channel_not_ready}", url: "chrome-extension://bound/src/service_worker.js"}}
   assert.equal(classifyBrowserError(revokedClose).severity, "failure")

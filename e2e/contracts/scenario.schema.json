@@ -4,10 +4,11 @@
   "title": "Webby E2E scenario contract",
   "type": "object",
   "additionalProperties": false,
-  "required": ["contract_version", "id", "title", "tier", "weight", "drivers", "security", "handles", "preconditions", "steps", "outcomes", "artifacts", "cleanup", "combinations", "parity"],
+  "required": ["contract_version", "id", "surface_ids", "title", "tier", "weight", "drivers", "security", "handles", "preconditions", "steps", "outcomes", "artifacts", "cleanup", "combinations", "parity"],
   "properties": {
     "contract_version": {"const": 1},
     "id": {"type": "string", "pattern": "^e2e-[a-z0-9-]+$"},
+    "surface_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
     "title": {"type": "string", "minLength": 5},
     "description": {"type": "string", "minLength": 10},
     "owner": {"type": "string", "pattern": "^webby-ihb\\.[0-9]+$"},

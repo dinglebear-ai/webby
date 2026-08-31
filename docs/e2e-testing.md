@@ -152,3 +152,19 @@ Wall-clock budgets are cancellation ceilings, not brittle assertions. Functional
 checks use exact invariant counts plus query/concurrency ceilings. A duration or
 query regression must be compared to the preserved report before changing a
 budget.
+## Qualification telemetry and harness assurance
+
+Every named suite writes `e2e/artifacts/suite-telemetry.json` with setup and
+elapsed time, structured per-scenario durations, planned and observed scenario
+IDs, attempts, retries, rerun rate, flake status, and evidence completeness.
+The report deliberately excludes environment variables, command lines, hostnames,
+and credentials. Full protocol and Chromium qualification remains mandatory on
+pull requests; telemetry is evidence for future tuning, not a selector today.
+
+The scheduled `harness-self-test` lane deliberately corrupts surface evidence,
+telemetry accounting, and scenario input, then runs real Webby/Chromium tests for
+extension generation, forced browser closure, process identity, RSS measurement,
+artifact finalization, pairing persistence, manifest reaping, and isolated worlds.
+Runtime adapter evidence comes from completed operation-boundary mappings and is
+accepted only when observed IDs exactly equal the scenario declaration and every
+ID is mapped by the canonical surface inventory.

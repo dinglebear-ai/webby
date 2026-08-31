@@ -147,6 +147,32 @@ defmodule Webby.DataRetentionTest do
     assert {:error, :browser_erased} = Webby.BrowserConnections.register(browser.id, self())
   end
 
+  test "browser erasure removes its tombstone and preserves durable data when callback rejects" do
+    browser = insert_browser()
+
+    assert_raise MatchError, fn ->
+      DataRetention.erase_browser(browser.id,
+        after_tombstone: fn -> {:error, :forced_rollback} end
+      )
+    end
+
+    assert Repo.get(Browser, browser.id)
+    assert :ok = Webby.BrowserConnections.browser_admissible?(browser.id)
+  end
+
+  test "browser erasure removes its tombstone and preserves durable data when callback raises" do
+    browser = insert_browser()
+
+    assert_raise RuntimeError, "forced callback failure", fn ->
+      DataRetention.erase_browser(browser.id,
+        after_tombstone: fn -> raise "forced callback failure" end
+      )
+    end
+
+    assert Repo.get(Browser, browser.id)
+    assert :ok = Webby.BrowserConnections.browser_admissible?(browser.id)
+  end
+
   defp insert_browser do
     {public_key, _private_key} = :crypto.generate_key(:eddsa, :ed25519)
 

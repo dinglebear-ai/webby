@@ -234,6 +234,15 @@ export function validateContracts({root = repoRoot, inventory = readJson(path.jo
   }
 
   const covered = new Map();
+  const claimedSurfaces = new Map();
+  for (const [scenarioId, scenario] of scenarios) {
+    for (const surfaceId of scenario.surface_ids ?? []) {
+      if (claimedSurfaces.get(surfaceId)?.has(scenarioId)) errors.push(`${scenarioId}: duplicate executable surface ${surfaceId}`);
+      const owners = claimedSurfaces.get(surfaceId) ?? new Set();
+      owners.add(scenarioId);
+      claimedSurfaces.set(surfaceId, owners);
+    }
+  }
   for (const surface of inventory.surfaces ?? []) {
     if (!surface.id || !surface.category || !surface.symbol || !surface.source) errors.push(`invalid surface row: ${JSON.stringify(surface)}`);
     if (covered.has(surface.id)) errors.push(`duplicate surface id: ${surface.id}`);
@@ -241,8 +250,17 @@ export function validateContracts({root = repoRoot, inventory = readJson(path.jo
     const mapped = surface.scenarios ?? [];
     const exclusion = surface.exclusion;
     if (mapped.length === 0 && !exclusion) errors.push(`${surface.id}: uncovered without exclusion`);
-    for (const id of mapped) if (!scenarios.has(id)) errors.push(`${surface.id}: unknown scenario ${id}`);
+    for (const id of mapped) {
+      if (!scenarios.has(id)) errors.push(`${surface.id}: unknown scenario ${id}`);
+      else if (!claimedSurfaces.get(surface.id)?.has(id)) errors.push(`${surface.id}: scenario ${id} does not claim executable surface evidence`);
+    }
+    for (const id of claimedSurfaces.get(surface.id) ?? []) {
+      if (!mapped.includes(id)) errors.push(`${surface.id}: executable claim from ${id} is missing from inventory mapping`);
+    }
     if (exclusion) validateExclusion(exclusion, `${surface.id} exclusion`, errors, surface.category === "security_surface");
+  }
+  for (const [surfaceId, scenarioIds] of claimedSurfaces) {
+    if (!covered.has(surfaceId)) errors.push(`${surfaceId}: executable surface claim is absent from inventory (${[...scenarioIds].join(", ")})`);
   }
   for (const exclusion of inventory.exclusions ?? []) validateExclusion(exclusion, "inventory exclusion", errors, true);
 
