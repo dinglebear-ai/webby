@@ -128,7 +128,11 @@ export class ScenarioRunner {
       if (this.boundaryEvidenceRequired) {
         if (this.observedSurfaceIds.size === 0) throw new ScenarioInfrastructureError("missing_surface_evidence", `${this.driver}/${this.scenario.id}: runtime surface evidence is required`)
         const surfaceEvidence = validateObservedSurfaces({scenario: this.scenario, driver: this.driver, observed: [...this.observedSurfaceIds], proofs: this.surfaceProofs, inventory: await loadSurfaceInventory()})
-        await this.recorder.producers.world.diagnostic("surface-evidence.json", surfaceEvidence, Object.keys(surfaceEvidence))
+        const runNonce = process.env.WEBBY_E2E_RUN_NONCE ?? this.world.instanceNonce
+        const persistedEvidence = {...surfaceEvidence, run_nonce: runNonce}
+        const persisted = await this.recorder.producers.world.diagnostic("surface-evidence.json", persistedEvidence, Object.keys(persistedEvidence))
+        if (!persisted?.sha256 || persisted.omitted) throw new ScenarioInfrastructureError("missing_surface_evidence_artifact", "persisted surface evidence receipt is required")
+        this.surfaceEvidenceReceipt = {evidence_kind: "runtime_boundary", evidence_files: [persisted.name], evidence_sha256: persisted.sha256, run_nonce: runNonce}
       }
       await this.event("scenario.completed", {scenario_id: this.scenario.id, outcome_keys: this.scenario.outcomes.map(item => item.key)})
       await this.assertJournalContinuity()
@@ -145,7 +149,8 @@ export class ScenarioRunner {
     } catch (error) { cleanupError = error }
     const telemetryDenominator = new Set((process.env.WEBBY_E2E_SCENARIO_DENOMINATOR ?? "").split(",").filter(Boolean))
     if (this.recordTelemetry && this.boundaryEvidenceRequired && process.env.WEBBY_E2E_SCENARIO_TELEMETRY && telemetryDenominator.has(`${this.driver}:${this.scenario.id}`)) {
-      await appendFile(process.env.WEBBY_E2E_SCENARIO_TELEMETRY, JSON.stringify({scenario_id: this.scenario.id, adapter: this.driver, duration_ms: Date.now() - startedAt, status: primaryError || cleanupError ? "failed" : "passed"}) + "\n", {mode: 0o600})
+      const status = primaryError || cleanupError ? "failed" : "passed"
+      await appendFile(process.env.WEBBY_E2E_SCENARIO_TELEMETRY, JSON.stringify({scenario_id: this.scenario.id, adapter: this.driver, duration_ms: Date.now() - startedAt, status, ...(status === "passed" ? this.surfaceEvidenceReceipt : {})}) + "\n", {mode: 0o600})
     }
     if (primaryError && cleanupError) throw new AggregateError([primaryError, cleanupError], "Scenario and cleanup both failed", {cause: primaryError})
     if (primaryError) throw primaryError

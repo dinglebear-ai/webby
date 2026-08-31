@@ -235,6 +235,117 @@ defmodule Webby.BrowserConnectionsTest do
     Process.exit(owner, :kill)
   end
 
+  test "stale credential reconciliation retries cannot cross an active owner" do
+    credential_id = Ecto.UUID.generate()
+    parent = self()
+
+    Application.put_env(:webby, :credential_revocation_reconciler, fn _id ->
+      send(parent, :credential_reconciled)
+      false
+    end)
+
+    on_exit(fn -> Application.delete_env(:webby, :credential_revocation_reconciler) end)
+
+    assert {:ok, first_token} = BrowserConnections.begin_credential_revocation(credential_id)
+    generation = barrier_generation(:credential, credential_id)
+    assert :ok = BrowserConnections.reconcile_owner_down(:credential, credential_id, first_token)
+    assert_receive :credential_reconciled
+
+    assert {:ok, live_token} = BrowserConnections.begin_credential_revocation(credential_id)
+    send(BrowserConnections, {:reconcile_barrier, :credential, credential_id, generation})
+    _ = :sys.get_state(BrowserConnections)
+    refute_receive :credential_reconciled
+
+    assert :ok =
+             BrowserConnections.finish_credential_revocation(
+               credential_id,
+               live_token,
+               :aborted
+             )
+  end
+
+  test "stale browser reconciliation retries cannot cross an active owner" do
+    browser_id = Ecto.UUID.generate()
+    parent = self()
+
+    Application.put_env(:webby, :browser_erasure_reconciler, fn _id ->
+      send(parent, :browser_reconciled)
+      false
+    end)
+
+    on_exit(fn -> Application.delete_env(:webby, :browser_erasure_reconciler) end)
+
+    assert {:ok, first_token} = BrowserConnections.begin_browser_erasure(browser_id)
+    generation = barrier_generation(:browser, browser_id)
+    assert :ok = BrowserConnections.reconcile_owner_down(:browser, browser_id, first_token)
+    assert_receive :browser_reconciled
+
+    assert {:ok, live_token} = BrowserConnections.begin_browser_erasure(browser_id)
+    send(BrowserConnections, {:reconcile_barrier, :browser, browser_id, generation})
+    _ = :sys.get_state(BrowserConnections)
+    refute_receive :browser_reconciled
+
+    assert :ok = BrowserConnections.finish_browser_erasure(browser_id, live_token, :aborted)
+  end
+
+  test "credential tombstone expiry is renewed until committed owners finish" do
+    credential_id = Ecto.UUID.generate()
+    Application.put_env(:webby, :barrier_tombstone_ttl_ms, 0)
+    on_exit(fn -> Application.delete_env(:webby, :barrier_tombstone_ttl_ms) end)
+
+    assert {:ok, committing_token} =
+             BrowserConnections.begin_credential_revocation(credential_id)
+
+    assert {:ok, remaining_token} =
+             BrowserConnections.begin_credential_revocation(credential_id)
+
+    generation = barrier_generation(:credential, credential_id)
+
+    assert :ok =
+             BrowserConnections.finish_credential_revocation(
+               credential_id,
+               committing_token,
+               :committed
+             )
+
+    send(BrowserConnections, {:expire_tombstone, :credential, credential_id, generation})
+    _ = :sys.get_state(BrowserConnections)
+    assert barrier_present?(:credential, credential_id)
+
+    assert :ok =
+             BrowserConnections.finish_credential_revocation(
+               credential_id,
+               remaining_token,
+               :aborted
+             )
+
+    send(BrowserConnections, {:expire_tombstone, :credential, credential_id, generation})
+    _ = :sys.get_state(BrowserConnections)
+    refute barrier_present?(:credential, credential_id)
+  end
+
+  test "browser tombstone expiry is renewed until committed owners finish" do
+    browser_id = Ecto.UUID.generate()
+    Application.put_env(:webby, :barrier_tombstone_ttl_ms, 0)
+    on_exit(fn -> Application.delete_env(:webby, :barrier_tombstone_ttl_ms) end)
+
+    assert {:ok, committing_token} = BrowserConnections.begin_browser_erasure(browser_id)
+    assert {:ok, remaining_token} = BrowserConnections.begin_browser_erasure(browser_id)
+    generation = barrier_generation(:browser, browser_id)
+
+    assert :ok =
+             BrowserConnections.finish_browser_erasure(browser_id, committing_token, :committed)
+
+    send(BrowserConnections, {:expire_tombstone, :browser, browser_id, generation})
+    _ = :sys.get_state(BrowserConnections)
+    assert barrier_present?(:browser, browser_id)
+
+    assert :ok = BrowserConnections.finish_browser_erasure(browser_id, remaining_token, :aborted)
+    send(BrowserConnections, {:expire_tombstone, :browser, browser_id, generation})
+    _ = :sys.get_state(BrowserConnections)
+    refute barrier_present?(:browser, browser_id)
+  end
+
   defp process_barrier_down(kind, id, token, owner) do
     assert :ok = BrowserConnections.reconcile_owner_down(kind, id, token)
     assert is_pid(owner)
@@ -354,6 +465,50 @@ defmodule Webby.BrowserConnectionsTest do
     assert_receive {:tool_cancel, %{"call_id" => ^call_id}}
   end
 
+  test "caller death survives every audit launcher failure shape and retries completion" do
+    launch_failures = [
+      fn _operation -> raise "launch raised" end,
+      fn _operation -> throw(:launch_threw) end,
+      fn _operation -> exit(:launch_exited) end,
+      fn _operation -> :unexpected end
+    ]
+
+    Enum.each(launch_failures, fn starter ->
+      browser_id = Ecto.UUID.generate()
+      audit_id = Ecto.UUID.generate()
+      parent = self()
+      attempts = :counters.new(1, [])
+
+      Application.put_env(:webby, :caller_down_audit_starter, starter)
+
+      Application.put_env(:webby, :caller_down_audit_completion, fn id, outcome, kind, duration ->
+        :counters.add(attempts, 1, 1)
+        attempt = :counters.get(attempts, 1)
+        send(parent, {:audit_attempt, id, outcome, kind, duration, attempt})
+        if attempt == 1, do: {:error, :transient}, else: {:ok, 1}
+      end)
+
+      assert :ok = BrowserConnections.register(browser_id, self())
+
+      caller =
+        spawn(fn ->
+          BrowserConnections.call(browser_id, %{"document_id" => "doc"}, 5_000, nil, audit_id)
+        end)
+
+      assert_receive {:tool_call, %{"call_id" => call_id}}
+      monitor = Process.monitor(caller)
+      Process.exit(caller, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^caller, :killed}
+      assert_receive {:audit_attempt, ^audit_id, "failed", "caller_down", 0, 1}
+      assert_receive {:audit_attempt, ^audit_id, "failed", "caller_down", 0, 2}
+      assert_receive {:tool_cancel, %{"call_id" => ^call_id}}
+      assert is_map(:sys.get_state(BrowserConnections))
+    end)
+  after
+    Application.delete_env(:webby, :caller_down_audit_starter)
+    Application.delete_env(:webby, :caller_down_audit_completion)
+  end
+
   test "only the channel process that received a call may complete it" do
     browser_id = Ecto.UUID.generate()
     assert :ok = BrowserConnections.register(browser_id, self())
@@ -380,4 +535,16 @@ defmodule Webby.BrowserConnectionsTest do
 
     assert Task.await(task) == {:ok, "current"}
   end
+
+  defp barrier_generation(:credential, id),
+    do: :sys.get_state(BrowserConnections).credential_barriers[id].generation
+
+  defp barrier_generation(:browser, id),
+    do: :sys.get_state(BrowserConnections).browser_erasures[id].generation
+
+  defp barrier_present?(:credential, id),
+    do: Map.has_key?(:sys.get_state(BrowserConnections).credential_barriers, id)
+
+  defp barrier_present?(:browser, id),
+    do: Map.has_key?(:sys.get_state(BrowserConnections).browser_erasures, id)
 end

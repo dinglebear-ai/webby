@@ -193,8 +193,8 @@ test("actual popup and dashboard enforce pause, credential revoke, browser revok
       "cleanup.temporary.world.is.removable": {state: "removable"},
     })
     const parityRecorder = await new ArtifactRecorder({root: join(world.workspace.artifacts, "chromium-lifecycle-parity"), scenarioId: lifecycleContract.id, worldId: world.worldId, seed: world.seed}).open()
-    const proof = async (surfaceId, correlation) => surfaceProof.journal(
-      await parityRecorder.producers.chromium.event("lifecycle.assertion.verified", {surface_id: surfaceId, correlation}),
+    const proof = async (surfaceId, correlation) => surfaceProof.producerReceipt(
+      await parityRecorder.producers.chromium.event("lifecycle.assertion.verified", {surface_id: surfaceId, correlation, runtime_nonce: world.instanceNonce}),
       surfaceId,
     )
     const proofs = async entries => Object.fromEntries(await Promise.all(entries.map(async ([surfaceId, correlation]) => [surfaceId, await proof(surfaceId, correlation)])))

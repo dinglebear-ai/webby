@@ -1013,7 +1013,7 @@ test(
                 "world-field:fixture-url",
               ],
               "chromium.fixture.catalog.observed",
-              {correlation: {scenario_id: fixtureContract.id, names: initialCatalogNames}},
+              {runtime_nonce: world.instanceNonce, correlation: {scenario_id: fixtureContract.id, names: initialCatalogNames}},
             );
             boundary.complete();
             return {
@@ -1045,7 +1045,7 @@ test(
                 "fixture:side-effect",
               ],
               "chromium.fixture.matrix.completed",
-              {correlation: {scenario_id: fixtureContract.id, results: Object.keys(chromiumResults.value)}},
+              {runtime_nonce: world.instanceNonce, correlation: {scenario_id: fixtureContract.id, results: Object.keys(chromiumResults.value)}},
             );
             boundary.complete();
             return {

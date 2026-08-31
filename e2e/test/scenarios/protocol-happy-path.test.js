@@ -548,7 +548,7 @@ test(
           recorder.producers.protocol,
           ["topic:pairing"],
           "protocol.topic.joined",
-          { correlation: { topic: browser.topic } },
+          { runtime_nonce: world.instanceNonce, correlation: { topic: browser.topic } },
         );
         const approvedPush = browser.waitFor("pairing.approved");
         const pending = await browser.pair({
@@ -559,7 +559,7 @@ test(
           recorder.producers.protocol,
           ["in:pairing-request", "out:pairing-pending"],
           "protocol.pairing.completed",
-          { correlation: { pairing_id: pending.pairing_id, status: "pending" } },
+          { runtime_nonce: world.instanceNonce, correlation: { pairing_id: pending.pairing_id, status: "pending" } },
         );
         const pendingStatus = await browser.pairingStatus();
         assert.equal(pendingStatus.payload.status, "pending");
@@ -568,7 +568,7 @@ test(
           recorder.producers.protocol,
           ["in:pairing-status", "out:pairing-status"],
           "protocol.pairing.status",
-          { correlation: { pairing_id: pending.pairing_id, status: pendingStatus.payload.status } },
+          { runtime_nonce: world.instanceNonce, correlation: { pairing_id: pending.pairing_id, status: pendingStatus.payload.status } },
         );
         await dashboard.refresh();
         browserId = await dashboard.approvePairing(
@@ -578,7 +578,7 @@ test(
         const pushed = await approvedPush;
         assert.equal(pushed.browser_id, browserId);
         boundary.observe("dashboard:approve", surfaceProof.dashboard(dashboard.lastOperation));
-        await observeRecordedSurfaces(boundary, recorder.producers.protocol, ["out:pairing-approved"], "protocol.pairing.approved", {correlation: {pairing_id: pending.pairing_id, browser_id: browserId}});
+        await observeRecordedSurfaces(boundary, recorder.producers.protocol, ["out:pairing-approved"], "protocol.pairing.approved", {runtime_nonce: world.instanceNonce, correlation: {pairing_id: pending.pairing_id, browser_id: browserId}});
         await browser.authenticate(browserId);
         assert.equal(browser.topic, "browser:auth");
         await observeRecordedSurfaces(
@@ -586,7 +586,7 @@ test(
           recorder.producers.protocol,
           ["topic:auth"],
           "protocol.topic.joined",
-          { correlation: { topic: browser.topic, browser_id: browserId } },
+          { runtime_nonce: world.instanceNonce, correlation: { topic: browser.topic, browser_id: browserId } },
         );
         await observeRecordedSurfaces(
           boundary,
@@ -599,7 +599,7 @@ test(
             "out:browser-welcome",
           ],
           "protocol.authentication.completed",
-          { correlation: { browser_id: browserId, topic: browser.topic } },
+          { runtime_nonce: world.instanceNonce, correlation: { browser_id: browserId, topic: browser.topic } },
         );
         const authenticated = { state: "recovered", value: true };
         boundary.complete();
@@ -627,7 +627,7 @@ test(
           recorder.producers.protocol,
           ["in:browser-resync", "out:ack"],
           "protocol.resync.acknowledged",
-          { correlation: { document_id: observation.document_id, observation_count: resync.payload.observation_count } },
+          { runtime_nonce: world.instanceNonce, correlation: { document_id: observation.document_id, observation_count: resync.payload.observation_count } },
         );
         const observed = await browser.observe([observation]);
         assert.equal(observed.payload.observation_count, 1);
@@ -636,7 +636,7 @@ test(
           recorder.producers.protocol,
           ["in:discovery-observed"],
           "protocol.discovery.observed",
-          { correlation: { document_id: observation.document_id, observation_count: observed.payload.observation_count } },
+          { runtime_nonce: world.instanceNonce, correlation: { document_id: observation.document_id, observation_count: observed.payload.observation_count } },
         );
         await dashboard.refresh();
         const row = await dashboard.rowByText(
@@ -800,7 +800,7 @@ test(
               "fixture:side-effect",
             ],
             "protocol.mcp.matrix.completed",
-            { correlation: { call_id: call.call_id, registration_id: registrationId, status: callResponse.status } },
+            { runtime_nonce: world.instanceNonce, correlation: { call_id: call.call_id, registration_id: registrationId, status: callResponse.status } },
           );
           boundary.complete();
           return {

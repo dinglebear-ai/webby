@@ -152,16 +152,36 @@ const liveTestAttestations = Object.freeze({
   }),
 })
 
-async function attestMissingScenarioRuns(name, driver, files, runs) {
+async function attestMissingScenarioRuns(name, driver, files, runs, {runNonce, outputDigest}) {
   const seen = new Set(runs.map(run => run.scenario_id))
+  const receiptRoot = join(artifactRoot, "runtime-receipts")
+  await mkdir(receiptRoot, {recursive: true, mode: 0o700})
   for (const [scenarioId, evidenceFiles] of Object.entries(liveTestAttestations[name] ?? {})) {
     if (seen.has(scenarioId)) continue
     for (const file of evidenceFiles) if (!files.includes(file)) throw new Error(`${name}: attestation file was not executed for ${scenarioId}: ${file}`)
-    const evidence = []
-    for (const file of evidenceFiles) evidence.push({file, sha256: sha256(await readFile(join(e2eRoot, file)))})
-    runs.push({scenario_id: scenarioId, adapter: driver, duration_ms: 0, status: "passed", evidence_kind: "live_test_attestation", evidence_files: evidenceFiles, evidence_sha256: sha256(Buffer.from(JSON.stringify(evidence)))})
+    const executed = []
+    for (const file of evidenceFiles) executed.push({file, source_sha256: sha256(await readFile(join(e2eRoot, file)))})
+    const receipt = {schema_version: 1, suite: name, scenario_id: scenarioId, adapter: driver, run_nonce: runNonce, output_sha256: outputDigest, executed}
+    const bytes = Buffer.from(JSON.stringify(receipt))
+    const receiptName = `${scenarioId}-${driver}-runtime-receipt.json`
+    await writeFile(join(receiptRoot, receiptName), bytes, {flag: "wx", mode: 0o600})
+    runs.push({scenario_id: scenarioId, adapter: driver, duration_ms: 0, status: "passed", evidence_kind: "runtime_test_receipt", evidence_files: [`runtime-receipts/${receiptName}`], evidence_sha256: sha256(bytes), run_nonce: runNonce})
   }
   return runs
+}
+
+async function persistScenarioRunReceipts(name, runs, {runNonce, outputDigest}) {
+  const receiptRoot = join(artifactRoot, "runtime-receipts")
+  await mkdir(receiptRoot, {recursive: true, mode: 0o700})
+  return Promise.all(runs.map(async run => {
+    if (run.status !== "passed") return run
+    if (run.run_nonce !== runNonce || !/^[a-f0-9]{64}$/.test(run.evidence_sha256 ?? "")) throw new Error(`${name}/${run.scenario_id}: runtime boundary receipt is not bound to this run`)
+    const receipt = {schema_version: 1, suite: name, scenario_id: run.scenario_id, adapter: run.adapter, run_nonce: runNonce, output_sha256: outputDigest, boundary_evidence_sha256: run.evidence_sha256, boundary_evidence_files: run.evidence_files}
+    const bytes = Buffer.from(JSON.stringify(receipt))
+    const receiptName = `${run.scenario_id}-${run.adapter}-runtime-receipt.json`
+    await writeFile(join(receiptRoot, receiptName), bytes, {flag: "wx", mode: 0o600})
+    return {...run, evidence_kind: "runtime_test_receipt", evidence_files: [`runtime-receipts/${receiptName}`], evidence_sha256: sha256(bytes), run_nonce: runNonce}
+  }))
 }
 
 function sha256(bytes) { return createHash("sha256").update(bytes).digest("hex") }
@@ -237,7 +257,7 @@ export async function runSuite(name) {
   if (previousRoot && await cleanupWorlds({recordedRoot: previousRoot}) !== 0) throw new Error(`previous E2E run cleanup failed: ${previousRoot}`)
   await mkdir(artifactRoot, {recursive: true, mode: 0o700})
   for (const path of ["scenario-manifest.json", "test-output.log", "suite-telemetry.json", "cleanup-report.json"]) await rm(join(artifactRoot, path), {force: true})
-  for (const directory of ["attested", "upload", "cleanup-attested"]) await rm(join(artifactRoot, directory), {recursive: true, force: true})
+  for (const directory of ["attested", "upload", "cleanup-attested", "runtime-receipts"]) await rm(join(artifactRoot, directory), {recursive: true, force: true})
   const manifestPath = join(artifactRoot, "scenario-manifest.json")
   let runTemp
   try {
@@ -255,6 +275,7 @@ export async function runSuite(name) {
   await writeShardManifest({lane, driver, output: manifestPath, selectedIds: suiteScenarioDenominators[name]})
   const logPath = join(artifactRoot, "test-output.log")
   const scenarioTelemetryPath = join(runTemp, "scenario-runs.ndjson")
+  const runNonce = randomUUID()
   const chunks = []; let bytes = 0; const limit = 8 * 1024 * 1024
   const startedAt = new Date()
   const capture = stream => stream.on("data", chunk => {
@@ -263,7 +284,7 @@ export async function runSuite(name) {
   let status = 1; let infrastructureError
   try {
     const child = spawn(process.execPath, ["--test", "--test-concurrency=1", ...files], {
-      cwd: e2eRoot, env: {...process.env, TMPDIR: runTemp, WEBBY_E2E_TMP_ROOT: runTemp, WEBBY_E2E_SCENARIO_TELEMETRY: scenarioTelemetryPath, WEBBY_E2E_SCENARIO_DENOMINATOR: suiteScenarioDenominators[name].map(id => `${driver}:${id}`).join(","), MCP_TELEMETRY: "0", MCP_UPDATE_CHECK: "0"}, stdio: ["ignore", "pipe", "pipe"],
+      cwd: e2eRoot, env: {...process.env, TMPDIR: runTemp, WEBBY_E2E_TMP_ROOT: runTemp, WEBBY_E2E_RUN_NONCE: runNonce, WEBBY_E2E_SCENARIO_TELEMETRY: scenarioTelemetryPath, WEBBY_E2E_SCENARIO_DENOMINATOR: suiteScenarioDenominators[name].map(id => `${driver}:${id}`).join(","), MCP_TELEMETRY: "0", MCP_UPDATE_CHECK: "0"}, stdio: ["ignore", "pipe", "pipe"],
     })
     capture(child.stdout); capture(child.stderr)
     status = await new Promise(resolveStatus => { child.once("error", error => { infrastructureError = error.message; resolveStatus(1) }); child.once("exit", code => resolveStatus(code ?? 1)) })
@@ -273,7 +294,11 @@ export async function runSuite(name) {
   let scenarioRuns = []
   try { scenarioRuns = parseScenarioTelemetry(await readFile(scenarioTelemetryPath, "utf8")) } catch (error) { if (error.code !== "ENOENT") { infrastructureError ??= error.message; status = 1 } }
   finally { await rm(scenarioTelemetryPath, {force: true}) }
-  if (status === 0) scenarioRuns = await attestMissingScenarioRuns(name, driver, files, scenarioRuns)
+  if (status === 0) {
+    const outputDigest = sha256(Buffer.concat(chunks))
+    scenarioRuns = await persistScenarioRunReceipts(name, scenarioRuns, {runNonce, outputDigest})
+    scenarioRuns = await attestMissingScenarioRuns(name, driver, files, scenarioRuns, {runNonce, outputDigest})
+  }
   const plannedScenarioIds = await readPlannedScenarioIds(manifestPath, suiteScenarioDenominators[name])
   const observedScenarioIds = [...new Set(scenarioRuns.map(run => run.scenario_id))].sort()
   if (status === 0 && JSON.stringify(plannedScenarioIds) !== JSON.stringify(observedScenarioIds)) { status = 1; infrastructureError = `scenario telemetry denominator drifted: planned=${plannedScenarioIds.join(",")} observed=${observedScenarioIds.join(",")}` }
