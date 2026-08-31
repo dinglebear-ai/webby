@@ -16,7 +16,7 @@ import {
   fixtureOutcomeParityResult,
   runSharedFixtureOutcome,
 } from "../../support/fixture-outcome-parity.js";
-import { observeRecordedSurfaces } from "../../support/boundary-surfaces.js";
+import { observeSystemOutputSurfaces } from "../../support/boundary-surfaces.js";
 import { MCPClient, MCPClientError } from "../../support/mcp-client.js";
 import { compareParity } from "../../support/parity-report.js";
 import { ScenarioRunner } from "../../support/scenario-runner.js";
@@ -1004,16 +1004,16 @@ test(
         recorder: chromiumRecorder,
         actions: {
           "fixture.discover": async ({ boundary }) => {
-            await observeRecordedSurfaces(
+            observeSystemOutputSurfaces(
               boundary,
-              chromiumRecorder.producers.chromium,
+              {catalog_names: initialCatalogNames},
               [
                 "in:discovery-observed",
                 "capability:fixture",
                 "world-field:fixture-url",
               ],
-              "chromium.fixture.catalog.observed",
-              {runtime_nonce: world.instanceNonce, correlation: {scenario_id: fixtureContract.id, names: initialCatalogNames}},
+              "extension-fixture-catalog",
+              fixtureContract.id,
             );
             boundary.complete();
             return {
@@ -1024,9 +1024,9 @@ test(
             };
           },
           "fixture.invoke-matrix": async ({ boundary }) => {
-            await observeRecordedSurfaces(
+            observeSystemOutputSurfaces(
               boundary,
-              chromiumRecorder.producers.chromium,
+              {results: chromiumResults.value, abort: chromiumAbort, stale: chromiumStale},
               [
                 "in:tool-result",
                 "in:tool-error",
@@ -1044,8 +1044,8 @@ test(
                 "fixture:deep",
                 "fixture:side-effect",
               ],
-              "chromium.fixture.matrix.completed",
-              {runtime_nonce: world.instanceNonce, correlation: {scenario_id: fixtureContract.id, results: Object.keys(chromiumResults.value)}},
+              "extension-fixture-outcome-matrix",
+              fixtureContract.id,
             );
             boundary.complete();
             return {

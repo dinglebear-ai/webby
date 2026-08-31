@@ -13,6 +13,7 @@ import {Ed25519Identity} from "../../support/ed25519-identity.js"
 import {MCPClient, jsonRpcError} from "../../support/mcp-client.js"
 import {HTTP_DENIAL_CASES, ISOLATION_CASES, SECURITY_CASES, WEBSOCKET_DENIAL_CASES, assertUniqueSecurityCases, expandSecurityMatrix, nestedJson, securityMatrixManifest, securityMatrixShard} from "../../support/protocol-security-matrix.js"
 import {LogicalHandles} from "../../support/scenario-runner.js"
+import {emitLiveTestReceipt} from "../../support/live-test-receipt.js"
 import {SimulatedBrowser} from "../../support/simulated-browser.js"
 import {WebbyWorld} from "../../support/world.js"
 
@@ -613,4 +614,5 @@ test("cross-world and cross-contract logical handle replay fails closed", async 
   }
   const artifact = await recorder.finalize({cleanup: {handles: "released", pending_capacity: 0, audits: 0}})
   assert.equal(artifact.replay.seed, 8675309)
+  await emitLiveTestReceipt({scenarioId: "e2e-transport-security", adapter: "protocol", receiptId: "transport-security-live", assertions: {cross_world_replays_rejected: 2, cross_contract_replays_rejected: 2, cleanup_audits: 0}})
 })

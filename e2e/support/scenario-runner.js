@@ -1,5 +1,5 @@
 import {createHash} from "node:crypto"
-import {appendFile, readFile, readdir} from "node:fs/promises"
+import {appendFile, copyFile, mkdir, readFile, readdir} from "node:fs/promises"
 import {join} from "node:path"
 import {assertPredicate} from "./assertions.js"
 import {assertScenarioContract, readScenarioContract} from "./runtime-contracts.js"
@@ -132,10 +132,19 @@ export class ScenarioRunner {
         const persistedEvidence = {...surfaceEvidence, run_nonce: runNonce}
         const persisted = await this.recorder.producers.world.diagnostic("surface-evidence.json", persistedEvidence, Object.keys(persistedEvidence))
         if (!persisted?.sha256 || persisted.omitted) throw new ScenarioInfrastructureError("missing_surface_evidence_artifact", "persisted surface evidence receipt is required")
-        this.surfaceEvidenceReceipt = {evidence_kind: "runtime_boundary", evidence_files: [persisted.name], evidence_sha256: persisted.sha256, run_nonce: runNonce}
+        this.surfaceEvidenceReceipt = {evidence_kind: "runtime_boundary", evidence_files: [persisted.staged], evidence_sha256: persisted.sha256, run_nonce: runNonce}
       }
       await this.event("scenario.completed", {scenario_id: this.scenario.id, outcome_keys: this.scenario.outcomes.map(item => item.key)})
       await this.assertJournalContinuity()
+      if (this.surfaceEvidenceReceipt && process.env.WEBBY_E2E_EVIDENCE_INBOX) {
+        const inbox = process.env.WEBBY_E2E_EVIDENCE_INBOX
+        await mkdir(inbox, {recursive: true, mode: 0o700})
+        const retained = join(inbox, `${this.scenario.id}-${this.driver}-${this.surfaceEvidenceReceipt.evidence_sha256}.json`)
+        await copyFile(this.surfaceEvidenceReceipt.evidence_files[0], retained, 0)
+        const copied = await readFile(retained)
+        if (sha256(copied) !== this.surfaceEvidenceReceipt.evidence_sha256) throw new ScenarioInfrastructureError("evidence_retention_drift", "scenario evidence changed while entering suite custody")
+        this.surfaceEvidenceReceipt = {...this.surfaceEvidenceReceipt, evidence_files: [retained]}
+      }
       completed = {observations: this.observations, handles: this.handles, normalized: Object.fromEntries(this.scenario.outcomes.map(item => [item.key, this.observations[item.predicate.subject]]))}
     } catch (error) {
       primaryError = error

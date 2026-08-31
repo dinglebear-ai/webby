@@ -18,7 +18,7 @@ import {
 import { SimulatedBrowser } from "../../support/simulated-browser.js";
 import { WebbyWorld } from "../../support/world.js";
 import {
-  observeRecordedSurfaces,
+  observeSystemOutputSurfaces,
   surfaceProof,
 } from "../../support/boundary-surfaces.js";
 
@@ -542,33 +542,33 @@ test(
         };
       },
       "browser.pair": async ({ boundary }) => {
-        await browser.connect();
-        await observeRecordedSurfaces(
+        const pairingJoin = await browser.connect();
+        observeSystemOutputSurfaces(
           boundary,
-          recorder.producers.protocol,
+          pairingJoin,
           ["topic:pairing"],
-          "protocol.topic.joined",
-          { runtime_nonce: world.instanceNonce, correlation: { topic: browser.topic } },
+          "phoenix-channel-join",
+          browser.topic,
         );
         const approvedPush = browser.waitFor("pairing.approved");
         const pending = await browser.pair({
           displayName: "Scenario Simulator",
         });
-        await observeRecordedSurfaces(
+        observeSystemOutputSurfaces(
           boundary,
-          recorder.producers.protocol,
+          pending,
           ["in:pairing-request", "out:pairing-pending"],
-          "protocol.pairing.completed",
-          { runtime_nonce: world.instanceNonce, correlation: { pairing_id: pending.pairing_id, status: "pending" } },
+          "pairing-transport-response",
+          pending.pairing_id,
         );
         const pendingStatus = await browser.pairingStatus();
         assert.equal(pendingStatus.payload.status, "pending");
-        await observeRecordedSurfaces(
+        observeSystemOutputSurfaces(
           boundary,
-          recorder.producers.protocol,
+          pendingStatus,
           ["in:pairing-status", "out:pairing-status"],
-          "protocol.pairing.status",
-          { runtime_nonce: world.instanceNonce, correlation: { pairing_id: pending.pairing_id, status: pendingStatus.payload.status } },
+          "pairing-status-transport-response",
+          pending.pairing_id,
         );
         await dashboard.refresh();
         browserId = await dashboard.approvePairing(
@@ -578,19 +578,19 @@ test(
         const pushed = await approvedPush;
         assert.equal(pushed.browser_id, browserId);
         boundary.observe("dashboard:approve", surfaceProof.dashboard(dashboard.lastOperation));
-        await observeRecordedSurfaces(boundary, recorder.producers.protocol, ["out:pairing-approved"], "protocol.pairing.approved", {runtime_nonce: world.instanceNonce, correlation: {pairing_id: pending.pairing_id, browser_id: browserId}});
-        await browser.authenticate(browserId);
+        observeSystemOutputSurfaces(boundary, pushed, ["out:pairing-approved"], "pairing-approved-push", browserId);
+        const welcome = await browser.authenticate(browserId);
         assert.equal(browser.topic, "browser:auth");
-        await observeRecordedSurfaces(
+        observeSystemOutputSurfaces(
           boundary,
-          recorder.producers.protocol,
+          welcome,
           ["topic:auth"],
-          "protocol.topic.joined",
-          { runtime_nonce: world.instanceNonce, correlation: { topic: browser.topic, browser_id: browserId } },
+          "authenticated-channel",
+          browserId,
         );
-        await observeRecordedSurfaces(
+        observeSystemOutputSurfaces(
           boundary,
-          recorder.producers.protocol,
+          welcome,
           [
             "out:auth-challenge",
             "in:auth-respond",
@@ -598,8 +598,8 @@ test(
             "in:browser-hello",
             "out:browser-welcome",
           ],
-          "protocol.authentication.completed",
-          { runtime_nonce: world.instanceNonce, correlation: { browser_id: browserId, topic: browser.topic } },
+          "authentication-transport-result",
+          browserId,
         );
         const authenticated = { state: "recovered", value: true };
         boundary.complete();
@@ -622,21 +622,21 @@ test(
         });
         const resync = await browser.resync([observation]);
         assert.equal(resync.payload.observation_count, 1);
-        await observeRecordedSurfaces(
+        observeSystemOutputSurfaces(
           boundary,
-          recorder.producers.protocol,
+          resync,
           ["in:browser-resync", "out:ack"],
-          "protocol.resync.acknowledged",
-          { runtime_nonce: world.instanceNonce, correlation: { document_id: observation.document_id, observation_count: resync.payload.observation_count } },
+          "resync-transport-response",
+          observation.document_id,
         );
         const observed = await browser.observe([observation]);
         assert.equal(observed.payload.observation_count, 1);
-        await observeRecordedSurfaces(
+        observeSystemOutputSurfaces(
           boundary,
-          recorder.producers.protocol,
+          observed,
           ["in:discovery-observed"],
-          "protocol.discovery.observed",
-          { runtime_nonce: world.instanceNonce, correlation: { document_id: observation.document_id, observation_count: observed.payload.observation_count } },
+          "discovery-transport-response",
+          observation.document_id,
         );
         await dashboard.refresh();
         const row = await dashboard.rowByText(
@@ -774,9 +774,9 @@ test(
             callResponse.body.result.structuredContent,
             expectedResult,
           );
-          await observeRecordedSurfaces(
+          observeSystemOutputSurfaces(
             boundary,
-            recorder.producers.mcp,
+            callResponse,
             [
               "http:post-mcp",
               "in:tool-result",
@@ -799,8 +799,8 @@ test(
               "version:2025-03",
               "fixture:side-effect",
             ],
-            "protocol.mcp.matrix.completed",
-            { runtime_nonce: world.instanceNonce, correlation: { call_id: call.call_id, registration_id: registrationId, status: callResponse.status } },
+            "mcp-live-response-matrix",
+            call.call_id,
           );
           boundary.complete();
           return {

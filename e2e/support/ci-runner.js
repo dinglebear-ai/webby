@@ -139,48 +139,71 @@ const suiteScenarioDenominators = Object.freeze({
 export function fullSuiteScenarioDenominators() {
   return Object.freeze(Object.fromEntries(["protocol-full", "chromium-full"].map(name => [name, Object.freeze([...suiteScenarioDenominators[name]])])))
 }
-const liveTestAttestations = Object.freeze({
+const liveTestReceiptRequirements = Object.freeze({
   "protocol-full": Object.freeze({
-    "e2e-capacity-concurrency": ["test/scenarios/protocol-capacity-matrix.test.js", "test/scenarios/protocol-concurrency.test.js"],
-    "e2e-command-ci-entrypoints": ["test/ci-contract.test.js"],
-    "e2e-persistence-retention": ["test/scenarios/protocol-persistence-matrix.test.js", "test/scenarios/protocol-retention-erasure.test.js"],
-    "e2e-transport-security": ["test/scenarios/protocol-security.test.js"],
+    "e2e-capacity-concurrency": ["capacity-matrix-live", "concurrency-live"],
+    "e2e-command-ci-entrypoints": ["ci-entrypoints-contract"],
+    "e2e-persistence-retention": ["persistence-matrix-live", "retention-erasure-live"],
+    "e2e-transport-security": ["transport-security-live"],
   }),
   "chromium-full": Object.freeze({
-    "e2e-extension-controls": ["test/chromium/popup-commands.test.js", "test/chromium/chrome-events.test.js", "test/chromium/dashboard-commands.test.js"],
-    "e2e-persistence-retention": ["test/chromium/persistence-retention.test.js"],
+    "e2e-extension-controls": ["popup-controls-asserted", "chrome-events-asserted", "dashboard-commands-asserted"],
+    "e2e-persistence-retention": ["chromium-persistence-live", "chromium-fresh-profile-live"],
   }),
 })
 
-async function attestMissingScenarioRuns(name, driver, files, runs, {runNonce, outputDigest}) {
-  const seen = new Set(runs.map(run => run.scenario_id))
-  const receiptRoot = join(artifactRoot, "runtime-receipts")
-  await mkdir(receiptRoot, {recursive: true, mode: 0o700})
-  for (const [scenarioId, evidenceFiles] of Object.entries(liveTestAttestations[name] ?? {})) {
-    if (seen.has(scenarioId)) continue
-    for (const file of evidenceFiles) if (!files.includes(file)) throw new Error(`${name}: attestation file was not executed for ${scenarioId}: ${file}`)
-    const executed = []
-    for (const file of evidenceFiles) executed.push({file, source_sha256: sha256(await readFile(join(e2eRoot, file)))})
-    const receipt = {schema_version: 1, suite: name, scenario_id: scenarioId, adapter: driver, run_nonce: runNonce, output_sha256: outputDigest, executed}
-    const bytes = Buffer.from(JSON.stringify(receipt))
-    const receiptName = `${scenarioId}-${driver}-runtime-receipt.json`
-    await writeFile(join(receiptRoot, receiptName), bytes, {flag: "wx", mode: 0o600})
-    runs.push({scenario_id: scenarioId, adapter: driver, duration_ms: 0, status: "passed", evidence_kind: "runtime_test_receipt", evidence_files: [`runtime-receipts/${receiptName}`], evidence_sha256: sha256(bytes), run_nonce: runNonce})
+export async function consumeLiveTestReceipts(name, adapter, runs, {runNonce, inbox = join(artifactRoot, "scenario-evidence-inbox")}) {
+  const required = liveTestReceiptRequirements[name] ?? {}
+  if (Object.keys(required).length === 0) return runs
+  const entries = await readdir(inbox, {withFileTypes: true}).catch(error => error.code === "ENOENT" ? [] : Promise.reject(error))
+  const receipts = []
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.startsWith("live-") || !entry.name.endsWith(".json")) continue
+    const path = join(inbox, entry.name)
+    const bytes = await readFile(path)
+    let receipt
+    try { receipt = JSON.parse(bytes) } catch { throw new Error(`${name}: malformed live test receipt`) }
+    if (receipt.schema_version !== 1 || receipt.kind !== "live_test_assertion_receipt" || receipt.run_nonce !== runNonce || receipt.adapter !== adapter || !required[receipt.scenario_id]?.includes(receipt.receipt_id) || !receipt.assertions || typeof receipt.assertions !== "object" || Array.isArray(receipt.assertions) || Object.keys(receipt.assertions).length === 0) throw new Error(`${name}: invalid or unbound live test receipt ${receipt.receipt_id ?? "unknown"}`)
+    receipts.push({receipt, sha256: sha256(bytes)})
   }
-  return runs
+  const seenRuns = new Set(runs.map(run => run.scenario_id))
+  const additions = []
+  for (const [scenarioId, requiredIds] of Object.entries(required)) {
+    if (seenRuns.has(scenarioId)) throw new Error(`${name}/${scenarioId}: scenario has both runner evidence and explicit live test receipts`)
+    const matched = receipts.filter(({receipt}) => receipt.scenario_id === scenarioId)
+    const ids = matched.map(({receipt}) => receipt.receipt_id)
+    if (new Set(ids).size !== ids.length || requiredIds.some(id => !ids.includes(id)) || ids.some(id => !requiredIds.includes(id))) throw new Error(`${name}/${scenarioId}: explicit live test receipt denominator drifted: required=${requiredIds.join(",")} observed=${ids.sort().join(",")}`)
+    const evidence = {schema_version: 1, kind: "live_test_scenario_evidence", suite: name, scenario_id: scenarioId, adapter, run_nonce: runNonce, receipts: matched.sort((a, b) => a.receipt.receipt_id.localeCompare(b.receipt.receipt_id)).map(({receipt, sha256}) => ({receipt_id: receipt.receipt_id, sha256, assertions: receipt.assertions}))}
+    const bytes = Buffer.from(`${JSON.stringify(evidence)}\n`)
+    const evidencePath = join(inbox, `scenario-${scenarioId}-${adapter}-${sha256(bytes)}.json`)
+    await writeFile(evidencePath, bytes, {flag: "wx", mode: 0o600})
+    additions.push({scenario_id: scenarioId, adapter, duration_ms: 0, status: "passed", evidence_kind: "runtime_boundary", evidence_files: [evidencePath], evidence_sha256: sha256(bytes), run_nonce: runNonce})
+  }
+  return [...runs, ...additions]
 }
 
-async function persistScenarioRunReceipts(name, runs, {runNonce, outputDigest}) {
-  const receiptRoot = join(artifactRoot, "runtime-receipts")
+export async function persistScenarioRunReceipts(name, runs, {runNonce, evidenceRoot = join(artifactRoot, "scenario-evidence"), receiptRoot = join(artifactRoot, "runtime-receipts")}) {
   await mkdir(receiptRoot, {recursive: true, mode: 0o700})
+  await mkdir(evidenceRoot, {recursive: true, mode: 0o700})
   return Promise.all(runs.map(async run => {
     if (run.status !== "passed") return run
     if (run.run_nonce !== runNonce || !/^[a-f0-9]{64}$/.test(run.evidence_sha256 ?? "")) throw new Error(`${name}/${run.scenario_id}: runtime boundary receipt is not bound to this run`)
-    const receipt = {schema_version: 1, suite: name, scenario_id: run.scenario_id, adapter: run.adapter, run_nonce: runNonce, output_sha256: outputDigest, boundary_evidence_sha256: run.evidence_sha256, boundary_evidence_files: run.evidence_files}
+    if (!Array.isArray(run.evidence_files) || run.evidence_files.length !== 1) throw new Error(`${name}/${run.scenario_id}: exactly one immutable runtime evidence file is required`)
+    const source = resolve(run.evidence_files[0])
+    const sourceInfo = await lstat(source).catch(() => undefined)
+    if (!sourceInfo?.isFile() || sourceInfo.isSymbolicLink()) throw new Error(`${name}/${run.scenario_id}: runtime evidence is missing, cleaned, or not a regular file`)
+    const sourceBytes = await readFile(source)
+    if (sha256(sourceBytes) !== run.evidence_sha256) throw new Error(`${name}/${run.scenario_id}: runtime evidence hash drifted before retention`)
+    const retainedName = `${safe(run.scenario_id)}-${safe(run.adapter)}-${run.evidence_sha256}.json`
+    const retained = join(evidenceRoot, retainedName)
+    await copyFile(source, retained, 0)
+    const retainedBytes = await readFile(retained)
+    if (sha256(retainedBytes) !== run.evidence_sha256 || !retainedBytes.equals(sourceBytes)) throw new Error(`${name}/${run.scenario_id}: independently retained runtime evidence failed verification`)
+    const receipt = {schema_version: 2, suite: name, scenario_id: run.scenario_id, adapter: run.adapter, run_nonce: runNonce, boundary_evidence_sha256: run.evidence_sha256, retained_evidence_file: `scenario-evidence/${retainedName}`}
     const bytes = Buffer.from(JSON.stringify(receipt))
     const receiptName = `${run.scenario_id}-${run.adapter}-runtime-receipt.json`
     await writeFile(join(receiptRoot, receiptName), bytes, {flag: "wx", mode: 0o600})
-    return {...run, evidence_kind: "runtime_test_receipt", evidence_files: [`runtime-receipts/${receiptName}`], evidence_sha256: sha256(bytes), run_nonce: runNonce}
+    return {...run, evidence_kind: "runtime_test_receipt", evidence_files: [`runtime-receipts/${receiptName}`, `scenario-evidence/${retainedName}`], evidence_sha256: sha256(bytes), run_nonce: runNonce}
   }))
 }
 
@@ -257,7 +280,7 @@ export async function runSuite(name) {
   if (previousRoot && await cleanupWorlds({recordedRoot: previousRoot}) !== 0) throw new Error(`previous E2E run cleanup failed: ${previousRoot}`)
   await mkdir(artifactRoot, {recursive: true, mode: 0o700})
   for (const path of ["scenario-manifest.json", "test-output.log", "suite-telemetry.json", "cleanup-report.json"]) await rm(join(artifactRoot, path), {force: true})
-  for (const directory of ["attested", "upload", "cleanup-attested", "runtime-receipts"]) await rm(join(artifactRoot, directory), {recursive: true, force: true})
+  for (const directory of ["attested", "upload", "cleanup-attested", "runtime-receipts", "scenario-evidence", "scenario-evidence-inbox"]) await rm(join(artifactRoot, directory), {recursive: true, force: true})
   const manifestPath = join(artifactRoot, "scenario-manifest.json")
   let runTemp
   try {
@@ -284,7 +307,7 @@ export async function runSuite(name) {
   let status = 1; let infrastructureError
   try {
     const child = spawn(process.execPath, ["--test", "--test-concurrency=1", ...files], {
-      cwd: e2eRoot, env: {...process.env, TMPDIR: runTemp, WEBBY_E2E_TMP_ROOT: runTemp, WEBBY_E2E_RUN_NONCE: runNonce, WEBBY_E2E_SCENARIO_TELEMETRY: scenarioTelemetryPath, WEBBY_E2E_SCENARIO_DENOMINATOR: suiteScenarioDenominators[name].map(id => `${driver}:${id}`).join(","), MCP_TELEMETRY: "0", MCP_UPDATE_CHECK: "0"}, stdio: ["ignore", "pipe", "pipe"],
+      cwd: e2eRoot, env: {...process.env, TMPDIR: runTemp, WEBBY_E2E_TMP_ROOT: runTemp, WEBBY_E2E_RUN_NONCE: runNonce, WEBBY_E2E_EVIDENCE_INBOX: join(artifactRoot, "scenario-evidence-inbox"), WEBBY_E2E_SCENARIO_TELEMETRY: scenarioTelemetryPath, WEBBY_E2E_SCENARIO_DENOMINATOR: suiteScenarioDenominators[name].map(id => `${driver}:${id}`).join(","), MCP_TELEMETRY: "0", MCP_UPDATE_CHECK: "0"}, stdio: ["ignore", "pipe", "pipe"],
     })
     capture(child.stdout); capture(child.stderr)
     status = await new Promise(resolveStatus => { child.once("error", error => { infrastructureError = error.message; resolveStatus(1) }); child.once("exit", code => resolveStatus(code ?? 1)) })
@@ -295,9 +318,8 @@ export async function runSuite(name) {
   try { scenarioRuns = parseScenarioTelemetry(await readFile(scenarioTelemetryPath, "utf8")) } catch (error) { if (error.code !== "ENOENT") { infrastructureError ??= error.message; status = 1 } }
   finally { await rm(scenarioTelemetryPath, {force: true}) }
   if (status === 0) {
-    const outputDigest = sha256(Buffer.concat(chunks))
-    scenarioRuns = await persistScenarioRunReceipts(name, scenarioRuns, {runNonce, outputDigest})
-    scenarioRuns = await attestMissingScenarioRuns(name, driver, files, scenarioRuns, {runNonce, outputDigest})
+    scenarioRuns = await consumeLiveTestReceipts(name, driver, scenarioRuns, {runNonce})
+    scenarioRuns = await persistScenarioRunReceipts(name, scenarioRuns, {runNonce})
   }
   const plannedScenarioIds = await readPlannedScenarioIds(manifestPath, suiteScenarioDenominators[name])
   const observedScenarioIds = [...new Set(scenarioRuns.map(run => run.scenario_id))].sort()

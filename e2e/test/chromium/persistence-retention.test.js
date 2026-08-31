@@ -6,6 +6,7 @@ import {ArtifactRecorder} from "../../support/artifacts.js"
 import {ChromiumWorld} from "../../support/chromium-world.js"
 import {runCleanupPlan} from "../../support/cleanup-plan.js"
 import {DashboardDriver} from "../../support/dashboard-driver.js"
+import {emitLiveTestReceipt} from "../../support/live-test-receipt.js"
 import {checkpointedDiagnostics, executeSql, persistenceOperation, sqlite} from "../../support/persistence-driver.js"
 import {WebbyWorld} from "../../support/world.js"
 
@@ -96,6 +97,7 @@ test("real Chromium profile and Webby persistence retain only durable state, dra
 
   await chromium.close(); chromium = undefined
   await recorder.finalize({status: "passed", cleanup: {chromium: "closed", persistence: "checkpointed", secrets: "redacted"}}); finalized = true
+  await emitLiveTestReceipt({scenarioId: "e2e-persistence-retention", adapter: "chromium", receiptId: "chromium-persistence-live", assertions: {retention_batches: 3, durable_identity: true, startup_reconciled: true, browser_erased: true}})
   await world.teardown({remove: true}); world = undefined
 })
 
@@ -131,6 +133,7 @@ test("fresh Webby world and Chromium profile do not inherit paired identity or r
   assert.equal((await sqlite(fresh.databasePath, "SELECT count(*) AS count FROM browsers"))[0].count, 0)
   await chromium.close(); chromium = undefined
   await recorder.finalize({status: "passed", cleanup: {fresh_profile: "isolated", fresh_database: "empty"}})
+  await emitLiveTestReceipt({scenarioId: "e2e-persistence-retention", adapter: "chromium", receiptId: "chromium-fresh-profile-live", assertions: {public_key_rotated: true, browser_identity_absent: true, database_browser_rows: 0}})
   finalized = true
   await fresh.teardown({remove: true})
 })

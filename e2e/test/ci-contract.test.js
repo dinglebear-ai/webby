@@ -3,8 +3,9 @@ import {mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile} from "node:fs/pr
 import {tmpdir} from "node:os"
 import {join, resolve} from "node:path"
 import test from "node:test"
-import {cleanupWorlds, fullSuiteScenarioDenominators, initializeOwnedTempRoot, stageAttested, writeShardManifest} from "../support/ci-runner.js"
+import {cleanupWorlds, consumeLiveTestReceipts, fullSuiteScenarioDenominators, initializeOwnedTempRoot, persistScenarioRunReceipts, stageAttested, writeShardManifest} from "../support/ci-runner.js"
 import {ArtifactRecorder} from "../support/artifacts.js"
+import {emitLiveTestReceipt} from "../support/live-test-receipt.js"
 
 const root = resolve(import.meta.dirname, "../..")
 const requiredE2EPaths = ["lib/**", "test/**", "config/**", "priv/**", "assets/**", "e2e/**", "extension/**", "scripts/e2e*", "mix.exs", "mix.lock", ".mise.toml", ".github/workflows/e2e.yml", ".github/workflows/e2e-stress.yml"]
@@ -45,6 +46,31 @@ test("weighted manifests prove complete disjoint scenario assignment", async t =
   assert.deepEqual(value.selected, value.shards[1].scenarios)
 })
 
+test("suite retention independently copies and verifies immutable scenario evidence", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "webby-evidence-retention-")); t.after(() => rm(directory, {recursive: true, force: true}))
+  const source = join(directory, "surface-evidence.json")
+  const bytes = Buffer.from('{"assertion":"live transport completed"}\n')
+  await writeFile(source, bytes)
+  const digest = (await import("node:crypto")).createHash("sha256").update(bytes).digest("hex")
+  const run = {scenario_id: "e2e-shared-vertical-slice", adapter: "protocol", duration_ms: 1, status: "passed", evidence_kind: "runtime_boundary", evidence_files: [source], evidence_sha256: digest, run_nonce: "nonce-12345678"}
+  const [retained] = await persistScenarioRunReceipts("protocol-pr", [run], {runNonce: run.run_nonce, evidenceRoot: join(directory, "retained"), receiptRoot: join(directory, "receipts")})
+  assert.equal(retained.evidence_files.length, 2)
+  assert.equal(await readFile(join(directory, "retained", retained.evidence_files[1].split("/").at(-1)), "utf8"), bytes.toString())
+})
+
+test("suite retention rejects fabricated, mutated, missing, and cleaned scenario evidence", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "webby-evidence-adversarial-")); t.after(() => rm(directory, {recursive: true, force: true}))
+  const source = join(directory, "evidence.json"); await writeFile(source, "original")
+  const base = {scenario_id: "e2e-shared-vertical-slice", adapter: "protocol", duration_ms: 1, status: "passed", evidence_kind: "runtime_boundary", evidence_files: [source], evidence_sha256: "0".repeat(64), run_nonce: "nonce-12345678"}
+  const options = suffix => ({runNonce: base.run_nonce, evidenceRoot: join(directory, `retained-${suffix}`), receiptRoot: join(directory, `receipts-${suffix}`)})
+  await assert.rejects(persistScenarioRunReceipts("protocol-pr", [base], options("a")), /hash drifted/)
+  await rm(source)
+  await assert.rejects(persistScenarioRunReceipts("protocol-pr", [{...base, evidence_files: [source]}], options("b")), /missing, cleaned/)
+  const target = join(directory, "target.json"); await writeFile(target, "target"); await symlink(target, source)
+  const digest = (await import("node:crypto")).createHash("sha256").update("target").digest("hex")
+  await assert.rejects(persistScenarioRunReceipts("protocol-pr", [{...base, evidence_files: [source], evidence_sha256: digest}], options("c")), /not a regular file/)
+})
+
 test("full protocol and Chromium telemetry cover every authoritative scenario", async () => {
   const denominators = fullSuiteScenarioDenominators()
   const names = await (await import("node:fs/promises")).readdir(join(root, "e2e/contracts/scenarios"))
@@ -70,6 +96,27 @@ test("workflows pin actions and enforce failure-only attested uploads plus alway
   assert.equal((primary.match(/hashFiles\('e2e\/artifacts\/upload\/upload-attestation\.json'\) != ''/g) ?? []).length, 4)
   assert.equal((primary.match(new RegExp(cleanupAttestation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length, 4)
   assert.doesNotMatch(primary, /pull_request_target|secrets\./)
+  await emitLiveTestReceipt({scenarioId: "e2e-command-ci-entrypoints", adapter: "protocol", receiptId: "ci-entrypoints-contract", assertions: {workflows_checked: 2, full_suites: 2, cleanup_gates: 4, mutation_guards: true}})
+})
+
+test("explicit live test receipts require the exact nonce-bound assertion denominator", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "webby-live-receipts-")); t.after(() => rm(directory, {recursive: true, force: true}))
+  const previous = {inbox: process.env.WEBBY_E2E_EVIDENCE_INBOX, nonce: process.env.WEBBY_E2E_RUN_NONCE}
+  process.env.WEBBY_E2E_EVIDENCE_INBOX = directory; process.env.WEBBY_E2E_RUN_NONCE = "receipt-run-nonce"
+  t.after(() => {
+    if (previous.inbox === undefined) delete process.env.WEBBY_E2E_EVIDENCE_INBOX; else process.env.WEBBY_E2E_EVIDENCE_INBOX = previous.inbox
+    if (previous.nonce === undefined) delete process.env.WEBBY_E2E_RUN_NONCE; else process.env.WEBBY_E2E_RUN_NONCE = previous.nonce
+  })
+  for (const [scenarioId, receiptId] of [
+    ["e2e-capacity-concurrency", "capacity-matrix-live"], ["e2e-capacity-concurrency", "concurrency-live"],
+    ["e2e-command-ci-entrypoints", "ci-entrypoints-contract"],
+    ["e2e-persistence-retention", "persistence-matrix-live"], ["e2e-persistence-retention", "retention-erasure-live"],
+    ["e2e-transport-security", "transport-security-live"],
+  ]) await emitLiveTestReceipt({scenarioId, adapter: "protocol", receiptId, assertions: {assertions_executed: 1}})
+  const runs = await consumeLiveTestReceipts("protocol-full", "protocol", [], {runNonce: "receipt-run-nonce", inbox: directory})
+  assert.equal(runs.find(run => run.scenario_id === "e2e-command-ci-entrypoints").evidence_kind, "runtime_boundary")
+  await assert.rejects(consumeLiveTestReceipts("protocol-full", "protocol", [], {runNonce: "wrong-nonce", inbox: directory}), /invalid or unbound/)
+  await assert.rejects(consumeLiveTestReceipts("protocol-full", "chromium", [], {runNonce: "receipt-run-nonce", inbox: directory}), /invalid or unbound/)
 })
 
 test("every E2E trigger path and deterministic, seam, live, and cleanup command is mutation guarded", async () => {
