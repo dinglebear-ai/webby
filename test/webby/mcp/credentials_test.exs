@@ -1,6 +1,7 @@
 defmodule Webby.MCP.CredentialsTest do
   use Webby.DataCase, async: false
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias Webby.MCP.Credentials
 
   test "stores only a token hash and enforces scopes" do
@@ -249,5 +250,72 @@ defmodule Webby.MCP.CredentialsTest do
              )
 
     refute_receive {:tool_call, %{"tool_name" => "blocked-after-abort"}}
+  end
+
+  test "owner death after the revocation commit reconciles fail closed and cancels existing calls" do
+    assert {:ok, credential, _token} = Credentials.create("Commit window")
+    browser_id = Ecto.UUID.generate()
+    parent = self()
+
+    Sandbox.allow(
+      Webby.Repo,
+      self(),
+      Process.whereis(Webby.BrowserConnections)
+    )
+
+    assert :ok = Webby.BrowserConnections.register(browser_id, self())
+
+    call =
+      Task.async(fn ->
+        Webby.BrowserConnections.call(
+          browser_id,
+          %{"tool_name" => "in-flight"},
+          5_000,
+          {credential.id, "in-flight"},
+          nil,
+          credential.id
+        )
+      end)
+
+    assert_receive {:tool_call, %{"call_id" => call_id}}
+
+    owner =
+      spawn(fn ->
+        Credentials.revoke(credential.id,
+          after_persist: fn ->
+            send(parent, :revocation_committed)
+            receive do: (:never -> :ok)
+          end
+        )
+      end)
+
+    death_monitor = Process.monitor(owner)
+    assert_receive :revocation_committed
+    Application.delete_env(:webby, :credential_revocation_reconciler)
+    assert Credentials.revoked?(credential.id)
+
+    owner_token =
+      :sys.get_state(Webby.BrowserConnections).credential_barriers[credential.id].owners
+      |> Map.keys()
+      |> List.first()
+
+    assert :ok =
+             Webby.BrowserConnections.reconcile_owner_down(
+               :credential,
+               credential.id,
+               owner_token
+             )
+
+    assert :revoked =
+             :sys.get_state(Webby.BrowserConnections).credential_barriers[credential.id].status
+
+    Process.exit(owner, :kill)
+    assert_receive {:DOWN, ^death_monitor, :process, ^owner, :killed}
+
+    assert_receive {:tool_cancel, %{"call_id" => ^call_id}}
+    assert {:error, "revoked", _message} = Task.await(call)
+
+    assert {:error, "revoked", _message} =
+             Webby.BrowserConnections.call(browser_id, %{}, 100, nil, nil, credential.id)
   end
 end

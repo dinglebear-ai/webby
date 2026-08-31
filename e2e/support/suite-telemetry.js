@@ -21,6 +21,7 @@ function assertUnique(values, name) {
 
 function assertScenarioRun(run, index) {
   if (!run || typeof run.scenario_id !== "string" || run.scenario_id.length === 0 || !adapters.has(run.adapter) || !Number.isInteger(run.duration_ms) || run.duration_ms < 0 || !["passed", "failed"].includes(run.status)) throw new Error(`scenario telemetry line ${index + 1} is invalid`)
+  if (run.evidence_kind === "live_test_attestation" && (!Array.isArray(run.evidence_files) || run.evidence_files.length === 0 || !/^[a-f0-9]{64}$/.test(run.evidence_sha256 ?? ""))) throw new Error(`scenario telemetry line ${index + 1} has an invalid live-test attestation`)
 }
 
 export function parseScenarioTelemetry(text) {

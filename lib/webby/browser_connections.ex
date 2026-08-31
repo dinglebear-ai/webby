@@ -3,8 +3,12 @@ defmodule Webby.BrowserConnections do
   use GenServer
   require Logger
 
+  alias Webby.MCP.Credentials
+
   @timeout 15_000
   @max_pending_calls 100
+  @barrier_reconcile_retry_ms 1_000
+  @tombstone_ttl_ms 60_000
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
@@ -45,6 +49,10 @@ defmodule Webby.BrowserConnections do
 
   def finish_browser_erasure(browser_id, token, outcome),
     do: GenServer.call(__MODULE__, {:finish_browser_erasure, browser_id, token, outcome})
+
+  @doc false
+  def reconcile_owner_down(kind, id, token),
+    do: GenServer.call(__MODULE__, {:reconcile_owner_down, kind, id, token})
 
   def browser_admissible?(browser_id),
     do: GenServer.call(__MODULE__, {:browser_admissible, browser_id})
@@ -124,7 +132,16 @@ defmodule Webby.BrowserConnections do
         {:reply, revoked_error(), state}
 
       true ->
-        start_call(state, browser_id, payload, timeout, external_key, audit_id, from)
+        start_call(
+          state,
+          browser_id,
+          payload,
+          timeout,
+          external_key,
+          audit_id,
+          credential_id,
+          from
+        )
     end
   end
 
@@ -156,11 +173,16 @@ defmodule Webby.BrowserConnections do
     {:reply, {:ok, token}, %{state | credential_barriers: barriers}}
   end
 
+  def handle_call({:reconcile_owner_down, :credential, id, token}, _from, state),
+    do: reply_reconciled_owner(finish_dead_credential_owner(state, id, token))
+
+  def handle_call({:reconcile_owner_down, :browser, id, token}, _from, state),
+    do: reply_reconciled_owner(finish_dead_erasure_owner(state, id, token))
+
   def handle_call({:finish_credential_revocation, credential_id, token, :committed}, _from, state) do
     case finish_credential_owner(state, credential_id, token, :revoked) do
       {:ok, state} ->
-        ids = matching_calls(state, &match?({^credential_id, _request_id}, &1.external_key))
-        {:reply, :ok, finish_calls(state, ids, :credential_revoked)}
+        {:reply, :ok, commit_credential_revocation(state, credential_id)}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -199,7 +221,7 @@ defmodule Webby.BrowserConnections do
         end
 
         state = put_in(state, [:browser_erasures, browser_id], %{erasure | status: :erased})
-        {:reply, :ok, drop_connection(state, browser_id, "browser_erased")}
+        {:reply, :ok, commit_browser_erasure(state, browser_id)}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -287,6 +309,7 @@ defmodule Webby.BrowserConnections do
       nil ->
         case release_barrier_owner(state, monitor) do
           {:ok, state} ->
+            notify_barrier_down_processed(monitor)
             {:noreply, state}
 
           :not_found ->
@@ -297,7 +320,29 @@ defmodule Webby.BrowserConnections do
     end
   end
 
-  defp start_call(state, browser_id, payload, timeout, external_key, audit_id, from) do
+  def handle_info({:reconcile_barrier, kind, id}, state),
+    do: {:noreply, reconcile_barrier(state, kind, id)}
+
+  def handle_info({:expire_tombstone, :credential, credential_id}, state) do
+    barriers = expire_tombstone(state.credential_barriers, credential_id, :revoked)
+    {:noreply, %{state | credential_barriers: barriers}}
+  end
+
+  def handle_info({:expire_tombstone, :browser, browser_id}, state) do
+    erasures = expire_tombstone(state.browser_erasures, browser_id, :erased)
+    {:noreply, %{state | browser_erasures: erasures}}
+  end
+
+  defp start_call(
+         state,
+         browser_id,
+         payload,
+         timeout,
+         external_key,
+         audit_id,
+         credential_id,
+         from
+       ) do
     case state.connections[browser_id] do
       %{pid: pid, generation: generation} ->
         call_id = Ecto.UUID.generate()
@@ -314,6 +359,7 @@ defmodule Webby.BrowserConnections do
           timer: timer,
           payload: payload,
           external_key: external_key,
+          credential_id: credential_id,
           audit_id: audit_id
         }
 
@@ -440,6 +486,8 @@ defmodule Webby.BrowserConnections do
     end
   end
 
+  defp reply_reconciled_owner({:ok, state}), do: {:reply, :ok, state}
+
   defp find_barrier_owner(barriers, monitor) do
     Enum.find_value(barriers, :not_found, fn {id, %{owners: owners}} ->
       with {:ok, token} <- owner_for_monitor(owners, monitor), do: {:ok, id, token}
@@ -457,28 +505,147 @@ defmodule Webby.BrowserConnections do
     barrier = state.credential_barriers[credential_id]
     barrier = %{barrier | owners: Map.delete(barrier.owners, token)}
 
-    barriers =
-      if barrier.status == :revoking and map_size(barrier.owners) == 0,
-        do: Map.delete(state.credential_barriers, credential_id),
-        else: Map.put(state.credential_barriers, credential_id, barrier)
+    state =
+      %{state | credential_barriers: Map.put(state.credential_barriers, credential_id, barrier)}
 
-    {:ok, %{state | credential_barriers: barriers}}
+    state =
+      if barrier.status == :revoking and map_size(barrier.owners) == 0,
+        do: reconcile_barrier(state, :credential, credential_id),
+        else: state
+
+    {:ok, state}
   end
 
   defp finish_dead_erasure_owner(state, browser_id, token) do
     erasure = state.browser_erasures[browser_id]
     erasure = %{erasure | owners: Map.delete(erasure.owners, token)}
 
-    erasures =
-      if erasure.status == :erasing and map_size(erasure.owners) == 0,
-        do: Map.delete(state.browser_erasures, browser_id),
-        else: Map.put(state.browser_erasures, browser_id, erasure)
+    state = %{state | browser_erasures: Map.put(state.browser_erasures, browser_id, erasure)}
 
-    {:ok, %{state | browser_erasures: erasures}}
+    state =
+      if erasure.status == :erasing and map_size(erasure.owners) == 0,
+        do: reconcile_barrier(state, :browser, browser_id),
+        else: state
+
+    {:ok, state}
   end
+
+  defp reconcile_barrier(state, :credential, credential_id) do
+    case authoritative_credential_revoked?(credential_id) do
+      true ->
+        commit_credential_revocation(state, credential_id)
+
+      false ->
+        %{state | credential_barriers: Map.delete(state.credential_barriers, credential_id)}
+
+      {:error, reason} ->
+        retry_reconciliation(state, :credential, credential_id, reason)
+    end
+  end
+
+  defp reconcile_barrier(state, :browser, browser_id) do
+    case authoritative_browser_erased?(browser_id) do
+      true -> commit_browser_erasure(state, browser_id)
+      false -> %{state | browser_erasures: Map.delete(state.browser_erasures, browser_id)}
+      {:error, reason} -> retry_reconciliation(state, :browser, browser_id, reason)
+    end
+  end
+
+  defp authoritative_credential_revoked?(credential_id) do
+    checker =
+      Application.get_env(:webby, :credential_revocation_reconciler, fn id ->
+        Credentials.revoked?(id)
+      end)
+
+    checker.(credential_id)
+  rescue
+    exception -> {:error, exception}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp authoritative_browser_erased?(browser_id) do
+    checker =
+      Application.get_env(:webby, :browser_erasure_reconciler, fn id ->
+        Webby.DataRetention.erased?(id)
+      end)
+
+    checker.(browser_id)
+  rescue
+    exception -> {:error, exception}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp retry_reconciliation(state, kind, id, reason) do
+    Logger.error("barrier reconciliation failed; retaining fail-closed denial",
+      kind: kind,
+      id: id,
+      reason: inspect(reason)
+    )
+
+    Process.send_after(self(), {:reconcile_barrier, kind, id}, barrier_reconcile_retry_ms())
+    state
+  end
+
+  defp commit_credential_revocation(state, credential_id) do
+    barrier = Map.get(state.credential_barriers, credential_id, %{owners: %{}})
+    barrier = Map.put(barrier, :status, :revoked)
+
+    state = %{
+      state
+      | credential_barriers: Map.put(state.credential_barriers, credential_id, barrier)
+    }
+
+    ids = matching_calls(state, &(&1.credential_id == credential_id))
+    schedule_tombstone_expiry(:credential, credential_id)
+    finish_calls(state, ids, :credential_revoked)
+  end
+
+  defp commit_browser_erasure(state, browser_id) do
+    erasure = Map.get(state.browser_erasures, browser_id, %{owners: %{}})
+    erasure = Map.put(erasure, :status, :erased)
+
+    case state.connections[browser_id] do
+      %{pid: pid} -> send(pid, :browser_erased)
+      nil -> :ok
+    end
+
+    schedule_tombstone_expiry(:browser, browser_id)
+
+    state
+    |> put_in([:browser_erasures, browser_id], erasure)
+    |> drop_connection(browser_id, "browser_erased")
+  end
+
+  defp schedule_tombstone_expiry(kind, id),
+    do: Process.send_after(self(), {:expire_tombstone, kind, id}, tombstone_ttl_ms())
+
+  defp expire_tombstone(tombstones, id, expected_status) do
+    case tombstones[id] do
+      %{status: ^expected_status, owners: owners} when map_size(owners) == 0 ->
+        Map.delete(tombstones, id)
+
+      _other ->
+        tombstones
+    end
+  end
+
+  defp barrier_reconcile_retry_ms,
+    do: Application.get_env(:webby, :barrier_reconcile_retry_ms, @barrier_reconcile_retry_ms)
+
+  defp tombstone_ttl_ms,
+    do: Application.get_env(:webby, :barrier_tombstone_ttl_ms, @tombstone_ttl_ms)
 
   defp calls_for_monitor(state, monitor),
     do: matching_calls(state, &(&1.caller_monitor == monitor))
+
+  defp notify_barrier_down_processed(monitor) do
+    case Application.get_env(:webby, :barrier_down_observer) do
+      observer when is_function(observer, 1) -> observer.(monitor)
+      nil -> :ok
+    end
+  end
 
   defp complete_caller_down_audits(state, ids) do
     Enum.each(ids, fn id -> complete_caller_down_audit(state.calls[id].audit_id) end)
@@ -499,12 +666,48 @@ defmodule Webby.BrowserConnections do
         &Webby.Invocations.complete_audit/4
       )
 
-    operation = fn -> completion.(audit_id, "failed", "caller_down", 0) end
+    operation = fn ->
+      observe_audit_completion(
+        fn -> completion.(audit_id, "failed", "caller_down", 0) end,
+        audit_id
+      )
+    end
 
     case starter.(operation) do
       {:ok, _pid} -> :ok
       {:error, reason} -> complete_caller_down_audit_inline(operation, audit_id, reason)
     end
+  end
+
+  defp observe_audit_completion(operation, audit_id) do
+    case operation.() do
+      {:ok, _count} = result ->
+        result
+
+      {:error, reason} = error ->
+        Logger.error("caller-down audit completion failed",
+          audit_id: audit_id,
+          reason: inspect(reason)
+        )
+
+        error
+    end
+  rescue
+    exception ->
+      Logger.error("caller-down audit completion raised",
+        audit_id: audit_id,
+        reason: Exception.message(exception)
+      )
+
+      {:error, exception}
+  catch
+    kind, reason ->
+      Logger.error("caller-down audit completion terminated",
+        audit_id: audit_id,
+        reason: inspect({kind, reason})
+      )
+
+      {:error, {kind, reason}}
   end
 
   defp complete_caller_down_audit_inline(operation, audit_id, launch_reason) do

@@ -72,13 +72,27 @@ defmodule Webby.MCP.Credentials do
       {:error, :credential_unavailable}
   end
 
+  @doc false
+  def revoked?(id) do
+    case Repo.get(Credential, id) do
+      %Credential{revoked_at: %DateTime{}} -> true
+      %Credential{} -> false
+      nil -> false
+    end
+  rescue
+    exception in DBConnection.ConnectionError -> {:error, exception}
+  end
+
   def revoke(id, opts \\ []) do
     persist = Keyword.get(opts, :persist, &revoke_persisted/1)
+    after_persist = Keyword.get(opts, :after_persist, fn -> :ok end)
     {:ok, barrier_token} = Webby.BrowserConnections.begin_credential_revocation(id)
 
     try do
       case persist.(id) do
         {:ok, _credential} = result ->
+          :ok = after_persist.()
+
           :ok =
             Webby.BrowserConnections.finish_credential_revocation(id, barrier_token, :committed)
 

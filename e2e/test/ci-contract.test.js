@@ -3,7 +3,7 @@ import {mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile} from "node:fs/pr
 import {tmpdir} from "node:os"
 import {join, resolve} from "node:path"
 import test from "node:test"
-import {cleanupWorlds, initializeOwnedTempRoot, stageAttested, writeShardManifest} from "../support/ci-runner.js"
+import {cleanupWorlds, fullSuiteScenarioDenominators, initializeOwnedTempRoot, stageAttested, writeShardManifest} from "../support/ci-runner.js"
 import {ArtifactRecorder} from "../support/artifacts.js"
 
 const root = resolve(import.meta.dirname, "../..")
@@ -43,6 +43,17 @@ test("weighted manifests prove complete disjoint scenario assignment", async t =
   assert.equal(assigned.length, value.inventory.length)
   assert.equal(new Set(assigned).size, value.inventory.length)
   assert.deepEqual(value.selected, value.shards[1].scenarios)
+})
+
+test("full protocol and Chromium telemetry cover every authoritative scenario", async () => {
+  const denominators = fullSuiteScenarioDenominators()
+  const names = await (await import("node:fs/promises")).readdir(join(root, "e2e/contracts/scenarios"))
+  const contracts = await Promise.all(names.filter(name => name.endsWith(".json")).map(name => readFile(join(root, "e2e/contracts/scenarios", name), "utf8").then(JSON.parse)))
+  assert.deepEqual([...new Set(Object.values(denominators).flat())].sort(), contracts.map(contract => contract.id).sort())
+  for (const [suite, ids] of Object.entries(denominators)) {
+    const driver = suite.split("-")[0]
+    assert.deepEqual([...ids].sort(), contracts.filter(contract => contract.drivers.includes(driver)).map(contract => contract.id).sort())
+  }
 })
 
 test("workflows pin actions and enforce failure-only attested uploads plus always cleanup", async () => {

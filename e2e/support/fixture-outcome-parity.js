@@ -68,8 +68,8 @@ export function fixtureOutcomeActions({model = new SharedFixtureOutcomeModel(), 
     "fixture.discover": async ({boundary}) => {
       const catalog = terminal("succeeded", {names: ["deep", "delay", "json", "oversized", "side_effect", "text", "throw"], sanitized: true})
       const surfaceIds = ["in:discovery-observed", "capability:fixture", "world-field:fixture-url"]
-      const tokens = await Promise.all(surfaceIds.map(surfaceId => recorder.producers.fixture.event("fixture.catalog.observed", {scenario_id: scenario.id, surface_id: surfaceId, correlation: {scenario_id: scenario.id, operation: "fixture.discover", surface_id: surfaceId}})))
-      observeSurfaceProofs(boundary, Object.fromEntries(surfaceIds.map((surfaceId, index) => [surfaceId, surfaceProof.journal(tokens[index], surfaceId)])))
+      const token = await recorder.producers.fixture.event("fixture.catalog.observed", {surface_ids: surfaceIds, outcomes: {catalog}, correlation: {scenario_id: scenario.id, operation: "fixture.discover"}})
+      observeSurfaceProofs(boundary, Object.fromEntries(surfaceIds.map(surfaceId => [surfaceId, surfaceProof.fixtureOutcome(token, surfaceId)])))
       boundary.complete()
       return {observations: {"catalog.sanitized": catalog, "wait.fixture-tool-outcomes.catalog": catalog}}
     },
@@ -89,8 +89,8 @@ export function fixtureOutcomeActions({model = new SharedFixtureOutcomeModel(), 
       })
       const abort = {state: "aborted", terminal: true, value: {caller: cancellation.state, browser_work: cancellation.value.browser_work, late_result: cancellation.value.late_result, lifecycle: cancellation.value.lifecycle}}
       const surfaceIds = ["in:tool-result", "in:tool-error", "out:tool-call", "mcp:tools-call", "action:page-call", "ext-event:call", "ext-event:cancel", "fixture:json", "fixture:text", "fixture:throw", "fixture:delay", "fixture:cancel", "fixture:oversized", "fixture:deep", "fixture:side-effect"]
-      const tokens = await Promise.all(surfaceIds.map(surfaceId => recorder.producers.fixture.event("fixture.matrix.completed", {scenario_id: scenario.id, surface_id: surfaceId, correlation: {scenario_id: scenario.id, operation: "fixture.invoke-matrix", surface_id: surfaceId}})))
-      observeSurfaceProofs(boundary, Object.fromEntries(surfaceIds.map((surfaceId, index) => [surfaceId, surfaceProof.journal(tokens[index], surfaceId)])))
+      const token = await recorder.producers.fixture.event("fixture.matrix.completed", {surface_ids: surfaceIds, outcomes: {results, abort}, correlation: {scenario_id: scenario.id, operation: "fixture.invoke-matrix"}})
+      observeSurfaceProofs(boundary, Object.fromEntries(surfaceIds.map(surfaceId => [surfaceId, surfaceProof.fixtureOutcome(token, surfaceId)])))
       boundary.complete()
       return {observations: {"results.normalized": results, "abort.observed": abort, "wait.fixture-tool-outcomes.outcomes": results}}
     },

@@ -94,15 +94,23 @@ defmodule Webby.DataRetention do
   def erase_browser(browser_id, opts \\ []) do
     audit_policy = Keyword.get(opts, :audits, :anonymize)
     after_tombstone = Keyword.get(opts, :after_tombstone, fn -> :ok end)
+    after_persist = Keyword.get(opts, :after_persist, fn -> :ok end)
 
     if audit_policy in [:anonymize, :delete] do
-      erase_with_tombstone(browser_id, audit_policy, after_tombstone)
+      erase_with_tombstone(browser_id, audit_policy, after_tombstone, after_persist)
     else
       {:error, :invalid_audit_policy}
     end
   end
 
-  defp erase_with_tombstone(browser_id, audit_policy, after_tombstone) do
+  @doc false
+  def erased?(browser_id) do
+    not Repo.exists?(from browser in Browser, where: browser.id == ^browser_id)
+  rescue
+    exception in DBConnection.ConnectionError -> {:error, exception}
+  end
+
+  defp erase_with_tombstone(browser_id, audit_policy, after_tombstone, after_persist) do
     {:ok, erasure_token} = Webby.BrowserConnections.begin_browser_erasure(browser_id)
 
     try do
@@ -110,6 +118,8 @@ defmodule Webby.DataRetention do
 
       case erase_browser_with_policy(browser_id, audit_policy) do
         {:ok, _result} = result ->
+          :ok = after_persist.()
+
           :ok =
             Webby.BrowserConnections.finish_browser_erasure(
               browser_id,

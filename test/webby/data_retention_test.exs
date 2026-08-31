@@ -1,6 +1,7 @@
 defmodule Webby.DataRetentionTest do
   use Webby.DataCase, async: false
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias Webby.Browsers.{Browser, PairingRequest}
   alias Webby.DataRetention
   alias Webby.Discovery.Discovery
@@ -217,6 +218,60 @@ defmodule Webby.DataRetentionTest do
       assert Repo.get(Browser, browser.id)
       assert :ok = Webby.BrowserConnections.browser_admissible?(browser.id)
     end
+  end
+
+  test "owner death after erasure commit reconciles fail closed and disconnects existing work" do
+    browser = insert_browser()
+    parent = self()
+
+    Sandbox.allow(
+      Webby.Repo,
+      self(),
+      Process.whereis(Webby.BrowserConnections)
+    )
+
+    assert :ok = Webby.BrowserConnections.register(browser.id, self())
+
+    call = Task.async(fn -> Webby.BrowserConnections.call(browser.id, %{}, 5_000) end)
+    assert_receive {:tool_call, %{"call_id" => call_id}}
+
+    owner =
+      spawn(fn ->
+        DataRetention.erase_browser(browser.id,
+          after_persist: fn ->
+            send(parent, :erasure_committed)
+            receive do: (:never -> :ok)
+          end
+        )
+      end)
+
+    death_monitor = Process.monitor(owner)
+    assert_receive :erasure_committed
+    Application.delete_env(:webby, :browser_erasure_reconciler)
+    assert DataRetention.erased?(browser.id)
+
+    owner_token =
+      :sys.get_state(Webby.BrowserConnections).browser_erasures[browser.id].owners
+      |> Map.keys()
+      |> List.first()
+
+    assert :ok =
+             Webby.BrowserConnections.reconcile_owner_down(
+               :browser,
+               browser.id,
+               owner_token
+             )
+
+    assert :erased =
+             :sys.get_state(Webby.BrowserConnections).browser_erasures[browser.id].status
+
+    Process.exit(owner, :kill)
+    assert_receive {:DOWN, ^death_monitor, :process, ^owner, :killed}
+
+    assert_receive :browser_erased
+    assert_receive {:tool_cancel, %{"call_id" => ^call_id}}
+    assert {:error, "browser_erased", _message} = Task.await(call)
+    assert {:error, :browser_erased} = Webby.BrowserConnections.register(browser.id, self())
   end
 
   defp insert_browser do

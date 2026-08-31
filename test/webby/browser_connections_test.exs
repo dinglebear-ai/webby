@@ -92,6 +92,13 @@ defmodule Webby.BrowserConnectionsTest do
              )
 
     refute_receive {:tool_call, _payload}
+
+    assert :ok =
+             BrowserConnections.finish_credential_revocation(
+               credential_id,
+               barrier_token,
+               :aborted
+             )
   end
 
   test "browser erasure cancels calls and disconnects the owned channel" do
@@ -160,6 +167,12 @@ defmodule Webby.BrowserConnectionsTest do
     browser_id = Ecto.UUID.generate()
     parent = self()
 
+    Application.put_env(:webby, :browser_erasure_reconciler, fn _id -> false end)
+
+    on_exit(fn ->
+      Application.delete_env(:webby, :browser_erasure_reconciler)
+    end)
+
     dead_owner =
       spawn(fn ->
         assert {:ok, token} = BrowserConnections.begin_browser_erasure(browser_id)
@@ -170,18 +183,7 @@ defmodule Webby.BrowserConnectionsTest do
     assert_receive {:dead_erasure_owner_ready, dead_token}
     assert {:ok, live_token} = BrowserConnections.begin_browser_erasure(browser_id)
 
-    dead_monitor =
-      :sys.get_state(BrowserConnections).browser_erasures[browser_id].owners[dead_token]
-
-    :sys.replace_state(BrowserConnections, fn state ->
-      {:noreply, state} =
-        BrowserConnections.handle_info(
-          {:DOWN, dead_monitor, :process, dead_owner, :killed},
-          state
-        )
-
-      state
-    end)
+    process_barrier_down(:browser, browser_id, dead_token, dead_owner)
 
     assert {:error, :browser_erased} = BrowserConnections.browser_admissible?(browser_id)
     assert %{owners: owners} = :sys.get_state(BrowserConnections).browser_erasures[browser_id]
@@ -189,13 +191,19 @@ defmodule Webby.BrowserConnectionsTest do
     assert Map.has_key?(owners, live_token)
     assert :ok = BrowserConnections.finish_browser_erasure(browser_id, live_token, :aborted)
     assert :ok = BrowserConnections.browser_admissible?(browser_id)
-    send(dead_owner, :stop)
+    Process.exit(dead_owner, :kill)
   end
 
   test "credential revocation barriers release when their owner dies" do
     browser_id = Ecto.UUID.generate()
     credential_id = Ecto.UUID.generate()
     parent = self()
+    Application.put_env(:webby, :credential_revocation_reconciler, fn _id -> false end)
+
+    on_exit(fn ->
+      Application.delete_env(:webby, :credential_revocation_reconciler)
+    end)
+
     assert :ok = BrowserConnections.register(browser_id, self())
 
     owner =
@@ -210,15 +218,7 @@ defmodule Webby.BrowserConnectionsTest do
     assert {:error, "revoked", _message} =
              BrowserConnections.call(browser_id, %{}, 100, nil, nil, credential_id)
 
-    owner_monitor =
-      :sys.get_state(BrowserConnections).credential_barriers[credential_id].owners[token]
-
-    :sys.replace_state(BrowserConnections, fn state ->
-      {:noreply, state} =
-        BrowserConnections.handle_info({:DOWN, owner_monitor, :process, owner, :killed}, state)
-
-      state
-    end)
+    process_barrier_down(:credential, credential_id, token, owner)
 
     call =
       Task.async(fn -> BrowserConnections.call(browser_id, %{}, 500, nil, nil, credential_id) end)
@@ -232,7 +232,12 @@ defmodule Webby.BrowserConnectionsTest do
     })
 
     assert {:ok, :ok} = Task.await(call)
-    send(owner, :stop)
+    Process.exit(owner, :kill)
+  end
+
+  defp process_barrier_down(kind, id, token, owner) do
+    assert :ok = BrowserConnections.reconcile_owner_down(kind, id, token)
+    assert is_pid(owner)
   end
 
   test "rejects duplicate active external keys without disturbing the first call" do

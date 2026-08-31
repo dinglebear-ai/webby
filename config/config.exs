@@ -92,6 +92,8 @@ config :logger, :default_formatter,
     :outcome,
     :audit_id,
     :launch_reason,
+    :kind,
+    :id,
     :duration_ms
   ]
 
