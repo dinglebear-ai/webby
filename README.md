@@ -47,7 +47,7 @@ npm test --prefix extension
 
 The live E2E harness has reproducible protocol, Chromium, compatibility, and
 replay commands. See [Live E2E testing](docs/e2e-testing.md) for setup, CI tiers,
-budgets, artifact safety, and debugging. The quickest blocking local gate is:
+budgets, artifact safety, and debugging. A quick local smoke sequence is:
 
 ```bash
 npm ci --prefix e2e
@@ -55,6 +55,11 @@ npm ci --prefix e2e
 ./scripts/e2e protocol:pr
 ./scripts/e2e chromium:smoke
 ```
+
+The pull-request workflow additionally runs the deterministic contract and
+stress-seam gates, complete protocol and Chromium suites, and official MCP
+compatibility. See the testing guide for the complete PR-equivalent command set
+and budgets.
 
 For extension development, load the [`extension`](extension) directory as an
 unpacked Chrome extension, open its popup, set the loopback Webby URL if needed,

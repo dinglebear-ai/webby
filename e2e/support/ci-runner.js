@@ -25,6 +25,30 @@ async function writeEmptyCleanupAudit(report, details = {}) {
   return 0
 }
 
+async function persistCleanupReport(report) {
+  await mkdir(artifactRoot, {recursive: true, mode: 0o700})
+  const path = join(artifactRoot, "cleanup-report.json")
+  await writeFile(path, JSON.stringify(report, null, 2) + "\n", {mode: 0o600})
+  return path
+}
+
+async function stageCleanupFailure(reportPath, report) {
+  const recorderRoot = join(artifactRoot, "cleanup-attested")
+  const uploadRoot = join(artifactRoot, "upload", "cleanup")
+  await rm(recorderRoot, {recursive: true, force: true})
+  await rm(uploadRoot, {recursive: true, force: true})
+  const recorder = await new ArtifactRecorder({
+    root: recorderRoot,
+    scenarioId: "external-cleanup",
+    worldId: "ci-runner",
+    versions: {node: process.version},
+  }).open()
+  await recorder.ingest(reportPath, {name: "cleanup-report.json", kind: "report", essential: true})
+  await recorder.recordFailure("cleanup", {summary: `${report.failures.length} cleanup failure(s)`})
+  await recorder.finalize({status: "failed", cleanup: {external_reaper: "failed"}})
+  await stageAttested(recorder, uploadRoot)
+}
+
 export async function initializeOwnedTempRoot(prefix = "webby-ci-run-") {
   const root = await mkdtemp(join(tmpdir(), prefix))
   await writeFile(join(root, ownershipMarker), JSON.stringify({schema_version: 1, nonce: randomUUID(), created_by: "webby-ci-runner"}) + "\n", {flag: "wx", mode: 0o600})
@@ -253,8 +277,6 @@ export async function cleanupWorlds({temporaryRoot: suppliedRoot, recordedRoot: 
       if (error.code !== "ENOENT") report.failures.push({root: basename(root), error: error.message})
     }
   }
-  await mkdir(artifactRoot, {recursive: true, mode: 0o700})
-  await writeFile(join(artifactRoot, "cleanup-report.json"), JSON.stringify(report, null, 2) + "\n", {mode: 0o600})
   if (report.failures.length === 0) {
     let residue = (await readdir(temporaryRoot)).filter(name => name !== ownershipMarker)
     for (const name of residue.filter(value => value.startsWith("mix_lock_") || value.startsWith("mix_pubsub_"))) {
@@ -264,6 +286,14 @@ export async function cleanupWorlds({temporaryRoot: suppliedRoot, recordedRoot: 
     residue = (await readdir(temporaryRoot)).filter(name => name !== ownershipMarker)
     if (residue.length) report.failures.push({root: basename(temporaryRoot), error: `unattested residue remains: ${residue.join(",")}`})
     else { await rm(join(temporaryRoot, ownershipMarker)); await rmdir(temporaryRoot) }
+  }
+  let reportPath = await persistCleanupReport(report)
+  if (report.failures.length) {
+    try { await stageCleanupFailure(reportPath, report) }
+    catch (error) {
+      report.failures.push({root: "cleanup-evidence", error: `failed to attest cleanup report: ${error.message}`})
+      reportPath = await persistCleanupReport(report)
+    }
   }
   process.stdout.write(`${JSON.stringify(report)}\n`)
   return report.failures.length === 0 ? 0 : 1

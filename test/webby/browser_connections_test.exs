@@ -100,18 +100,60 @@ defmodule Webby.BrowserConnectionsTest do
 
     task = Task.async(fn -> BrowserConnections.call(browser_id, %{}, 500) end)
     assert_receive {:tool_call, %{"call_id" => call_id}}
-    assert :ok = BrowserConnections.begin_browser_erasure(browser_id)
+    assert {:ok, erasure_token} = BrowserConnections.begin_browser_erasure(browser_id)
 
     assert {:error, "browser_erased", _message} =
              BrowserConnections.call(browser_id, %{"late" => true}, 100)
 
     refute_receive {:tool_call, %{"late" => true}}
-    assert :ok = BrowserConnections.finish_browser_erasure(browser_id, :committed)
+
+    assert :ok =
+             BrowserConnections.finish_browser_erasure(browser_id, erasure_token, :committed)
+
     assert_receive :browser_erased
     assert_receive {:tool_cancel, %{"call_id" => ^call_id}}
 
     assert {:error, "browser_erased", _message} = Task.await(task)
     assert {:error, "browser_erased", _message} = BrowserConnections.call(browser_id, %{}, 100)
+  end
+
+  test "a committed browser erasure cannot be undone by another owner aborting" do
+    browser_id = Ecto.UUID.generate()
+    assert {:ok, committing_owner} = BrowserConnections.begin_browser_erasure(browser_id)
+    assert {:ok, aborting_owner} = BrowserConnections.begin_browser_erasure(browser_id)
+
+    assert :ok =
+             BrowserConnections.finish_browser_erasure(browser_id, committing_owner, :committed)
+
+    assert :ok =
+             BrowserConnections.finish_browser_erasure(browser_id, aborting_owner, :aborted)
+
+    assert {:error, :browser_erased} = BrowserConnections.browser_admissible?(browser_id)
+    assert {:error, :browser_erased} = BrowserConnections.register(browser_id, self())
+  end
+
+  test "an abort keeps the erasure barrier while another owner is active" do
+    browser_id = Ecto.UUID.generate()
+    assert {:ok, first_owner} = BrowserConnections.begin_browser_erasure(browser_id)
+    assert {:ok, second_owner} = BrowserConnections.begin_browser_erasure(browser_id)
+
+    assert :ok = BrowserConnections.finish_browser_erasure(browser_id, first_owner, :aborted)
+    assert {:error, :browser_erased} = BrowserConnections.browser_admissible?(browser_id)
+
+    assert :ok = BrowserConnections.finish_browser_erasure(browser_id, second_owner, :aborted)
+    assert :ok = BrowserConnections.browser_admissible?(browser_id)
+  end
+
+  test "only a browser erasure owner can finish its operation" do
+    browser_id = Ecto.UUID.generate()
+    assert {:ok, owner} = BrowserConnections.begin_browser_erasure(browser_id)
+
+    assert {:error, :not_erasure_owner} =
+             BrowserConnections.finish_browser_erasure(browser_id, make_ref(), :aborted)
+
+    assert {:error, :browser_erased} = BrowserConnections.browser_admissible?(browser_id)
+    assert :ok = BrowserConnections.finish_browser_erasure(browser_id, owner, :aborted)
+    assert :ok = BrowserConnections.browser_admissible?(browser_id)
   end
 
   test "rejects duplicate active external keys without disturbing the first call" do

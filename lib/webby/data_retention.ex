@@ -103,23 +103,33 @@ defmodule Webby.DataRetention do
   end
 
   defp erase_with_tombstone(browser_id, audit_policy, after_tombstone) do
-    :ok = Webby.BrowserConnections.begin_browser_erasure(browser_id)
+    {:ok, erasure_token} = Webby.BrowserConnections.begin_browser_erasure(browser_id)
 
     try do
       :ok = after_tombstone.()
 
       case erase_browser_with_policy(browser_id, audit_policy) do
         {:ok, _result} = result ->
-          :ok = Webby.BrowserConnections.finish_browser_erasure(browser_id, :committed)
+          :ok =
+            Webby.BrowserConnections.finish_browser_erasure(
+              browser_id,
+              erasure_token,
+              :committed
+            )
+
           result
 
         error ->
-          :ok = Webby.BrowserConnections.finish_browser_erasure(browser_id, :aborted)
+          :ok =
+            Webby.BrowserConnections.finish_browser_erasure(browser_id, erasure_token, :aborted)
+
           error
       end
     rescue
       exception ->
-        :ok = Webby.BrowserConnections.finish_browser_erasure(browser_id, :aborted)
+        :ok =
+          Webby.BrowserConnections.finish_browser_erasure(browser_id, erasure_token, :aborted)
+
         reraise exception, __STACKTRACE__
     end
   end

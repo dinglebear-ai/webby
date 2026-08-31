@@ -59,6 +59,20 @@ test("runner fails closed for a dropped observation and still cleans up", async 
   await assert.rejects(runner.run(), error => error.code === "missing_observation"); assert.equal(cleaned, true); await recorder.finalize()
 })
 
+test("instrumented runner rejects a completed action that omitted verified boundary evidence", async t => {
+  const recorder = await syntheticRecorder(t, scenarioTemplate.id)
+  const actions = Object.fromEntries(scenarioTemplate.steps.map(step => [step.action.op, async () => ({observations: {[step.wait.predicate.subject]: {state: "present", value: true}}})]))
+  const cleanup = async () => ({
+    "cleanup.all.child.processes.exit": {state: "closed"},
+    "cleanup.all.listeners.close": {state: "closed"},
+    "cleanup.temporary.database.and.profile.are.removable": {state: "removable"},
+    "cleanup.no.active.sessions.remain.after.shutdown": {state: "absent"},
+  })
+  const runner = new ScenarioRunner({scenario: scenarioTemplate, driver: "protocol", world: {worldId: "world-unit", instanceNonce: "nonce", seed: 1}, recorder, actions, observe: async () => ({}), cleanup})
+  await assert.rejects(runner.run(), /verified boundary completion evidence is missing/)
+  await recorder.finalize()
+})
+
 test("runner enforces declared action order rather than parallelizing dependent steps", async t => {
   const recorder = await syntheticRecorder(t, "e2e-action-order"); const order = []
   const step = id => ({id, action: {op: "health.request", params: {id}}, wait: {predicate: {kind: "present", subject: `${id}.done`}, timeout_ms: 100}})
@@ -108,11 +122,11 @@ test("complete simulated protocol pair-to-audit vertical slice", {timeout: 120_0
   let observation; let discoveryId; let registrationId; let browserId; let credentialId; let auditId; let callResponse; let credentialLease
   const toolCall = new Promise(resolve => browser.once("tool.call", resolve))
   const actions = {
-    "health.request": async () => { const response = await fetch(`${world.baseUrl}/health`); const ready = {state: response.ok ? "ready" : "failed", value: response.ok}; return {handles: {world: world.worldId}, observations: {"health.ready": ready, "wait.shared-vertical-slice.health": ready}} },
-    "browser.pair": async () => { await browser.connect(); const pending = await browser.pair({displayName: "Scenario Simulator"}); await dashboard.refresh(); browserId = await dashboard.approvePairing(pending.pairing_id, "Scenario Simulator"); await browser.authenticate(browserId); const authenticated = {state: "recovered", value: true}; return {handles: {pairing: pending.pairing_id, browser: browserId}, observations: {"browser.authenticated": authenticated, "wait.shared-vertical-slice.pair": {state: "succeeded", terminal: true, value: browserId}}} },
-    "discovery.publish": async () => { observation = browser.observation(42, {origin: "https://scenario.fixture", toolCount: 1}); await browser.observe([observation]); await dashboard.refresh(); const row = await dashboard.rowByText("discoveries", "discovery", "Fixture 42"); discoveryId = (await row.getAttribute("id")).slice("discovery-".length); registrationId = await dashboard.registerDiscovery(discoveryId, "Fixture 42"); await browser.observe([observation]); await dashboard.refresh(); await dashboard.registrationSessionCount(registrationId, 1); const available = {state: "present", value: registrationId}; return {handles: {page: registrationId, document: observation.document_id, session: `${browserId}:${observation.tab_id}:${observation.document_id}`}, observations: {"page.available": available, "wait.shared-vertical-slice.discover": available}} },
-    "credential.create": async () => { credentialLease = await dashboard.acquireCredential("call"); credentialId = credentialLease.id; return {handles: {credential: credentialId}, observations: {"wait.shared-vertical-slice.credential": {state: "present", value: true}}} },
-    "mcp.invoke": async ({handles}) => credentialLease.use(async secret => {
+    "health.request": async ({boundary}) => { const response = await fetch(`${world.baseUrl}/health`); const ready = {state: response.ok ? "ready" : "failed", value: response.ok}; boundary.complete(); return {handles: {world: world.worldId}, observations: {"health.ready": ready, "wait.shared-vertical-slice.health": ready}} },
+    "browser.pair": async ({boundary}) => { await browser.connect(); const pending = await browser.pair({displayName: "Scenario Simulator"}); await dashboard.refresh(); browserId = await dashboard.approvePairing(pending.pairing_id, "Scenario Simulator"); await browser.authenticate(browserId); const authenticated = {state: "recovered", value: true}; boundary.complete(); return {handles: {pairing: pending.pairing_id, browser: browserId}, observations: {"browser.authenticated": authenticated, "wait.shared-vertical-slice.pair": {state: "succeeded", terminal: true, value: browserId}}} },
+    "discovery.publish": async ({boundary}) => { observation = browser.observation(42, {origin: "https://scenario.fixture", toolCount: 1}); await browser.observe([observation]); await dashboard.refresh(); const row = await dashboard.rowByText("discoveries", "discovery", "Fixture 42"); discoveryId = (await row.getAttribute("id")).slice("discovery-".length); registrationId = await dashboard.registerDiscovery(discoveryId, "Fixture 42"); await browser.observe([observation]); await dashboard.refresh(); await dashboard.registrationSessionCount(registrationId, 1); const available = {state: "present", value: registrationId}; boundary.complete(); return {handles: {page: registrationId, document: observation.document_id, session: `${browserId}:${observation.tab_id}:${observation.document_id}`}, observations: {"page.available": available, "wait.shared-vertical-slice.discover": available}} },
+    "credential.create": async ({boundary}) => { credentialLease = await dashboard.acquireCredential("call"); credentialId = credentialLease.id; boundary.complete(); return {handles: {credential: credentialId}, observations: {"wait.shared-vertical-slice.credential": {state: "present", value: true}}} },
+    "mcp.invoke": async ({handles, boundary}) => credentialLease.use(async secret => {
       assert.equal(handles.get("browser", "browser"), browserId); assert.equal(handles.get("credential", "credential"), credentialId)
       mcp = new MCPClient({baseUrl: world.baseUrl, token: secret, version: "2025-06-18", recorder: {record: recorder.producers.mcp.event}}); await mcp.initialize()
       const pages = await mcp.call({action: "page.list"}); const pageList = pages.body.result.structuredContent ?? JSON.parse(pages.body.result.content[0].text); const registered = pageList.find(item => item.id === registrationId); assert.equal(registered.available, true)
@@ -120,10 +134,10 @@ test("complete simulated protocol pair-to-audit vertical slice", {timeout: 120_0
       const effect = {probe: "scenario-effect"}; const expectedResult = {echo: effect.probe}
       const pending = mcp.call({action: "page.call", params: {page: registrationId, session: session.id, tool: "tool_0", catalog_revision: session.catalog_revision, arguments: effect}}); const call = await toolCall
       assert.deepEqual(call.arguments, effect); assert.equal(call.tool_name, "tool_0"); await browser.result(call.call_id, expectedResult); callResponse = await pending; mcp.close(); mcp.token = undefined
-      assert.deepEqual(callResponse.body.result.structuredContent, expectedResult)
+      assert.deepEqual(callResponse.body.result.structuredContent, expectedResult); boundary.complete()
       return {handles: {call: call.call_id}, observations: {"call.succeeded": {state: "succeeded", terminal: true, value: callResponse.body.result.structuredContent}, "wait.shared-vertical-slice.invoke": {state: "present", value: true}}}
     }),
-    "audit.observe": async () => { const audits = await sqlite(world.databasePath, `SELECT id, credential_id, browser_id, outcome, tool_name FROM invocation_audits WHERE credential_id='${credentialId}'`); assert.equal(audits.length, 1); assert.equal(audits[0].browser_id, browserId); assert.equal(audits[0].outcome, "succeeded"); assert.equal(audits[0].tool_name, "tool_0"); auditId = audits[0].id; return {handles: {audit: auditId}, observations: {"audit.once": {state: "present", value: 1}, "wait.shared-vertical-slice.audit": {state: "present", value: true}}} },
+    "audit.observe": async ({boundary}) => { const audits = await sqlite(world.databasePath, `SELECT id, credential_id, browser_id, outcome, tool_name FROM invocation_audits WHERE credential_id='${credentialId}'`); assert.equal(audits.length, 1); assert.equal(audits[0].browser_id, browserId); assert.equal(audits[0].outcome, "succeeded"); assert.equal(audits[0].tool_name, "tool_0"); auditId = audits[0].id; boundary.complete(); return {handles: {audit: auditId}, observations: {"audit.once": {state: "present", value: 1}, "wait.shared-vertical-slice.audit": {state: "present", value: true}}} },
   }
   const observe = async () => ({})
   const cleanup = async () => {

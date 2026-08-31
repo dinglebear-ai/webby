@@ -7,7 +7,7 @@ import {runHarnessSelfTests} from "../support/harness-self-test.js"
 import {buildSuiteTelemetry, parseScenarioTelemetry, writeSuiteTelemetry} from "../support/suite-telemetry.js"
 import {loadSurfaceInventory, validateObservedSurfaces, writeSurfaceEvidence} from "../support/surface-evidence.js"
 import {readScenarioContract} from "../support/runtime-contracts.js"
-import {validateBoundaryDenominator} from "../support/boundary-surfaces.js"
+import {createBoundaryObservation, validateBoundaryDenominator} from "../support/boundary-surfaces.js"
 
 test("suite telemetry reports non-secret cost and stability measurements", async t => {
   const root = await mkdtemp(join(tmpdir(), "webby-telemetry-")); t.after(() => rm(root, {recursive: true, force: true}))
@@ -20,6 +20,8 @@ test("suite telemetry reports non-secret cost and stability measurements", async
   assert.deepEqual(parseScenarioTelemetry(scenarioRuns.map(row => JSON.stringify(row)).join("\n")), scenarioRuns)
   assert.throws(() => buildSuiteTelemetry({suite: "bad suite", status: "passed", startedAt, finishedAt}), /identity/)
   assert.throws(() => buildSuiteTelemetry({suite: "ok", status: "passed", startedAt, finishedAt, plannedScenarioIds: ["missing"]}), /denominator drifted/)
+  assert.throws(() => buildSuiteTelemetry({suite: "ok", status: "passed", startedAt, finishedAt, plannedScenarioIds: ["e2e-a"], scenarioRuns: [{scenario_id: "e2e-a", adapter: "protocol", duration_ms: 1, status: "failed"}]}), /contains failed scenario runs/)
+  assert.throws(() => buildSuiteTelemetry({suite: "ok", status: "passed", startedAt, finishedAt, infrastructureError: "spawn failed"}), /contains an infrastructure error/)
   const failed = buildSuiteTelemetry({suite: "protocol-full", status: "failed", startedAt, finishedAt, plannedScenarioIds: ["e2e-a"], scenarioRuns: [], infrastructureError: "spawn failed"})
   assert.equal(failed.evidence_complete, false); assert.equal(failed.infrastructure_error, "spawn failed")
   assert.throws(() => parseScenarioTelemetry("{bad"), /malformed/)
@@ -38,6 +40,16 @@ test("adapter surface evidence must exactly equal declarations and inventory map
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: [...scenario.surface_ids, "surface:invented"], inventory}), /undeclared=.*surface:invented/)
   const unmapped = structuredClone(inventory); unmapped.surfaces.find(row => row.id === scenario.surface_ids[0]).scenarios = []
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, inventory: unmapped}), /inventory does not map/)
+})
+
+test("runtime boundary evidence exists only after the adapter emits verified completion", () => {
+  const boundary = createBoundaryObservation("e2e-shared-vertical-slice", "health.request")
+  assert.throws(() => boundary.consume(), /completion evidence is missing/)
+  const evidence = boundary.complete()
+  assert.equal(boundary.consume(), evidence)
+  assert.equal(evidence.state, "verified")
+  assert.ok(evidence.surface_ids.includes("http:get-health"))
+  assert.throws(() => boundary.complete(), /more than once/)
 })
 
 test("scheduled self-test executes deliberate fail-closed seams", async () => {

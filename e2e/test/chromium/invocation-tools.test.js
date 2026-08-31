@@ -384,9 +384,9 @@ test("real Chromium exhausts fixture outcomes, catalog mutation, cancellation, a
     const chromiumRunner = new ScenarioRunner({
       scenario: fixtureContract, driver: "chromium", world, recorder: chromiumRecorder,
       actions: {
-        "fixture.discover": async () => ({observations: {"catalog.sanitized": chromiumCatalog, "wait.fixture-tool-outcomes.catalog": chromiumCatalog}}),
-        "fixture.invoke-matrix": async () => ({observations: {"results.normalized": chromiumResults, "abort.observed": chromiumAbort, "wait.fixture-tool-outcomes.outcomes": chromiumResults}}),
-        "fixture.mutate": async () => ({observations: {"stale.rejected": chromiumStale, "wait.fixture-tool-outcomes.mutation": chromiumStale}}),
+        "fixture.discover": async ({boundary}) => { boundary.complete(); return {observations: {"catalog.sanitized": chromiumCatalog, "wait.fixture-tool-outcomes.catalog": chromiumCatalog}} },
+        "fixture.invoke-matrix": async ({boundary}) => { boundary.complete(); return {observations: {"results.normalized": chromiumResults, "abort.observed": chromiumAbort, "wait.fixture-tool-outcomes.outcomes": chromiumResults}} },
+        "fixture.mutate": async ({boundary}) => { boundary.complete(); return {observations: {"stale.rejected": chromiumStale, "wait.fixture-tool-outcomes.mutation": chromiumStale}} },
       },
       observe: async () => ({}), cleanup: parityCleanup,
     })

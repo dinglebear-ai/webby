@@ -44,9 +44,9 @@ export async function runLifecycleScenario({scenario, driver, world, recorder, n
     return [item.predicate.subject, value]
   }))
   const runner = new ScenarioRunner({scenario, driver, world, recorder, actions: {
-    "lifecycle.trigger": async () => ({observations: {"wait.lifecycle-removal.trigger": {state: "terminal", terminal: true}}}),
-    "lifecycle.observe-terminal": async () => ({observations: {...observations, "wait.lifecycle-removal.terminal": {state: "terminal", terminal: true}}}),
-    "lifecycle.recover": async () => ({observations: {"wait.lifecycle-removal.recover": {state: "recovered", terminal: true}}}),
+    "lifecycle.trigger": async ({boundary}) => { boundary.complete(); return {observations: {"wait.lifecycle-removal.trigger": {state: "terminal", terminal: true}}} },
+    "lifecycle.observe-terminal": async ({boundary}) => { boundary.complete(); return {observations: {...observations, "wait.lifecycle-removal.terminal": {state: "terminal", terminal: true}}} },
+    "lifecycle.recover": async ({boundary}) => { boundary.complete(); return {observations: {"wait.lifecycle-removal.recover": {state: "recovered", terminal: true}}} },
   }, observe: async () => ({}), cleanup})
   const result = await runner.run()
   return {...result, normalized: Object.fromEntries(lifecycleParityKeys.map(key => {

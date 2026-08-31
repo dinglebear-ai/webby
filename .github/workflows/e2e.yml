@@ -77,7 +77,7 @@ jobs:
         if: always()
         run: npm --prefix e2e run cleanup
       - name: Upload attested sanitized failure evidence
-        if: failure() && hashFiles('e2e/artifacts/upload/upload-attestation.json') != ''
+        if: failure() && (hashFiles('e2e/artifacts/upload/upload-attestation.json') != '' || hashFiles('e2e/artifacts/upload/cleanup/upload-attestation.json') != '')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with: {name: protocol-pr-sanitized, path: e2e/artifacts/upload, retention-days: 7, if-no-files-found: error, compression-level: 6}
 
@@ -108,7 +108,7 @@ jobs:
         if: always()
         run: npm --prefix e2e run cleanup
       - name: Upload attested sanitized failure evidence
-        if: failure() && hashFiles('e2e/artifacts/upload/upload-attestation.json') != ''
+        if: failure() && (hashFiles('e2e/artifacts/upload/upload-attestation.json') != '' || hashFiles('e2e/artifacts/upload/cleanup/upload-attestation.json') != '')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with: {name: chromium-pr-sanitized, path: e2e/artifacts/upload, retention-days: 7, if-no-files-found: error, compression-level: 6}
 
@@ -147,7 +147,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with: {name: "full-${{ strategy.job-index }}-telemetry", path: e2e/artifacts/suite-telemetry.json, retention-days: 30, if-no-files-found: error, compression-level: 6}
       - name: Upload attested sanitized failure evidence
-        if: failure() && hashFiles('e2e/artifacts/upload/upload-attestation.json') != ''
+        if: failure() && (hashFiles('e2e/artifacts/upload/upload-attestation.json') != '' || hashFiles('e2e/artifacts/upload/cleanup/upload-attestation.json') != '')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with: {name: "main-${{ strategy.job-index }}-sanitized", path: e2e/artifacts/upload, retention-days: 14, if-no-files-found: error, compression-level: 6}
 
@@ -178,6 +178,6 @@ jobs:
         if: always()
         run: npm --prefix e2e run cleanup
       - name: Upload attested sanitized failure evidence
-        if: failure() && hashFiles('e2e/artifacts/upload/upload-attestation.json') != ''
+        if: failure() && (hashFiles('e2e/artifacts/upload/upload-attestation.json') != '' || hashFiles('e2e/artifacts/upload/cleanup/upload-attestation.json') != '')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with: {name: mcp-compat-sanitized, path: e2e/artifacts/upload, retention-days: 14, if-no-files-found: error, compression-level: 6}

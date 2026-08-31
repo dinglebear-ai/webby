@@ -28,6 +28,28 @@ export function observedBoundarySurfaces(scenarioId, operation) {
   return scenario[operation]
 }
 
+/**
+ * A one-shot completion observation owned by the executing adapter action.
+ * Merely selecting an operation never creates evidence: the action must emit
+ * completion after its live boundary assertions have passed.
+ */
+export function createBoundaryObservation(scenarioId, operation) {
+  const surfaces = observedBoundarySurfaces(scenarioId, operation)
+  if (surfaces === undefined) return undefined
+  let evidence
+  return Object.freeze({
+    complete() {
+      if (evidence) throw new Error(`${scenarioId}/${operation}: boundary completion was emitted more than once`)
+      evidence = Object.freeze({schema_version: 1, scenario_id: scenarioId, operation, state: "verified", surface_ids: Object.freeze([...surfaces])})
+      return evidence
+    },
+    consume() {
+      if (!evidence) throw new Error(`${scenarioId}/${operation}: verified boundary completion evidence is missing`)
+      return evidence
+    },
+  })
+}
+
 export function validateBoundaryDenominator(scenario) {
   const mapping = boundaries[scenario.id]
   if (!mapping) throw new Error(`${scenario.id}: runtime boundary mapping is required`)

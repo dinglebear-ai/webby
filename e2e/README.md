@@ -14,18 +14,23 @@ npm run validate
 npm test                 # deterministic unit/contract suite only
 ```
 
-Stable lane commands live in this package and are the only commands CI calls:
+Stable functional lane commands live in this package:
 
 ```bash
 npm run ci:contract
 npm run protocol:pr       # PR protocol, zero retries
-npm run protocol:full     # main/nightly lifecycle
+npm run protocol:full     # PR/main complete protocol lifecycle
 npm run chromium:smoke    # PR Chromium, one worker, zero retries
-npm run chromium:full     # main/manual complete Chromium lifecycle
+npm run chromium:full     # PR/main complete Chromium lifecycle
 npm run mcp:compat        # pinned official MCP client
 npm run replay -- artifacts/attested/sanitized-staging
 npm run cleanup           # external reaper and final leak audit
 ```
+
+CI also invokes the deterministic assurance and orchestration entry points
+`toolchains`, `typecheck:stress`, `test:stress`, `harness:self-test`,
+`test:stress:live`, and `manifest`. These verify the harness and select work;
+they are not alternate functional behavior matrices.
 
 The default `npm test` command intentionally excludes tests that launch a Webby
 world, official MCP client, or Chromium. Live qualification is explicit through

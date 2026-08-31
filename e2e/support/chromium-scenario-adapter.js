@@ -28,12 +28,12 @@ export class ChromiumScenarioAdapter {
 
   actions() {
     return {
-      "health.request": () => this.health(),
-      "browser.pair": () => this.pair(),
-      "discovery.publish": () => this.discover(),
-      "credential.create": () => this.credential(),
+      "health.request": context => this.health(context),
+      "browser.pair": context => this.pair(context),
+      "discovery.publish": context => this.discover(context),
+      "credential.create": context => this.credential(context),
       "mcp.invoke": context => this.invoke(context),
-      "audit.observe": () => this.audit(),
+      "audit.observe": context => this.audit(context),
     }
   }
 
@@ -41,13 +41,14 @@ export class ChromiumScenarioAdapter {
     assert.equal(await this.chromium.driver.configure({mode: "all_tabs"}), "Saved.")
   }
 
-  async health() {
+  async health({boundary}) {
     const response = await fetch(`${this.world.baseUrl}/health`)
     const ready = {state: response.ok ? "ready" : "failed", value: response.ok}
+    boundary.complete()
     return {handles: {world: this.world.worldId}, observations: {"health.ready": ready, "wait.shared-vertical-slice.health": ready}}
   }
 
-  async pair() {
+  async pair({boundary}) {
     const pending = await this.chromium.driver.pair("Chrome")
     const pairingSocketAttempts = await this.chromium.driver.socketAttempts()
     const approved = this.chromium.driver.waitForStorageValue("browserId", {timeoutMs: 2_000})
@@ -58,13 +59,14 @@ export class ChromiumScenarioAdapter {
     await this.chromium.driver.waitForSocketAttempts(pairingSocketAttempts + 1)
     assert.equal(await this.chromium.driver.waitForStorageValue("e2eAuthenticatedBrowserId", {timeoutMs: 5_000}), this.browserId)
     const authenticated = {state: "recovered", value: true}
+    boundary.complete()
     return {handles: {pairing: pending.pairing_id, browser: this.browserId}, observations: {
       "browser.authenticated": authenticated,
       "wait.shared-vertical-slice.pair": {state: "succeeded", terminal: true, value: this.browserId},
     }}
   }
 
-  async discover() {
+  async discover({boundary}) {
     this.fixturePage ??= await this.chromium.driver.newFixtureTab("/")
     await this.fixturePage.bringToFront()
     await this.fixturePage.waitForFunction(() => typeof document.modelContext?.getTools === "function")
@@ -85,18 +87,20 @@ export class ChromiumScenarioAdapter {
     const storage = await this.chromium.driver.storage("browserId")
     const probe = await this.chromium.driver.capabilityProbe(this.fixturePage)
     const available = {state: "present", value: this.registrationId}
+    boundary.complete()
     return {handles: {page: this.registrationId, document: probe.page_instance_id, session: `${storage.browserId}:${probe.tab_id}:${probe.page_instance_id}`}, observations: {
       "page.available": available, "wait.shared-vertical-slice.discover": available,
     }}
   }
 
-  async credential() {
+  async credential({boundary}) {
     this.credentialLease = await this.dashboard.acquireCredential("call")
     this.credentialId = this.credentialLease.id
+    boundary.complete()
     return {handles: {credential: this.credentialId}, observations: {"wait.shared-vertical-slice.credential": {state: "present", value: true}}}
   }
 
-  async invoke({handles}) {
+  async invoke({handles, boundary}) {
     return this.credentialLease.use(async token => {
       assert.equal(handles.get("browser", "browser"), this.browserId)
       assert.equal(handles.get("credential", "credential"), this.credentialId)
@@ -119,6 +123,7 @@ export class ChromiumScenarioAdapter {
       assert.equal(snapshot.calls.filter(([, call]) => call.name === "echo" && call.status === "completed").length, 1)
       this.callResponse = response
       this.mcp.close(); this.mcp.token = undefined
+      boundary.complete()
       return {handles: {call: `chromium:${session.id}:echo`}, observations: {
         "call.succeeded": {state: "succeeded", terminal: true, value: effect},
         "wait.shared-vertical-slice.invoke": {state: "present", value: true},
@@ -126,11 +131,12 @@ export class ChromiumScenarioAdapter {
     })
   }
 
-  async audit() {
+  async audit({boundary}) {
     const audits = await sqlite(this.world.databasePath, `SELECT id, credential_id, browser_id, registration_id, outcome, tool_name FROM invocation_audits WHERE credential_id='${this.credentialId}'`)
     assert.equal(audits.length, 1); assert.equal(audits[0].browser_id, this.browserId)
     assert.equal(audits[0].registration_id, this.registrationId); assert.equal(audits[0].outcome, "succeeded"); assert.equal(audits[0].tool_name, "echo")
     this.auditId = audits[0].id
+    boundary.complete()
     return {handles: {audit: this.auditId}, observations: {
       "audit.once": {state: "present", value: 1}, "wait.shared-vertical-slice.audit": {state: "present", value: true},
     }}

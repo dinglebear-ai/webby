@@ -59,6 +59,9 @@ test("runtime contract validation rejects duplicate semantics and non-scalar sec
   const invalidTriple = structuredClone(valid);
   invalidTriple.security_matrices[0].mandated_triples[0].undeclared = "nope";
   assert.throws(() => assertScenarioContract(invalidTriple), /undeclared dimension/);
+  const invalidParams = structuredClone(valid);
+  invalidParams.steps[0].action.params = {adapter_invents_semantics: true};
+  assert.throws(() => assertScenarioContract(invalidParams), /parameters are invalid/);
 });
 
 test("every registered extractor has a positive golden and unmapped mutation guard", async (context) => {

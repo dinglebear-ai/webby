@@ -99,7 +99,7 @@ test("pairing terminal states clear only after durable approval and reject malfo
   const operations = [];
   chrome.storage.local.set = async (value) => { operations.push(["set", value]); };
   chrome.storage.local.remove = async (key) => { operations.push(["remove", key]); };
-  const {pairingTransition, reconcilePairingStatus, recoverPairingPersistence, transientErrorKind} = await import(`../src/service_worker.js?pairing-status=${Date.now()}`);
+  const {lookupExecutableTab, pairingTransition, persistApprovedPairing, reconcilePairingStatus, recoverPairingPersistence, transientCancellationDiagnostic, transientErrorKind} = await import(`../src/service_worker.js?pairing-status=${Date.now()}`);
   await tick();
 
   assert.deepEqual(pairingTransition({payload: {status: "pending"}}), {state: "pending", terminal: false});
@@ -130,6 +130,19 @@ test("pairing terminal states clear only after durable approval and reject malfo
   await assert.rejects(reconcilePairingStatus({payload: {status: "approved", browser_id: "123e4567-e89b-42d3-a456-426614174001"}}), /persistence failed/);
   assert.equal(removed, false);
 
+  const pushedOperations = [];
+  chrome.storage.local.set = async value => { pushedOperations.push(["set", value]); };
+  chrome.storage.local.remove = async key => { pushedOperations.push(["remove", key]); };
+  await persistApprovedPairing("123e4567-e89b-42d3-a456-426614174002");
+  assert.deepEqual(pushedOperations, [
+    ["set", {browserId: "123e4567-e89b-42d3-a456-426614174002"}],
+    ["remove", "pairingId"]
+  ]);
+  for (const malformed of [undefined, "", "browser-1", "123e4567-e89b-02d3-a456-426614174000"]) {
+    await assert.rejects(persistApprovedPairing(malformed), /invalid_pairing_status/);
+  }
+  assert.equal(pushedOperations.length, 2);
+
   const recovery = [];
   chrome.storage.local.remove = async key => recovery.push(key);
   assert.equal(await recoverPairingPersistence({browserId: "123e4567-e89b-42d3-a456-426614174001", pairingId: "pairing-2"}), true);
@@ -142,6 +155,28 @@ test("pairing terminal states clear only after durable approval and reject malfo
   assert.equal(transientErrorKind("scan_injection", new Error("Frame with ID 0 was removed")), "frame_gone");
   assert.equal(transientErrorKind("scan_injection", new Error("Cannot access contents of url chrome://settings")), null);
   assert.equal(transientErrorKind("observation_close", new Error("channel_not_ready")), null);
+
+  assert.deepEqual(
+    transientCancellationDiagnostic(
+      {call_id: "call-1", document_id: "doc-1"},
+      {tab_id: 42, document_id: "doc-1"},
+      new Error("No tab with id: 42")
+    ),
+    {callId: "call-1", tabId: 42, documentId: "doc-1", kind: "tab_gone"}
+  );
+  assert.equal(
+    transientCancellationDiagnostic(
+      {call_id: "call-1", document_id: "doc-1"},
+      {tab_id: 42, document_id: "doc-1"},
+      new Error("permission denied")
+    ),
+    null
+  );
+
+  chrome.tabs.get = async () => { throw new Error("No tab with id: 42"); };
+  assert.equal(await lookupExecutableTab(42), undefined);
+  chrome.tabs.get = async () => { throw new Error("unexpected lookup failure"); };
+  await assert.rejects(lookupExecutableTab(42), /unexpected lookup failure/);
 });
 
 test("expected missing-tab activation races do not log or scan", async () => {

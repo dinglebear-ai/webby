@@ -63,11 +63,12 @@ export class SharedFixtureOutcomeModel {
 
 export function fixtureOutcomeActions(model = new SharedFixtureOutcomeModel()) {
   return {
-    "fixture.discover": async () => {
+    "fixture.discover": async ({boundary}) => {
       const catalog = terminal("succeeded", {names: ["deep", "delay", "json", "oversized", "side_effect", "text", "throw"], sanitized: true})
+      boundary.complete()
       return {observations: {"catalog.sanitized": catalog, "wait.fixture-tool-outcomes.catalog": catalog}}
     },
-    "fixture.invoke-matrix": async () => {
+    "fixture.invoke-matrix": async ({boundary}) => {
       const released = model.invoke("delayed")
       model.release()
       const delayed = await released.promise
@@ -82,10 +83,12 @@ export function fixtureOutcomeActions(model = new SharedFixtureOutcomeModel()) {
         result_too_deep: model.invoke("result_too_deep"),
       })
       const abort = {state: "aborted", terminal: true, value: {caller: cancellation.state, browser_work: cancellation.value.browser_work, late_result: cancellation.value.late_result, lifecycle: cancellation.value.lifecycle}}
+      boundary.complete()
       return {observations: {"results.normalized": results, "abort.observed": abort, "wait.fixture-tool-outcomes.outcomes": results}}
     },
-    "fixture.mutate": async () => {
+    "fixture.mutate": async ({boundary}) => {
       const stale = terminal("rejected", {error_kind: "stale_document", late_result: "rejected", side_effects: 0})
+      boundary.complete()
       return {observations: {"stale.rejected": stale, "wait.fixture-tool-outcomes.mutation": stale}}
     },
   }

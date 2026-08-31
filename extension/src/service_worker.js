@@ -210,8 +210,7 @@ export function pairingTransition(reply) {
 export async function reconcilePairingStatus(reply) {
   const transition = pairingTransition(reply);
   if (transition.state === "approved") {
-    await handleServerEvent({type: "pairing.approved", payload: {browser_id: transition.browserId}});
-    await chrome.storage.local.remove("pairingId");
+    await persistApprovedPairing(transition.browserId);
     return true;
   }
   if (transition.state === "rejected" || transition.state === "expired") {
@@ -220,6 +219,15 @@ export async function reconcilePairingStatus(reply) {
     return false;
   }
   return false;
+}
+
+/** Persist an approved identity before clearing the resumable pairing marker. */
+/** @param {unknown} browserId */
+export async function persistApprovedPairing(browserId) {
+  const transition = pairingTransition({payload: {status: "approved", browser_id: browserId}});
+  if (transition.state !== "approved") throw new Error("invalid_pairing_status");
+  await chrome.storage.local.set({browserId: transition.browserId});
+  await chrome.storage.local.remove("pairingId");
 }
 
 /**
@@ -256,11 +264,8 @@ async function syncBrowserSettings() {
  * @param {{type?: string, payload?: any} | undefined} envelope
  */
 async function handleServerEvent(envelope) {
-  if (envelope?.type === "pairing.approved" && envelope.payload?.browser_id) {
-    if (channel?.browserId !== envelope.payload.browser_id) {
-      await chrome.storage.local.set({browserId: envelope.payload.browser_id});
-    }
-    return;
+  if (envelope?.type === "pairing.approved") {
+    return persistApprovedPairing(envelope.payload?.browser_id);
   }
   if (envelope?.type === "tool.call") return executeToolCall(envelope.payload);
   if (envelope?.type === "tool.cancel") return cancelToolCall(envelope.payload);
@@ -276,7 +281,7 @@ async function executeToolCall(payload) {
       return await sendToolError(payload.call_id, "stale_document", "The requested document is no longer active");
     }
     const settings = {...DEFAULTS, ...await chrome.storage.local.get(["scanningPaused"])};
-    const permissionGranted = await canScanTab(await chrome.tabs.get(payload.tab_id).catch(() => undefined), chrome.permissions);
+    const permissionGranted = await canScanTab(await lookupExecutableTab(payload.tab_id), chrome.permissions);
     if (!executionAllowed(settings.scanningPaused, permissionGranted)) {
       await closeObservation(payload.tab_id);
       return await sendToolError(payload.call_id, "permission_denied", "Browser access is paused or no longer granted");
@@ -308,7 +313,7 @@ async function executeToolCall(payload) {
 /**
  * @param {{document_id: string, call_id: string}} payload
  */
-async function cancelToolCall(payload) {
+export async function cancelToolCall(payload) {
   const observation = [...observations.values()].find((entry) => entry.document_id === payload.document_id);
   if (!observation) return;
   try {
@@ -317,13 +322,44 @@ async function cancelToolCall(payload) {
       world: "MAIN", func: cancelWebMcp, args: [payload.call_id]
     });
   } catch (error) {
-    if (transientErrorKind("tool_cancellation", error)) return;
+    const diagnostic = transientCancellationDiagnostic(payload, observation, error);
+    if (diagnostic) {
+      await extensionDiagnostics().cancellationTransient(diagnostic);
+      return;
+    }
     console.error("Webby tool cancellation failed", {
       callId: payload.call_id,
       tabId: observation.tab_id,
       documentId: observation.document_id,
       error
     });
+    throw error;
+  }
+}
+
+/** Build explicit evidence for cancellation races that are safe to suppress. */
+/**
+ * @param {{call_id: string, document_id: string}} payload
+ * @param {Observation} observation
+ * @param {unknown} error
+ */
+export function transientCancellationDiagnostic(payload, observation, error) {
+  const kind = transientErrorKind("tool_cancellation", error);
+  return kind ? {
+    callId: payload.call_id,
+    tabId: observation.tab_id,
+    documentId: observation.document_id,
+    kind
+  } : null;
+}
+
+/** Return undefined only for the expected tab-removal race. */
+/** @param {number} tabId */
+export async function lookupExecutableTab(tabId) {
+  try {
+    return await chrome.tabs.get(tabId);
+  } catch (error) {
+    if (transientErrorKind("eligibility_lookup", error) === "tab_gone") return undefined;
     throw error;
   }
 }

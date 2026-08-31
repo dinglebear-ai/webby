@@ -4,7 +4,7 @@ import {join} from "node:path"
 import {assertPredicate} from "./assertions.js"
 import {assertScenarioContract, readScenarioContract} from "./runtime-contracts.js"
 import {loadSurfaceInventory, validateObservedSurfaces} from "./surface-evidence.js"
-import {observedBoundarySurfaces, validateBoundaryDenominator} from "./boundary-surfaces.js"
+import {createBoundaryObservation, observedBoundarySurfaces, validateBoundaryDenominator} from "./boundary-surfaces.js"
 
 const handleKinds = new Set(["world", "browser", "pairing", "credential", "page", "session", "document", "call", "audit"])
 const sha256 = value => createHash("sha256").update(value).digest("hex")
@@ -106,9 +106,11 @@ export class ScenarioRunner {
       for (const step of this.scenario.steps) {
         const action = this.actions[step.action.op]
         if (!action) throw new ScenarioInfrastructureError("missing_action", `no action registered for ${step.action.op}`)
+        const boundary = createBoundaryObservation(this.scenario.id, step.action.op)
         await this.event("scenario.step.started", {step_id: step.id, operation: step.action.op})
-        const result = await this.bounded(signal => action({params: step.action.params ?? {}, handles: this.handles, observations: this.observations, signal}), step.wait.timeout_ms, step.id)
-        for (const surfaceId of observedBoundarySurfaces(this.scenario.id, step.action.op) ?? []) this.observedSurfaceIds.add(surfaceId)
+        const result = await this.bounded(signal => action({params: step.action.params ?? {}, handles: this.handles, observations: this.observations, signal, boundary}), step.wait.timeout_ms, step.id)
+        const boundaryEvidence = boundary?.consume()
+        for (const surfaceId of boundaryEvidence?.surface_ids ?? []) this.observedSurfaceIds.add(surfaceId)
         if (result?.handles) for (const [name, value] of Object.entries(result.handles)) this.handles.bind(name, this.scenario.handles[name], String(value))
         Object.assign(this.observations, result?.observations)
         Object.assign(this.observations, await this.bounded(signal => this.observe(step, this, signal), step.wait.timeout_ms, `${step.id} observation`))

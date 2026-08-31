@@ -43,8 +43,8 @@ defmodule Webby.BrowserConnections do
   def begin_browser_erasure(browser_id),
     do: GenServer.call(__MODULE__, {:begin_browser_erasure, browser_id})
 
-  def finish_browser_erasure(browser_id, outcome),
-    do: GenServer.call(__MODULE__, {:finish_browser_erasure, browser_id, outcome})
+  def finish_browser_erasure(browser_id, token, outcome),
+    do: GenServer.call(__MODULE__, {:finish_browser_erasure, browser_id, token, outcome})
 
   def browser_admissible?(browser_id),
     do: GenServer.call(__MODULE__, {:browser_admissible, browser_id})
@@ -71,7 +71,7 @@ defmodule Webby.BrowserConnections do
       calls: %{},
       external_keys: %{},
       credential_barriers: %{},
-      erased_browsers: MapSet.new()
+      browser_erasures: %{}
     }
 
     if Application.get_env(:webby, Webby.Repo, [])[:pool] == Ecto.Adapters.SQL.Sandbox,
@@ -87,7 +87,7 @@ defmodule Webby.BrowserConnections do
 
   @impl true
   def handle_call({:register, browser_id, pid}, _from, state) do
-    if MapSet.member?(state.erased_browsers, browser_id) do
+    if browser_erased?(state, browser_id) do
       {:reply, {:error, :browser_erased}, state}
     else
       state = drop_connection(state, browser_id, "browser_replaced")
@@ -109,7 +109,7 @@ defmodule Webby.BrowserConnections do
         state
       ) do
     cond do
-      MapSet.member?(state.erased_browsers, browser_id) ->
+      browser_erased?(state, browser_id) ->
         {:reply, {:error, "browser_erased", "The selected browser was erased"}, state}
 
       map_size(state.calls) >= @max_pending_calls ->
@@ -179,25 +179,46 @@ defmodule Webby.BrowserConnections do
   end
 
   def handle_call({:begin_browser_erasure, browser_id}, _from, state) do
-    {:reply, :ok, %{state | erased_browsers: MapSet.put(state.erased_browsers, browser_id)}}
+    token = make_ref()
+
+    erasure =
+      Map.get(state.browser_erasures, browser_id, %{status: :erasing, owners: MapSet.new()})
+
+    erasure = %{erasure | owners: MapSet.put(erasure.owners, token)}
+
+    {:reply, {:ok, token}, put_in(state, [:browser_erasures, browser_id], erasure)}
   end
 
-  def handle_call({:finish_browser_erasure, browser_id, :committed}, _from, state) do
-    case state.connections[browser_id] do
-      %{pid: pid} -> send(pid, :browser_erased)
-      nil -> :ok
+  def handle_call({:finish_browser_erasure, browser_id, token, :committed}, _from, state) do
+    with {:ok, erasure} <- finish_browser_erasure_owner(state, browser_id, token) do
+      case state.connections[browser_id] do
+        %{pid: pid} -> send(pid, :browser_erased)
+        nil -> :ok
+      end
+
+      state = put_in(state, [:browser_erasures, browser_id], %{erasure | status: :erased})
+      {:reply, :ok, drop_connection(state, browser_id, "browser_erased")}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
-
-    {:reply, :ok, drop_connection(state, browser_id, "browser_erased")}
   end
 
-  def handle_call({:finish_browser_erasure, browser_id, :aborted}, _from, state) do
-    {:reply, :ok, %{state | erased_browsers: MapSet.delete(state.erased_browsers, browser_id)}}
+  def handle_call({:finish_browser_erasure, browser_id, token, :aborted}, _from, state) do
+    with {:ok, erasure} <- finish_browser_erasure_owner(state, browser_id, token) do
+      browser_erasures =
+        if erasure.status == :erasing and MapSet.size(erasure.owners) == 0,
+          do: Map.delete(state.browser_erasures, browser_id),
+          else: Map.put(state.browser_erasures, browser_id, erasure)
+
+      {:reply, :ok, %{state | browser_erasures: browser_erasures}}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_call({:browser_admissible, browser_id}, _from, state) do
     reply =
-      if MapSet.member?(state.erased_browsers, browser_id),
+      if browser_erased?(state, browser_id),
         do: {:error, :browser_erased},
         else: :ok
 
@@ -364,6 +385,22 @@ defmodule Webby.BrowserConnections do
     barrier = Map.fetch!(state.credential_barriers, credential_id)
     status = if barrier.status == :revoked, do: :revoked, else: requested_status
     %{barrier | status: status, owners: MapSet.delete(barrier.owners, token)}
+  end
+
+  defp browser_erased?(state, browser_id) do
+    match?(
+      %{status: status} when status in [:erasing, :erased],
+      state.browser_erasures[browser_id]
+    )
+  end
+
+  defp finish_browser_erasure_owner(state, browser_id, token) do
+    with %{owners: owners} = erasure <- state.browser_erasures[browser_id],
+         true <- MapSet.member?(owners, token) do
+      {:ok, %{erasure | owners: MapSet.delete(owners, token)}}
+    else
+      _missing -> {:error, :not_erasure_owner}
+    end
   end
 
   defp calls_for_monitor(state, monitor),

@@ -48,3 +48,46 @@ test("isolated diagnostics fail closed and record through the explicit interface
   assert.equal(protocol[0].observations[0].sanitized_url, "https://example.test/private");
   assert.doesNotMatch(JSON.stringify(protocol), /secret=yes/);
 });
+
+test("background diagnostic persistence failures fail the next awaited milestone", async () => {
+  let writes = 0;
+  globalThis.chrome = {
+    runtime: {id: "a".repeat(32)},
+    tabs: {get: async id => ({id})},
+    storage: {local: {
+      async get() { return {}; },
+      async set() {
+        writes += 1;
+        if (writes === 1) throw new Error("diagnostic storage unavailable");
+      }
+    }}
+  };
+  const {createIsolatedE2EDiagnostics} = await import(`../src/diagnostics.js?failure=${Date.now()}`);
+  const diagnostics = createIsolatedE2EDiagnostics({
+    schema_version: 1, environment_marker: "isolated-e2e", expected_extension_id: chrome.runtime.id,
+    instance_nonce: "n".repeat(43), base_url: "http://127.0.0.1:65001",
+    fixture_url: "http://127.0.0.1:65002"
+  });
+
+  diagnostics.protocolOut({ref: "1", event: "message", payload: {type: "discovery.observed"}});
+  await assert.rejects(diagnostics.channelReady(), /diagnostic storage unavailable/);
+  assert.equal(writes, 1);
+});
+
+test("transient cancellation diagnostics are durably observable", async () => {
+  const writes = [];
+  globalThis.chrome = {
+    runtime: {id: "a".repeat(32)},
+    tabs: {get: async id => ({id})},
+    storage: {local: {async get() { return {}; }, async set(value) { writes.push(value); }}}
+  };
+  const {createIsolatedE2EDiagnostics} = await import(`../src/diagnostics.js?cancellation=${Date.now()}`);
+  const diagnostics = createIsolatedE2EDiagnostics({
+    schema_version: 1, environment_marker: "isolated-e2e", expected_extension_id: chrome.runtime.id,
+    instance_nonce: "n".repeat(43), base_url: "http://127.0.0.1:65001",
+    fixture_url: "http://127.0.0.1:65002"
+  });
+  const value = {callId: "call-1", tabId: 7, documentId: "doc-1", kind: "frame_gone"};
+  await diagnostics.cancellationTransient(value);
+  assert.deepEqual(writes.at(-1), {e2eLastTransientCancellation: value});
+});

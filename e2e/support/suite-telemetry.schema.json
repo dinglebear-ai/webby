@@ -10,5 +10,12 @@
     "planned_scenario_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}, "observed_scenario_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}, "evidence_complete": {"type": "boolean"},
     "infrastructure_error": {"type": "string", "maxLength": 512},
     "scenario_runs": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["scenario_id", "adapter", "duration_ms", "status"], "properties": {"scenario_id": {"type": "string"}, "adapter": {"enum": ["protocol", "chromium"]}, "duration_ms": {"type": "integer", "minimum": 0}, "status": {"enum": ["passed", "failed"]}}}}
-  }
+  },
+  "allOf": [{
+    "if": {"properties": {"status": {"const": "passed"}}, "required": ["status"]},
+    "then": {
+      "not": {"properties": {"infrastructure_error": {"type": "string"}}, "required": ["infrastructure_error"]},
+      "properties": {"scenario_runs": {"type": "array", "items": {"type": "object", "properties": {"status": {"const": "passed"}}, "required": ["status"]}}}
+    }
+  }]
 }

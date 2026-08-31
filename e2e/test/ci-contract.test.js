@@ -15,6 +15,7 @@ const fullPullRequestCondition = "github.event_name == 'push' || github.event_na
 const fullSuites = '["protocol:full", "chromium:full"]'
 const telemetryUpload = "Upload non-secret suite cost and stability telemetry"
 const harnessCommand = "npm --prefix e2e run harness:self-test"
+const cleanupAttestation = "hashFiles('e2e/artifacts/upload/cleanup/upload-attestation.json') != ''"
 
 function assertTriggerAndStressContracts(primary, stress) {
   for (const path of requiredE2EPaths) assert.ok(primary.includes(`\"${path}\"`), `missing E2E trigger path ${path}`)
@@ -55,7 +56,8 @@ test("workflows pin actions and enforce failure-only attested uploads plus alway
   const primary = await readFile(join(root, ".github/workflows/e2e.yml"), "utf8")
   const stress = await readFile(join(root, ".github/workflows/e2e-stress.yml"), "utf8")
   assertTriggerAndStressContracts(primary, stress)
-  assert.match(primary, /if: failure\(\) && hashFiles\('e2e\/artifacts\/upload\/upload-attestation\.json'\) != ''/)
+  assert.equal((primary.match(/hashFiles\('e2e\/artifacts\/upload\/upload-attestation\.json'\) != ''/g) ?? []).length, 4)
+  assert.equal((primary.match(new RegExp(cleanupAttestation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length, 4)
   assert.doesNotMatch(primary, /pull_request_target|secrets\./)
 })
 
@@ -122,6 +124,27 @@ test("cleanup narrowly removes inert run-owned Mix residue", async () => {
   await writeFile(join(lock, "lock_0"), "owner metadata"); await writeFile(join(lock, "port_2"), "owner metadata"); await writeFile(join(pubsub, "port_1"), "")
   assert.equal(await cleanupWorlds({temporaryRoot: owned}), 0)
   await assert.rejects(stat(owned), error => error.code === "ENOENT")
+  const report = JSON.parse(await readFile(join(root, "e2e/artifacts/cleanup-report.json"), "utf8"))
+  assert.deepEqual(report.failures, [])
+  assert.deepEqual(report.roots.map(value => value.root).sort(), [`mix_lock_user${uid}`, `mix_pubsub_user${uid}`])
+})
+
+test("late cleanup failures are persisted and staged as attested evidence", async t => {
+  const owned = await initializeOwnedTempRoot()
+  const residue = join(owned, "unattested.txt")
+  await writeFile(residue, "preserve and report")
+  t.after(() => rm(owned, {recursive: true, force: true}))
+
+  assert.equal(await cleanupWorlds({temporaryRoot: owned}), 1)
+  const report = JSON.parse(await readFile(join(root, "e2e/artifacts/cleanup-report.json"), "utf8"))
+  assert.match(report.failures.at(-1).error, /unattested residue remains: unattested\.txt/)
+  const upload = join(root, "e2e/artifacts/upload/cleanup")
+  assert.equal((await stat(join(upload, "upload-attestation.json"))).isFile(), true)
+  const attestation = JSON.parse(await readFile(join(upload, "upload-attestation.json"), "utf8"))
+  const reportArtifact = attestation.files.find(file => file.path !== "cleanup-report.json" && file.path.endsWith("-cleanup-report.json"))
+  assert.ok(reportArtifact, "attestation must include the finalized cleanup report")
+  const staged = JSON.parse(await readFile(join(upload, reportArtifact.path), "utf8"))
+  assert.deepEqual(staged, report)
 })
 
 test("cleanup preserves malicious, similarly named, and symlinked Mix residue", async t => {

@@ -1,4 +1,4 @@
-/** @typedef {{active: boolean, workerNonce?: string, chromeEvent: (name: string) => void, socketAttempt: () => void, protocolOut: (frame: any) => void, protocolIn: (frame: any) => void, channelReady: () => Promise<unknown>, authenticated: (browserId?: string) => Promise<unknown>, scanCompleted: (value: any) => Promise<unknown>, scanAllCompleted: () => Promise<unknown>, selectScanTarget: (fallback: () => any) => Promise<any>, scanError: (error: unknown) => unknown, socketAttempts?: () => number, binding?: Record<string, string>}} ExtensionDiagnostics */
+/** @typedef {{active: boolean, workerNonce?: string, chromeEvent: (name: string) => void, socketAttempt: () => void, protocolOut: (frame: any) => void, protocolIn: (frame: any) => void, cancellationTransient: (value: any) => Promise<unknown>, channelReady: () => Promise<unknown>, authenticated: (browserId?: string) => Promise<unknown>, scanCompleted: (value: any) => Promise<unknown>, scanAllCompleted: () => Promise<unknown>, selectScanTarget: (fallback: () => any) => Promise<any>, scanError: (error: unknown) => unknown, socketAttempts?: () => number, binding?: Record<string, string>}} ExtensionDiagnostics */
 
 /** @type {Readonly<ExtensionDiagnostics>} */
 const DEFAULT_DIAGNOSTICS = Object.freeze({
@@ -8,6 +8,7 @@ const DEFAULT_DIAGNOSTICS = Object.freeze({
   socketAttempt() {},
   protocolOut() {},
   protocolIn() {},
+  async cancellationTransient() {},
   async channelReady() {},
   async authenticated() {},
   async scanCompleted() {},
@@ -74,10 +75,26 @@ export function createIsolatedE2EDiagnostics(candidate) {
   e2eGlobal.__webbyE2EChromeEvents = chromeEvents;
   e2eGlobal.__webbyE2ESocketAttempts = 0;
 
+  /** @type {Set<Promise<void>>} */
+  const pendingWrites = new Set();
+  /** @type {unknown} */
+  let persistenceFailure;
   const persist = (/** @type {Record<string, any>} */ value) => chrome.storage.local.set(value);
+  const trackPersist = (/** @type {Record<string, any>} */ value) => {
+    const write = persist(value)
+      .catch((error) => { persistenceFailure ??= error; })
+      .finally(() => { pendingWrites.delete(write); });
+    pendingWrites.add(write);
+    return write;
+  };
+  const persistMilestone = async (/** @type {Record<string, any>} */ value) => {
+    await Promise.all([...pendingWrites]);
+    if (persistenceFailure) throw persistenceFailure;
+    await persist(value);
+  };
   const recordProtocol = (/** @type {any} */ value) => {
     protocolEvents.push({...value, sequence: protocolEvents.length + 1});
-    void persist({e2eProtocolEvents: protocolEvents.slice(-256)}).catch(() => {});
+    trackPersist({e2eProtocolEvents: protocolEvents.slice(-256)});
   };
 
   return Object.freeze({
@@ -85,7 +102,7 @@ export function createIsolatedE2EDiagnostics(candidate) {
     workerNonce,
     chromeEvent(/** @type {string} */ name) {
       chromeEvents[name] = (chromeEvents[name] ?? 0) + 1;
-      void persist({e2eChromeEvents: {...chromeEvents}}).catch(() => {});
+      trackPersist({e2eChromeEvents: {...chromeEvents}});
     },
     socketAttempt() { socketAttempts += 1; e2eGlobal.__webbyE2ESocketAttempts = socketAttempts; },
     socketAttempts() { return socketAttempts; },
@@ -103,12 +120,15 @@ export function createIsolatedE2EDiagnostics(candidate) {
     protocolIn(/** @type {any} */ {ref, event, payload}) {
       recordProtocol({direction: "in", ref, event, type: protocolRefs[ref] ?? event, status: payload?.status ?? null, observation_count: payload?.response?.payload?.observation_count ?? null});
     },
-    channelReady() { return persist({e2eChannelReadyNonce: workerNonce}); },
-    authenticated(/** @type {string | undefined} */ browserId) { return persist({e2eAuthenticatedBrowserId: browserId, e2eAuthenticatedWorkerNonce: workerNonce}); },
-    scanCompleted(/** @type {any} */ {tabId, result, observation}) {
-      return persist({e2eLastScan: {tabId, supported: result?.result?.supported === true, toolCount: observation?.tools?.length ?? 0, documentId: result?.documentId ?? null}});
+    cancellationTransient(/** @type {any} */ value) {
+      return persistMilestone({e2eLastTransientCancellation: value});
     },
-    async scanAllCompleted() { scanAllCompletions += 1; await persist({e2eScanAllCompletions: scanAllCompletions}); },
+    channelReady() { return persistMilestone({e2eChannelReadyNonce: workerNonce}); },
+    authenticated(/** @type {string | undefined} */ browserId) { return persistMilestone({e2eAuthenticatedBrowserId: browserId, e2eAuthenticatedWorkerNonce: workerNonce}); },
+    scanCompleted(/** @type {any} */ {tabId, result, observation}) {
+      return persistMilestone({e2eLastScan: {tabId, supported: result?.result?.supported === true, toolCount: observation?.tools?.length ?? 0, documentId: result?.documentId ?? null}});
+    },
+    async scanAllCompleted() { scanAllCompletions += 1; await persistMilestone({e2eScanAllCompletions: scanAllCompletions}); },
     async selectScanTarget(/** @type {() => any} */ fallback) {
       const {e2eScanTabId} = await chrome.storage.local.get("e2eScanTabId");
       return typeof e2eScanTabId === "number" ? chrome.tabs.get(e2eScanTabId) : fallback();

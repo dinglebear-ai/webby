@@ -22,6 +22,9 @@ export function buildSuiteTelemetry({suite, status, startedAt, finishedAt, setup
   if (!Number.isInteger(attempts) || attempts < 1 || !Number.isInteger(retries) || retries < 0 || retries >= attempts) throw new Error("invalid suite attempt telemetry")
   const planned = unique(plannedScenarioIds), observed = unique(scenarioRuns.map(run => run.scenario_id))
   const evidenceComplete = JSON.stringify(planned) === JSON.stringify(observed)
+  const failedRuns = scenarioRuns.filter(run => run.status === "failed")
+  if (status === "passed" && failedRuns.length > 0) throw new Error(`passed suite telemetry contains failed scenario runs: ${failedRuns.map(run => `${run.adapter}:${run.scenario_id}`).join(",")}`)
+  if (status === "passed" && infrastructureError) throw new Error("passed suite telemetry contains an infrastructure error")
   const value = {schema_version: 1, suite, status, started_at: new Date(startedAt).toISOString(), finished_at: new Date(finishedAt).toISOString(), setup_ms: Math.max(0, Math.round(setupMs)), elapsed_ms: Math.max(0, new Date(finishedAt).getTime() - new Date(startedAt).getTime()), attempts, retries, rerun_rate: retries / attempts, flake: status === "passed" && retries > 0, planned_scenario_ids: planned, observed_scenario_ids: observed, evidence_complete: evidenceComplete, scenario_runs: scenarioRuns}
   if (infrastructureError) value.infrastructure_error = String(infrastructureError).slice(0, 512)
   if (!validate(value)) throw new Error(`suite telemetry schema validation failed: ${ajv.errorsText(validate.errors)}`)

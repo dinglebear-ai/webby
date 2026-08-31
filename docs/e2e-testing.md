@@ -47,21 +47,24 @@ retry must report the first pass as a flake rather than silently passing.
 
 ## CI tiers and promotion
 
-- Pull requests block on inventory validation, protocol PR, Chromium smoke, and
+- Pull requests block on inventory and deterministic stress-seam validation,
+  protocol PR, Chromium smoke, the complete protocol and Chromium suites, and
   official-client compatibility. The workflow is `pull_request`, not
   `pull_request_target`, has read-only contents permission, persists no checkout
   credential, and receives no repository secrets from forks.
-- Main and manual `main` runs execute the complete protocol and Chromium suites.
-- Main and dependency-bearing pull requests run the pinned official MCP client.
+- Main and manual runs also execute the complete protocol and Chromium suites.
+- Main and every pull request run the pinned official MCP client.
 - Nightly/manual stress qualification is nonblocking. Exhaustive functional and
   parity lanes remain blocking. Promote a stress lane only after measured flake
   and runtime budgets are established from retained CI samples.
 
 Every job has an explicit timeout and concurrency policy. Cancellation is
-followed by an `always()` external reaper and leak audit. Toolchain paths,
-versions, and executable SHA-256 values are printed. Cache keys bind OS,
-OTP/Elixir, Node, Playwright, `mix.lock`, and the E2E lockfile; browser profiles,
-databases, and browser binaries are never cached.
+followed by an `always()` external reaper and leak audit. Functional
+qualification and stress jobs print the toolchain paths, versions, and
+executable SHA-256 values they exercise. Their applicable cache keys bind OS,
+OTP/Elixir, Node, Playwright, `mix.lock`, and the E2E lockfile; contracts and
+harness-assurance jobs install only the pinned tools they need. Browser
+profiles, databases, and browser binaries are never cached.
 
 The manifest command deterministically weight-balances the selected inventory.
 It fails unless the shard union is complete and all intersections are empty, and
@@ -82,8 +85,11 @@ output, scenario/toolchain manifest, traces, screenshots, reports, fixture/Webby
 logs, allowlisted SQLite diagnostics, transcripts, and cleanup reports. It must
 not contain bearer tokens, pairing material, capability values, raw databases,
 browser profiles, or arbitrary environment variables. Secret zones mechanically
-disable browser capture. PR artifacts are retained 7 days; main/nightly artifacts
-14 days. Per-file, scenario, and job limits are enforced by `ArtifactRecorder`
+disable browser capture. PR protocol and Chromium-smoke failure bundles are
+retained for 7 days; complete-suite and compatibility failure bundles are
+retained for 14 days regardless of whether they ran on a pull request or main.
+Complete-suite non-secret telemetry is retained for 30 days. Per-file, scenario,
+and job limits are enforced by `ArtifactRecorder`
 (8 MiB, 64 MiB, and 256 MiB defaults); scanner or quota failure closes uploads.
 
 ## Debugging and replay
@@ -119,8 +125,9 @@ SIGTERM and SIGINT to nonce-verified process groups running real isolated Webby
 worlds, preserves termination evidence, and proves external reaping leaves no
 residue. It also launches a real persistent Chromium context, injects a hanging
 `context.close`, forces bounded shutdown through the Chromium DevTools protocol,
-and proves the browser processes and isolated profile are removed. External cleanup must leave zero processes, listeners,
-profiles, databases, open handles, pending calls, or active stale sessions.
+and proves the browser processes and isolated profile are removed. External
+cleanup must leave zero processes, listeners, profiles, databases, open handles,
+pending calls, or active stale sessions.
 The external reaper accepts only a canonical private temporary root carrying a
 run nonce marker and removes individually attested world directories; broad,
 pre-existing, unmarked, or residual roots fail closed.
@@ -152,9 +159,11 @@ Wall-clock budgets are cancellation ceilings, not brittle assertions. Functional
 checks use exact invariant counts plus query/concurrency ceilings. A duration or
 query regression must be compared to the preserved report before changing a
 budget.
+
 ## Qualification telemetry and harness assurance
 
-Every named suite writes `e2e/artifacts/suite-telemetry.json` with setup and
+Each functional suite dispatched through `e2e-cli` writes
+`e2e/artifacts/suite-telemetry.json` with setup and
 elapsed time, structured per-scenario durations, planned and observed scenario
 IDs, attempts, retries, rerun rate, flake status, and evidence completeness.
 The report deliberately excludes environment variables, command lines, hostnames,
@@ -165,6 +174,9 @@ The scheduled `harness-self-test` lane deliberately corrupts surface evidence,
 telemetry accounting, and scenario input, then runs real Webby/Chromium tests for
 extension generation, forced browser closure, process identity, RSS measurement,
 artifact finalization, pairing persistence, manifest reaping, and isolated worlds.
-Runtime adapter evidence comes from completed operation-boundary mappings and is
-accepted only when observed IDs exactly equal the scenario declaration and every
-ID is mapped by the canonical surface inventory.
+Runtime adapter evidence comes from typed observations emitted after concrete
+operation boundaries complete. It is accepted only when observed IDs exactly
+equal the scenario declaration and every ID is mapped by the canonical surface
+inventory. Stress commands publish their separate qualification report rather
+than `suite-telemetry.json`; validation, contract, manifest, cleanup, replay,
+and harness-assurance commands do not claim functional-suite telemetry.
