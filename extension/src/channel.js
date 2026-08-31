@@ -1,3 +1,5 @@
+import {extensionDiagnostics} from "./diagnostics.js";
+
 const VERSION = 1;
 
 /** @typedef {{resolve: (value: any) => void, reject: (reason?: any) => void, timeout: ReturnType<typeof setTimeout>}} Pending */
@@ -12,9 +14,10 @@ export class WebbyChannel {
    * @param {() => void} [options.onReady]
    * @param {(payload: any) => Promise<void> | void} [options.onEvent]
    * @param {(error: unknown, payload?: unknown) => void} [options.onError]
+   * @param {ReturnType<typeof extensionDiagnostics>} [options.diagnostics]
    * @param {number} [options.replyTimeoutMs]
    */
-  constructor({baseUrl, extensionId, browserId, onChallenge, onReady, onEvent, onError = reportChannelError, replyTimeoutMs = 10_000}) {
+  constructor({baseUrl, extensionId, browserId, onChallenge, onReady, onEvent, onError = reportChannelError, diagnostics = extensionDiagnostics(), replyTimeoutMs = 10_000}) {
     this.baseUrl = baseUrl;
     this.extensionId = extensionId;
     this.browserId = browserId;
@@ -22,6 +25,7 @@ export class WebbyChannel {
     this.onReady = onReady;
     this.onEvent = onEvent;
     this.onError = onError;
+    this.diagnostics = diagnostics;
     this.replyTimeoutMs = replyTimeoutMs;
     this.ref = 0;
     /** @type {Map<string, Pending>} */
@@ -58,6 +62,7 @@ export class WebbyChannel {
     url.searchParams.set("vsn", "2.0.0");
     url.searchParams.set("extension_id", this.extensionId);
     if (this.browserId) url.searchParams.set("browser_id", this.browserId);
+    this.diagnostics.socketAttempt();
     const socket = new WebSocket(url);
     this.socket = socket;
     socket.onmessage = (event) => {
@@ -138,7 +143,7 @@ export class WebbyChannel {
       return;
     }
     const [_joinRef, ref, topic, event, payload] = frame;
-    if (typeof ref !== "string" || typeof topic !== "string" || typeof event !== "string") {
+    if ((ref !== null && typeof ref !== "string") || typeof topic !== "string" || typeof event !== "string") {
       this.onError(new Error("malformed_channel_frame"), {kind: "invalid_frame", frame});
       return;
     }
@@ -146,6 +151,7 @@ export class WebbyChannel {
       this.onError(new Error("unexpected_channel_topic"), {kind: "invalid_frame", topic});
       return;
     }
+    this.diagnostics.protocolIn({ref, event, payload});
     const entry = this.pending.get(ref);
     if (event === "phx_reply" && entry) {
       const {resolve, reject, timeout} = entry;
@@ -164,9 +170,14 @@ export class WebbyChannel {
   close() {
     clearTimeout(this.reconnectTimer);
     clearInterval(this.heartbeatTimer);
-    this.socket.onclose = null;
+    this.reconnectTimer = undefined;
+    this.heartbeatTimer = undefined;
+    this.rejectReady(new Error("channel_closed"));
     this.rejectPending(new Error("channel_closed"));
-    this.socket.close();
+    const socket = this.socket;
+    if (!socket) return;
+    socket.onclose = null;
+    socket.close();
   }
 
   /**
@@ -191,6 +202,7 @@ export class WebbyChannel {
     }
     const ref = String(++this.ref);
     if (event === "phx_join") this.joinRef = ref;
+    this.diagnostics.protocolOut({ref, event, payload});
     this.socket.send(JSON.stringify([this.joinRef, ref, this.topic, event, payload]));
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {

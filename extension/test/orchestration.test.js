@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {closeObservations, executionAllowed, publishCurrentObservation, ScanScheduler} from "../src/orchestration.js";
+import {closeObservations, executionAllowed, publishCurrentObservation, requireSettledSuccess, ScanScheduler} from "../src/orchestration.js";
 
 test("paused or revoked permission prevents tool execution", () => {
   assert.equal(executionAllowed(true, true), false);
@@ -14,6 +14,13 @@ test("a stale scan generation cannot commit its observation", async () => {
   const result = await publishCurrentObservation(1, () => current, async () => {}, () => { commits += 1; });
   assert.equal(result, undefined);
   assert.equal(commits, 0);
+});
+
+test("a stale scan generation compensates an already published observation", async () => {
+  const events = [];
+  const result = await publishCurrentObservation(1, () => 2, async () => events.push("published"), () => events.push("committed"), async () => events.push("closed"));
+  assert.equal(result, undefined);
+  assert.deepEqual(events, ["published", "closed"]);
 });
 
 test("a failed discovery publish cannot commit success-like local state", async () => {
@@ -69,4 +76,10 @@ test("pausing attempts to close every observation and exposes failed closes", as
   });
   assert.deepEqual(closed, [1, 2, 3]);
   assert.deepEqual(results.map((result) => result.status), ["fulfilled", "rejected", "fulfilled"]);
+  assert.throws(() => requireSettledSuccess("close observations", results), /close observations failed \(1\/3\)/);
+});
+
+test("a fully reconciled batch remains an explicit success", async () => {
+  const results = await closeObservations([1, 2], async () => ({status: "closed"}));
+  assert.equal(requireSettledSuccess("close observations", results), results);
 });

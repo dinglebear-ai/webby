@@ -1,0 +1,179 @@
+{
+  "contract_version": 1,
+  "id": "e2e-fixture-tool-outcomes",
+  "surface_ids": ["in:discovery-observed", "in:tool-result", "in:tool-error", "out:tool-call", "mcp:tools-call", "action:page-call", "ext-event:call", "ext-event:cancel", "fixture:json", "fixture:text", "fixture:throw", "fixture:delay", "fixture:cancel", "fixture:oversized", "fixture:deep", "fixture:side-effect", "capability:fixture", "world-field:fixture-url"],
+  "title": "WebMCP fixture catalog and tool outcome boundaries",
+  "description": "Exercises deterministic fixture discovery, execution, mutation, errors, cancellation, large values, and page-visible effects.",
+  "tier": "pr",
+  "weight": 16,
+  "drivers": [
+    "protocol",
+    "chromium"
+  ],
+  "security": "ordinary",
+  "handles": {
+    "world": "world",
+    "browser": "browser",
+    "page": "page",
+    "session": "session",
+    "document": "document",
+    "call": "call"
+  },
+  "preconditions": [
+    "Fixture control capability matches the world nonce",
+    "The MAIN-world modelContext fixture is installed"
+  ],
+  "steps": [
+    {
+      "id": "catalog",
+      "action": {
+        "op": "fixture.discover"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.fixture-tool-outcomes.catalog"
+        },
+        "timeout_ms": 10000
+      }
+    },
+    {
+      "id": "outcomes",
+      "action": {
+        "op": "fixture.invoke-matrix"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.fixture-tool-outcomes.outcomes"
+        },
+        "timeout_ms": 30000
+      }
+    },
+    {
+      "id": "mutation",
+      "action": {
+        "op": "fixture.mutate"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "rejected",
+          "subject": "wait.fixture-tool-outcomes.mutation"
+        },
+        "timeout_ms": 15000
+      }
+    }
+  ],
+  "outcomes": [
+    {
+      "key": "catalog.sanitized",
+      "predicate": {
+        "kind": "terminal",
+        "subject": "catalog.sanitized"
+      }
+    },
+    {
+      "key": "results.normalized",
+      "predicate": {
+        "kind": "terminal",
+        "subject": "results.normalized"
+      }
+    },
+    {
+      "key": "abort.observed",
+      "predicate": {
+        "kind": "aborted",
+        "subject": "abort.observed"
+      }
+    },
+    {
+      "key": "stale.rejected",
+      "predicate": {
+        "kind": "rejected",
+        "subject": "stale.rejected"
+      }
+    }
+  ],
+  "artifacts": [
+    "timeline",
+    "protocol-transcript",
+    "extension-log",
+    "browser-trace",
+    "world-manifest"
+  ],
+  "cleanup": [
+    {
+      "kind": "absent",
+      "subject": "cleanup.fixture.has.no.pending.tool.promises"
+    },
+    {
+      "kind": "closed",
+      "subject": "cleanup.fixture.listener.closes"
+    },
+    {
+      "kind": "closed",
+      "subject": "cleanup.browser.resources.close"
+    },
+    {
+      "kind": "removable",
+      "subject": "cleanup.temporary.world.is.removable"
+    }
+  ],
+  "combinations": {
+    "dimensions": {
+      "outcome": [
+        "json",
+        "text",
+        "throw",
+        "delay",
+        "cancel",
+        "oversized",
+        "deep",
+        "side-effect"
+      ],
+      "catalog": [
+        "stable",
+        "mutated"
+      ],
+      "document": [
+        "current",
+        "navigated"
+      ]
+    },
+    "pairwise": true,
+    "mandated_triples": [
+      {
+        "outcome": "cancel",
+        "catalog": "stable",
+        "document": "current"
+      },
+      {
+        "outcome": "delay",
+        "catalog": "mutated",
+        "document": "current"
+      }
+    ],
+    "cartesian_driver": "none",
+    "exclusions": []
+  },
+  "parity": {
+    "protocol": {
+      "required_raw_keys": [
+        "protocol.catalog.sanitized",
+        "protocol.results.normalized",
+        "protocol.abort.observed",
+        "protocol.stale.rejected"
+      ],
+      "raw_exclusions": []
+    },
+    "chromium": {
+      "required_raw_keys": [
+        "chromium.catalog.sanitized",
+        "chromium.results.normalized",
+        "chromium.abort.observed",
+        "chromium.stale.rejected"
+      ],
+      "raw_exclusions": []
+    }
+  }
+}

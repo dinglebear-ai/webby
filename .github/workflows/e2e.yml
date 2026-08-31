@@ -1,0 +1,187 @@
+name: Live E2E
+
+on:
+  pull_request:
+    paths: ["lib/**", "test/**", "config/**", "priv/**", "assets/**", "e2e/**", "extension/**", "scripts/e2e*", "mix.exs", "mix.lock", ".mise.toml", ".github/workflows/e2e.yml", ".github/workflows/e2e-stress.yml"]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: E2E tier
+        type: choice
+        options: [main, pr, compatibility]
+        default: main
+
+concurrency:
+  group: live-e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ELIXIR_VERSION: "1.20.3"
+  OTP_VERSION: "29.0.5"
+  NODE_VERSION: "22.18.0"
+  MIX_ENV: test
+  PLAYWRIGHT_VERSION: "1.62.1"
+
+jobs:
+  contracts:
+    name: Contracts and coverage inventory
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236
+        with: {elixir-version: "1.20.3", otp-version: "29.0.5"}
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with: {node-version: "22.18.0", cache: npm, cache-dependency-path: e2e/package-lock.json}
+      - name: Install locked dependencies
+        run: npm ci --prefix e2e && npm install --package-lock-only --ignore-scripts --prefix e2e && test -z "$(git diff -- e2e/package-lock.json)"
+      - run: npm --prefix e2e run toolchains
+      - run: npm --prefix e2e run validate
+      - run: npm --prefix e2e run ci:contract
+      - run: npm --prefix e2e run typecheck:stress
+      - run: npm --prefix e2e run test:stress
+      - name: External reaper and leak audit
+        if: always()
+        run: npm --prefix e2e run cleanup
+
+  protocol-pr:
+    name: Protocol PR (zero retries)
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.tier == 'pr')
+    needs: contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236
+        with: {elixir-version: "1.20.3", otp-version: "29.0.5"}
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with: {node-version: "22.18.0", cache: npm, cache-dependency-path: e2e/package-lock.json}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            deps
+            _build
+          key: e2e-${{ runner.os }}-otp29.0.5-elixir1.20.3-node22.18.0-pw1.62.1-${{ hashFiles('mix.lock', 'e2e/package-lock.json') }}
+      - run: mix deps.get && npm ci --prefix e2e
+      - run: npx --prefix e2e playwright install --with-deps chromium
+      - run: npm --prefix e2e run toolchains
+      - run: npm --prefix e2e run protocol:pr
+      - name: External reaper and leak audit
+        if: always()
+        run: npm --prefix e2e run cleanup
+      - name: Upload attested sanitized failure evidence
+        if: failure() && (hashFiles('e2e/artifacts/upload/upload-attestation.json') != '' || hashFiles('e2e/artifacts/upload/cleanup/upload-attestation.json') != '')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with: {name: protocol-pr-sanitized, path: e2e/artifacts/upload, retention-days: 7, if-no-files-found: error, compression-level: 6}
+
+  chromium-pr:
+    name: Chromium smoke (one worker, zero retries)
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.tier == 'pr')
+    needs: contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236
+        with: {elixir-version: "1.20.3", otp-version: "29.0.5"}
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with: {node-version: "22.18.0", cache: npm, cache-dependency-path: e2e/package-lock.json}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            deps
+            _build
+          key: e2e-${{ runner.os }}-otp29.0.5-elixir1.20.3-node22.18.0-pw1.62.1-${{ hashFiles('mix.lock', 'e2e/package-lock.json') }}
+      - run: mix deps.get && npm ci --prefix e2e
+      - run: npx --prefix e2e playwright install --with-deps chromium
+      - run: npm --prefix e2e run toolchains
+      - run: npm --prefix e2e run chromium:smoke
+      - name: External reaper and leak audit
+        if: always()
+        run: npm --prefix e2e run cleanup
+      - name: Upload attested sanitized failure evidence
+        if: failure() && (hashFiles('e2e/artifacts/upload/upload-attestation.json') != '' || hashFiles('e2e/artifacts/upload/cleanup/upload-attestation.json') != '')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with: {name: chromium-pr-sanitized, path: e2e/artifacts/upload, retention-days: 7, if-no-files-found: error, compression-level: 6}
+
+  full:
+    name: Main full ${{ matrix.suite }}
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.tier == 'main')
+    needs: contracts
+    strategy:
+      fail-fast: false
+      matrix: {suite: ["protocol:full", "chromium:full"]}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236
+        with: {elixir-version: "1.20.3", otp-version: "29.0.5"}
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with: {node-version: "22.18.0", cache: npm, cache-dependency-path: e2e/package-lock.json}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            deps
+            _build
+          key: e2e-${{ runner.os }}-otp29.0.5-elixir1.20.3-node22.18.0-pw1.62.1-${{ hashFiles('mix.lock', 'e2e/package-lock.json') }}
+      - run: mix deps.get && npm ci --prefix e2e
+      - name: Restore Playwright Chromium 1.62.1
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-1.62.1-${{ hashFiles('e2e/package-lock.json') }}
+      - run: npx --prefix e2e playwright install --with-deps chromium
+      - run: npm --prefix e2e run toolchains
+      - run: npm --prefix e2e run ${{ matrix.suite }}
+      - name: External reaper and leak audit
+        if: always()
+        run: npm --prefix e2e run cleanup
+      - name: Upload non-secret suite cost and stability telemetry
+        if: always() && hashFiles('e2e/artifacts/suite-telemetry.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with: {name: "full-${{ strategy.job-index }}-telemetry", path: e2e/artifacts/suite-telemetry.json, retention-days: 30, if-no-files-found: error, compression-level: 6}
+      - name: Upload attested sanitized failure evidence
+        if: failure() && (hashFiles('e2e/artifacts/upload/upload-attestation.json') != '' || hashFiles('e2e/artifacts/upload/cleanup/upload-attestation.json') != '')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with: {name: "main-${{ strategy.job-index }}-sanitized", path: e2e/artifacts/upload, retention-days: 14, if-no-files-found: error, compression-level: 6}
+
+  compatibility:
+    name: Official MCP client compatibility
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.tier == 'compatibility')
+    needs: contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236
+        with: {elixir-version: "1.20.3", otp-version: "29.0.5"}
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with: {node-version: "22.18.0", cache: npm, cache-dependency-path: e2e/package-lock.json}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            deps
+            _build
+          key: e2e-${{ runner.os }}-otp29.0.5-elixir1.20.3-node22.18.0-pw1.62.1-${{ hashFiles('mix.lock', 'e2e/package-lock.json') }}
+      - run: mix deps.get && npm ci --prefix e2e
+      - run: npx --prefix e2e playwright install --with-deps chromium
+      - run: npm --prefix e2e run toolchains
+      - run: npm --prefix e2e run mcp:compat
+      - name: External reaper and leak audit
+        if: always()
+        run: npm --prefix e2e run cleanup
+      - name: Upload attested sanitized failure evidence
+        if: failure() && (hashFiles('e2e/artifacts/upload/upload-attestation.json') != '' || hashFiles('e2e/artifacts/upload/cleanup/upload-attestation.json') != '')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with: {name: mcp-compat-sanitized, path: e2e/artifacts/upload, retention-days: 14, if-no-files-found: error, compression-level: 6}

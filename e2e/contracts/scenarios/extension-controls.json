@@ -1,0 +1,169 @@
+{
+  "contract_version": 1,
+  "id": "e2e-extension-controls",
+  "surface_ids": ["in:pairing-status", "in:browser-settings", "out:pairing-approved", "popup:base-url", "popup:mode", "popup:paused", "popup:save", "popup:scan", "popup:pair", "ext-command:pair", "ext-command:scan", "ext-event:approved", "chrome-event:installed", "chrome-event:startup", "chrome-event:tab-updated", "chrome-event:tab-activated", "chrome-event:alarm", "chrome-event:permission-added", "chrome-event:permission-removed", "chrome-event:storage", "chrome-event:message", "storage:base-url", "storage:browser-id", "storage:scanning-mode", "storage:scanning-paused", "storage:public-key", "storage:private-key", "storage:pairing-id", "storage:ignored-origins", "manifest:key", "manifest:generated-copy", "world-field:profile", "artifact:extension", "artifact:trace"],
+  "title": "Chromium extension controls permissions and worker lifecycle",
+  "description": "Drives every popup control and service-worker command/event against an unpacked extension and deterministic page.",
+  "tier": "main",
+  "weight": 24,
+  "drivers": [
+    "chromium"
+  ],
+  "security": "security-boundary",
+  "handles": {
+    "world": "world",
+    "browser": "browser",
+    "pairing": "pairing",
+    "page": "page",
+    "session": "session",
+    "document": "document",
+    "call": "call"
+  },
+  "preconditions": [
+    "Pinned bundled Chromium loaded an isolated generated extension copy",
+    "The fixture origin is the only test-added permission"
+  ],
+  "steps": [
+    {
+      "id": "configure",
+      "action": {
+        "op": "extension.configure"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.extension-controls.configure"
+        },
+        "timeout_ms": 10000
+      }
+    },
+    {
+      "id": "pair-scan",
+      "action": {
+        "op": "extension.pair-scan"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.extension-controls.pair-scan"
+        },
+        "timeout_ms": 20000
+      }
+    },
+    {
+      "id": "permissions",
+      "action": {
+        "op": "extension.permissions"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.extension-controls.permissions"
+        },
+        "timeout_ms": 20000
+      }
+    },
+    {
+      "id": "worker",
+      "action": {
+        "op": "extension.restart"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "recovered",
+          "subject": "wait.extension-controls.worker"
+        },
+        "timeout_ms": 30000
+      }
+    }
+  ],
+  "outcomes": [
+    {
+      "key": "popup.complete",
+      "predicate": {
+        "kind": "terminal",
+        "subject": "popup.complete"
+      }
+    },
+    {
+      "key": "permission.enforced",
+      "predicate": {
+        "kind": "closed",
+        "subject": "permission.enforced"
+      }
+    },
+    {
+      "key": "worker.recovered",
+      "predicate": {
+        "kind": "recovered",
+        "subject": "worker.recovered"
+      }
+    }
+  ],
+  "artifacts": [
+    "timeline",
+    "server-log",
+    "dashboard-snapshot",
+    "extension-log",
+    "browser-trace",
+    "world-manifest"
+  ],
+  "cleanup": [
+    {
+      "kind": "closed",
+      "subject": "cleanup.persistent.context.closes"
+    },
+    {
+      "kind": "closed",
+      "subject": "cleanup.extension.worker.stops"
+    },
+    {
+      "kind": "removable",
+      "subject": "cleanup.profile.is.removable"
+    },
+    {
+      "kind": "closed",
+      "subject": "cleanup.fixture.listener.closes"
+    },
+    {
+      "kind": "removable",
+      "subject": "cleanup.temporary.world.is.removable"
+    }
+  ],
+  "combinations": {
+    "dimensions": {
+      "mode": [
+        "granted_sites",
+        "all_tabs"
+      ],
+      "paused": [
+        true,
+        false
+      ],
+      "restart": [
+        "worker",
+        "chromium"
+      ]
+    },
+    "pairwise": true,
+    "mandated_triples": [
+      {
+        "mode": "all_tabs",
+        "paused": false,
+        "restart": "worker"
+      }
+    ],
+    "cartesian_driver": "none",
+    "exclusions": []
+  },
+  "parity": {
+    "chromium": {
+      "required_raw_keys": [
+        "chromium.popup.complete",
+        "chromium.permission.enforced",
+        "chromium.worker.recovered"
+      ],
+      "raw_exclusions": []
+    }
+  }
+}

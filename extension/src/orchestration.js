@@ -49,17 +49,32 @@ export function executionAllowed(paused, permissionGranted) {
  * @param {() => T} commit
  * @returns {Promise<T | undefined>}
  */
-export async function publishCurrentObservation(generation, currentGeneration, publish, commit) {
+export async function publishCurrentObservation(generation, currentGeneration, publish, commit, compensate = async () => {}) {
   await publish();
-  return currentGeneration() === generation ? commit() : undefined;
+  if (currentGeneration() === generation) return commit();
+  await compensate();
+  return undefined;
 }
 
 /**
  * Attempt every close when scanning is paused and return every failure so the
  * caller can log and repair with a later resync.
  * @param {Iterable<number>} tabIds
- * @param {(tabId: number) => Promise<void>} close
+ * @param {(tabId: number) => Promise<unknown>} close
  */
 export function closeObservations(tabIds, close) {
   return Promise.allSettled([...tabIds].map(close));
+}
+
+/**
+ * Preserve the complete reconciliation result while making partial failure
+ * impossible to mistake for success.
+ * @param {string} operation
+ * @param {PromiseSettledResult<unknown>[]} results
+ * @returns {PromiseSettledResult<unknown>[]}
+ */
+export function requireSettledSuccess(operation, results) {
+  const failures = results.filter((result) => result.status === "rejected");
+  if (failures.length === 0) return results;
+  throw new AggregateError(failures.map((result) => result.reason), `${operation} failed (${failures.length}/${results.length})`);
 }

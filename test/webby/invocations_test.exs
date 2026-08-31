@@ -55,4 +55,33 @@ defmodule Webby.InvocationsTest do
 
     assert Agent.get(attempts, & &1) == 1
   end
+
+  test "independent audit completions are not globally serialized" do
+    parent = self()
+
+    update_fun = fn id, _outcome, _error_kind, _duration ->
+      send(parent, {:entered, id})
+      assert_receive :release
+      {1, nil}
+    end
+
+    tasks =
+      for id <- ["first", "second"] do
+        Task.async(fn ->
+          Invocations.complete_audit(id, "failed", "caller_down", 0, update_fun: update_fun)
+        end)
+      end
+
+    assert MapSet.new(receive_entered(2)) == MapSet.new(["first", "second"])
+    Enum.each(tasks, &send(&1.pid, :release))
+    Enum.each(tasks, &assert({:ok, :completed} = Task.await(&1)))
+  end
+
+  defp receive_entered(0), do: []
+
+  defp receive_entered(remaining) do
+    receive do
+      {:entered, id} -> [id | receive_entered(remaining - 1)]
+    end
+  end
 end

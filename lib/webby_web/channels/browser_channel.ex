@@ -39,10 +39,22 @@ defmodule WebbyWeb.BrowserChannel do
   @impl true
   def handle_in("message", payload, socket) do
     case BrowserProtocol.validate(payload) do
-      {:ok, envelope} -> dispatch(envelope, socket)
+      {:ok, envelope} -> dispatch_admissible(envelope, socket)
       {:error, error} -> {:reply, {:error, error}, socket}
     end
   end
+
+  defp dispatch_admissible(
+         envelope,
+         %{assigns: %{authenticated: true, browser_id: browser_id}} = socket
+       ) do
+    case BrowserConnections.browser_admissible?(browser_id) do
+      :ok -> dispatch(envelope, socket)
+      {:error, reason} -> {:reply, {:error, %{kind: error_kind(reason)}}, socket}
+    end
+  end
+
+  defp dispatch_admissible(envelope, socket), do: dispatch(envelope, socket)
 
   @impl true
   def handle_info({:pairing_resolved, payload}, socket) do
@@ -69,6 +81,8 @@ defmodule WebbyWeb.BrowserChannel do
 
     {:noreply, socket}
   end
+
+  def handle_info(:browser_erased, socket), do: {:stop, :normal, socket}
 
   defp dispatch(%{type: "pairing.request", payload: payload, request_id: request_id}, socket) do
     attrs = Map.put(payload, "extension_id", socket.assigns.extension_id)
@@ -101,14 +115,18 @@ defmodule WebbyWeb.BrowserChannel do
         {:ok, _count} =
           Pages.close_browser_sessions(browser.id, "page.session.browser_authenticated")
 
-        :ok = BrowserConnections.register(browser.id)
+        case BrowserConnections.register(browser.id) do
+          :ok ->
+            response =
+              BrowserProtocol.envelope("auth.accepted", %{"browser_id" => browser.id},
+                browser_id: browser.id
+              )
 
-        response =
-          BrowserProtocol.envelope("auth.accepted", %{"browser_id" => browser.id},
-            browser_id: browser.id
-          )
+            {:reply, {:ok, response}, assign(socket, :authenticated, true)}
 
-        {:reply, {:ok, response}, assign(socket, :authenticated, true)}
+          {:error, reason} ->
+            {:reply, {:error, %{kind: error_kind(reason)}}, socket}
+        end
 
       {:error, reason} ->
         {:reply, {:error, %{kind: error_kind(reason)}}, socket}

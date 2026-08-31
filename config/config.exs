@@ -90,6 +90,10 @@ config :logger, :default_formatter,
     :reason,
     :timeout_ms,
     :outcome,
+    :audit_id,
+    :launch_reason,
+    :kind,
+    :id,
     :duration_ms
   ]
 

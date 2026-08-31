@@ -1,0 +1,191 @@
+{
+  "contract_version": 1,
+  "id": "e2e-persistence-retention",
+  "surface_ids": ["http:get-health", "http:post-e2e-persistence", "storage:browser-id", "storage:public-key", "storage:private-key", "behavior:fresh-migration", "behavior:startup-reconcile", "behavior:health", "behavior:retention", "world-field:pid", "world-field:database", "world-field:started", "world-field:process-group", "world-field:process-started", "world-field:process-executable", "world-field:process-cwd", "secret:bearer", "secret:private-jwk", "secret:signature", "secret:cookie", "secret:db", "artifact:persistence"],
+  "title": "Restart migration retention and erasure lifecycle",
+  "description": "Verifies fresh migration, durable identities, startup reconciliation, retention draining, metadata minimization, and erasure.",
+  "owner": "webby-ihb.15",
+  "deferred_to": "webby-ihb.15",
+  "tier": "main",
+  "weight": 18,
+  "drivers": [
+    "protocol",
+    "chromium"
+  ],
+  "security": "sensitive",
+  "handles": {
+    "world": "world",
+    "browser": "browser",
+    "credential": "credential",
+    "page": "page",
+    "session": "session",
+    "audit": "audit"
+  },
+  "preconditions": [
+    "A unique empty SQLite path is owned by the world",
+    "A populated checkpoint can be restarted with the same path"
+  ],
+  "steps": [
+    {
+      "id": "migrate",
+      "action": {
+        "op": "world.start"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "ready",
+          "subject": "wait.persistence-retention.migrate"
+        },
+        "timeout_ms": 30000
+      }
+    },
+    {
+      "id": "restart",
+      "action": {
+        "op": "world.restart"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "closed",
+          "subject": "wait.persistence-retention.restart"
+        },
+        "timeout_ms": 30000
+      }
+    },
+    {
+      "id": "retain",
+      "action": {
+        "op": "retention.drain"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.persistence-retention.retain"
+        },
+        "timeout_ms": 30000
+      }
+    },
+    {
+      "id": "erase",
+      "action": {
+        "op": "privacy.erase"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "closed",
+          "subject": "wait.persistence-retention.erase"
+        },
+        "timeout_ms": 10000
+      }
+    }
+  ],
+  "outcomes": [
+    {
+      "key": "migration.ready",
+      "predicate": {
+        "kind": "ready",
+        "subject": "migration.ready"
+      }
+    },
+    {
+      "key": "identity.durable",
+      "predicate": {
+        "kind": "recovered",
+        "subject": "identity.durable"
+      }
+    },
+    {
+      "key": "session.reconciled",
+      "predicate": {
+        "kind": "closed",
+        "subject": "session.reconciled"
+      }
+    },
+    {
+      "key": "retention.drained",
+      "predicate": {
+        "kind": "absent",
+        "subject": "retention.drained"
+      }
+    },
+    {
+      "key": "privacy.minimal",
+      "predicate": {
+        "kind": "recovered",
+        "subject": "privacy.minimal"
+      }
+    }
+  ],
+  "artifacts": [
+    "timeline",
+    "server-log",
+    "persistence-diagnostics",
+    "world-manifest"
+  ],
+  "cleanup": [
+    {
+      "kind": "closed",
+      "subject": "cleanup.server.exits.before.database.deletion"
+    },
+    {
+      "kind": "removable",
+      "subject": "cleanup.wal.and.shm.files.are.removable"
+    },
+    {
+      "kind": "absent",
+      "subject": "cleanup.browser.profile.contains.no.server.credential"
+    },
+    {
+      "kind": "removable",
+      "subject": "cleanup.temporary.world.is.removable"
+    }
+  ],
+  "combinations": {
+    "dimensions": {
+      "database": [
+        "empty",
+        "populated"
+      ],
+      "shutdown": [
+        "clean",
+        "killed"
+      ],
+      "backlog": [
+        "below-batch",
+        "multi-batch"
+      ]
+    },
+    "pairwise": true,
+    "mandated_triples": [
+      {
+        "database": "populated",
+        "shutdown": "killed",
+        "backlog": "multi-batch"
+      }
+    ],
+    "cartesian_driver": "protocol",
+    "exclusions": []
+  },
+  "parity": {
+    "protocol": {
+      "required_raw_keys": [
+        "protocol.migration.ready",
+        "protocol.identity.durable",
+        "protocol.session.reconciled",
+        "protocol.retention.drained",
+        "protocol.privacy.minimal"
+      ],
+      "raw_exclusions": []
+    },
+    "chromium": {
+      "required_raw_keys": [
+        "chromium.migration.ready",
+        "chromium.identity.durable",
+        "chromium.session.reconciled",
+        "chromium.retention.drained",
+        "chromium.privacy.minimal"
+      ],
+      "raw_exclusions": []
+    }
+  }
+}

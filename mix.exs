@@ -96,6 +96,10 @@ defmodule Webby.MixProject do
         "esbuild webby --minify",
         "phx.digest"
       ],
+      "e2e.validate": ["cmd npm --prefix e2e run validate"],
+      "e2e.protocol": ["cmd npm --prefix e2e run protocol:pr"],
+      "e2e.chromium": ["cmd npm --prefix e2e run chromium:smoke"],
+      "e2e.mcp": ["cmd npm --prefix e2e run mcp:compat"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

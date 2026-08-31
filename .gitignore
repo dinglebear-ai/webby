@@ -39,6 +39,9 @@ webby-*.tar
 npm-debug.log
 /assets/node_modules/
 /extension/node_modules/
+/e2e/node_modules/
+/e2e/artifacts/
+/e2e/.worlds/
 
 # Project-local linked worktrees.
 /.worktrees/

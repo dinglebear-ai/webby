@@ -1,0 +1,203 @@
+{
+  "contract_version": 1,
+  "id": "e2e-transport-security",
+  "surface_ids": ["http:get-mcp", "http:post-mcp", "topic:auth", "topic:pairing", "in:auth-respond", "in:heartbeat", "in:tool-error", "out:auth-challenge", "out:pairing-rejected", "mcp:ping", "dashboard:reject", "dashboard:revoke-credential", "fixture:oversized", "fixture:deep", "behavior:loopback", "capability:world-nonce", "capability:fixture", "world-field:nonce", "world-field:environment", "world-field:telemetry-capability", "artifact:protocol"],
+  "title": "Transport authentication and malformed input boundaries",
+  "description": "Exercises loopback, Origin, bearer scope, protocol version, payload size, malformed frame, and replay defenses.",
+  "owner": "webby-ihb.13",
+  "deferred_to": "webby-ihb.13",
+  "tier": "pr",
+  "weight": 18,
+  "drivers": [
+    "protocol"
+  ],
+  "security": "security-boundary",
+  "handles": {
+    "world": "world",
+    "browser": "browser",
+    "credential": "credential",
+    "call": "call"
+  },
+  "preconditions": [
+    "A new isolated world is healthy",
+    "Valid and revoked identities are available as logical handles"
+  ],
+  "steps": [
+    {
+      "id": "http",
+      "action": {
+        "op": "transport.reject-matrix"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "terminal",
+          "subject": "wait.transport-security.http"
+        },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "websocket",
+      "action": {
+        "op": "websocket.reject-matrix"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "rejected",
+          "subject": "wait.transport-security.websocket"
+        },
+        "timeout_ms": 10000
+      }
+    },
+    {
+      "id": "bounds",
+      "action": {
+        "op": "limits.exercise"
+      },
+      "wait": {
+        "predicate": {
+          "kind": "closed",
+          "subject": "wait.transport-security.bounds"
+        },
+        "timeout_ms": 10000
+      }
+    }
+  ],
+  "outcomes": [
+    {
+      "key": "transport.denied",
+      "predicate": {
+        "kind": "rejected",
+        "subject": "transport.denied"
+      }
+    },
+    {
+      "key": "state.unchanged",
+      "predicate": {
+        "kind": "rejected",
+        "subject": "state.unchanged"
+      }
+    },
+    {
+      "key": "limits.enforced",
+      "predicate": {
+        "kind": "terminal",
+        "subject": "limits.enforced"
+      }
+    }
+  ],
+  "artifacts": [
+    "timeline",
+    "server-log",
+    "protocol-transcript",
+    "persistence-diagnostics",
+    "world-manifest"
+  ],
+  "cleanup": [
+    {
+      "kind": "closed",
+      "subject": "cleanup.attacker.sockets.are.closed"
+    },
+    {
+      "kind": "absent",
+      "subject": "cleanup.pending.call.capacity.is.zero"
+    },
+    {
+      "kind": "removable",
+      "subject": "cleanup.temporary.world.is.removable"
+    }
+  ],
+  "security_matrices": [
+    {
+      "id": "http-mcp",
+      "dimensions": {
+        "credential": ["anonymous", "read", "call", "revoked", "wrong-secret", "second-valid-call"],
+        "origin": ["absent", "loopback", "foreign"],
+        "input": ["jsonrpc", "malformed-json", "compressed", "segmented", "incomplete"],
+        "boundary": ["below", "at", "above"],
+        "connection": ["current", "late"]
+      },
+      "pairwise": true,
+      "mandated_triples": [{"credential": "revoked", "input": "segmented", "connection": "late"}],
+      "exclusions": []
+    },
+    {
+      "id": "browser-websocket-handshake",
+      "dimensions": {
+        "browser_claim": ["unpaired", "owner-id", "other-id"],
+        "origin": ["valid-extension", "foreign-extension", "foreign-https"],
+        "connection": ["current", "late"]
+      },
+      "pairwise": true,
+      "mandated_triples": [{"browser_claim": "other-id", "origin": "foreign-extension", "connection": "late"}],
+      "exclusions": []
+    },
+    {
+      "id": "browser-websocket-message",
+      "dimensions": {
+        "browser_state": ["unpaired", "authenticated-owner", "authenticated-other"],
+        "surface": ["observation", "result", "frame", "json-depth"],
+        "boundary": ["below", "at", "above"],
+        "connection": ["current", "late"]
+      },
+      "pairwise": true,
+      "mandated_triples": [{"browser_state": "authenticated-other", "surface": "result", "connection": "late"}],
+      "exclusions": []
+    },
+    {
+      "id": "cross-transport-call",
+      "dimensions": {
+        "credential": ["read", "call", "revoked", "second-valid-call"],
+        "scope": ["read", "call"],
+        "session": ["owner", "other-browser", "missing", "late"],
+        "surface": ["catalog", "arguments", "result"],
+        "boundary": ["below", "at", "above"],
+        "connection": ["current", "late"]
+      },
+      "pairwise": true,
+      "mandated_triples": [
+        {"credential": "revoked", "session": "late", "connection": "late"},
+        {"credential": "call", "scope": "call", "surface": "result", "boundary": "below", "session": "owner"},
+        {"credential": "call", "scope": "call", "surface": "result", "boundary": "at", "session": "owner"},
+        {"credential": "call", "scope": "call", "surface": "result", "boundary": "above", "session": "owner"}
+      ],
+      "exclusions": [
+        {
+          "combination": {"credential": "second-valid-call", "session": "other-browser", "scope": "call"},
+          "owner": "webby-maintainers",
+          "rationale": "MCP credentials are intentionally global capability tokens with no principal or browser ownership field; cross-principal ownership denial is not a supported product semantic.",
+          "approved_by": "engineering-review",
+          "reviewed_on": "2026-08-27",
+          "expires_on": "2027-02-27"
+        }
+      ]
+    }
+  ],
+  "combinations": {
+    "dimensions": {
+      "matrix": ["http-mcp", "browser-websocket-handshake", "browser-websocket-message", "cross-transport-call"],
+      "repetition": ["first", "repeat"],
+      "execution": ["live"]
+    },
+    "pairwise": true,
+    "mandated_triples": [
+      {
+        "matrix": "cross-transport-call",
+        "repetition": "repeat",
+        "execution": "live"
+      }
+    ],
+    "cartesian_driver": "none",
+    "exclusions": []
+  },
+  "parity": {
+    "protocol": {
+      "required_raw_keys": [
+        "protocol.transport.denied",
+        "protocol.state.unchanged",
+        "protocol.limits.enforced"
+      ],
+      "raw_exclusions": []
+    }
+  }
+}

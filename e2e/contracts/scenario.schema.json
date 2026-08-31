@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://webby.local/e2e/scenario.schema.json",
+  "title": "Webby E2E scenario contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "id", "surface_ids", "title", "tier", "weight", "drivers", "security", "handles", "preconditions", "steps", "outcomes", "artifacts", "cleanup", "combinations", "parity"],
+  "properties": {
+    "contract_version": {"const": 1},
+    "id": {"type": "string", "pattern": "^e2e-[a-z0-9-]+$"},
+    "surface_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
+    "title": {"type": "string", "minLength": 5},
+    "description": {"type": "string", "minLength": 10},
+    "owner": {"type": "string", "pattern": "^webby-ihb\\.[0-9]+$"},
+    "deferred_to": {"type": "string", "pattern": "^webby-ihb\\.[0-9]+$"},
+    "tier": {"enum": ["pr", "main", "nightly", "stress", "compatibility"]},
+    "weight": {"type": "integer", "minimum": 1, "maximum": 100},
+    "drivers": {"type": "array", "items": {"enum": ["protocol", "chromium"]}, "minItems": 1, "uniqueItems": true},
+    "security": {"enum": ["ordinary", "sensitive", "security-boundary"]},
+    "handles": {"type": "object", "additionalProperties": {"type": "string", "enum": ["world", "browser", "pairing", "credential", "page", "session", "document", "call", "audit"]}},
+    "preconditions": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+    "steps": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "action", "wait"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+          "action": {"$ref": "#/$defs/operation"},
+          "wait": {
+            "type": "object", "additionalProperties": false,
+            "required": ["predicate", "timeout_ms"],
+            "properties": {
+              "predicate": {"$ref": "#/$defs/predicate"},
+              "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 120000}
+            }
+          }
+        }
+      }
+    },
+    "outcomes": {"type": "array", "items": {"$ref": "#/$defs/outcome"}, "minItems": 1},
+    "artifacts": {"type": "array", "items": {"enum": ["timeline", "server-log", "protocol-transcript", "dashboard-snapshot", "extension-log", "browser-trace", "persistence-diagnostics", "world-manifest"]}, "minItems": 1, "uniqueItems": true},
+    "cleanup": {"type": "array", "items": {"$ref": "#/$defs/predicate"}, "minItems": 1},
+    "security_matrices": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/securityMatrix"}},
+    "parity": {
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "protocol": {"$ref": "#/$defs/parityAdapter"},
+        "chromium": {"$ref": "#/$defs/parityAdapter"}
+      }
+    },
+    "combinations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dimensions", "pairwise", "mandated_triples", "cartesian_driver", "exclusions"],
+      "properties": {
+        "dimensions": {"type": "object", "additionalProperties": {"type": "array", "items": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "boolean"}]}, "minItems": 1, "uniqueItems": true}},
+        "pairwise": {"type": "boolean"},
+        "mandated_triples": {"type": "array", "items": {"type": "object", "minProperties": 3, "additionalProperties": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "boolean"}]}}},
+        "cartesian_driver": {"enum": ["protocol", "none"]},
+        "exclusions": {"type": "array", "items": {"$ref": "#/$defs/exclusion"}}
+      }
+    }
+  },
+  "$defs": {
+    "securityMatrix": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "dimensions", "pairwise", "mandated_triples", "exclusions"],
+      "properties": {
+        "id": {"enum": ["http-mcp", "browser-websocket-handshake", "browser-websocket-message", "cross-transport-call"]},
+        "dimensions": {"type": "object", "minProperties": 3, "additionalProperties": {"type": "array", "items": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "boolean"}]}, "minItems": 1, "uniqueItems": true}},
+        "pairwise": {"const": true},
+        "mandated_triples": {"type": "array", "items": {"type": "object", "minProperties": 3, "additionalProperties": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "boolean"}]}}},
+        "exclusions": {"type": "array", "items": {"$ref": "#/$defs/exclusion"}}
+      }
+    },
+    "outcome": {
+      "type": "object", "additionalProperties": false,
+      "required": ["key", "predicate"],
+      "properties": {"key": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"}, "predicate": {"$ref": "#/$defs/predicate"}}
+    },
+    "operation": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["op"],
+          "properties": {
+            "op": {"const": "health.request"},
+            "params": {"type": "object", "additionalProperties": false, "properties": {"id": {"type": "string", "minLength": 1}}}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["op"],
+          "properties": {
+            "op": {"enum": ["browser.pair", "discovery.publish", "dashboard.register", "credential.create", "mcp.negotiate", "mcp.invoke", "audit.observe", "transport.reject-matrix", "websocket.reject-matrix", "limits.exercise", "lifecycle.trigger", "lifecycle.observe-terminal", "lifecycle.recover", "capacity.fill", "capacity.overflow", "race.execute", "capacity.reuse", "world.start", "world.restart", "retention.drain", "privacy.erase", "extension.configure", "extension.pair-scan", "extension.permissions", "extension.restart", "fixture.discover", "fixture.invoke-matrix", "fixture.mutate", "commands.validate"]},
+            "params": {"type": "object", "additionalProperties": false}
+          }
+        }
+      ]
+    },
+    "predicate": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "subject"],
+      "properties": {
+        "kind": {"enum": ["ready", "equals", "present", "absent", "terminal", "rejected", "closed", "released", "removable", "unchanged", "drained", "redacted", "stopped", "authenticated", "available", "invalidated", "aborted", "recovered"]},
+        "subject": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+        "expected": {}
+      }
+    },
+    "parityAdapter": {
+      "type": "object", "additionalProperties": false, "required": ["required_raw_keys", "raw_exclusions"],
+      "properties": {
+        "required_raw_keys": {"type": "array", "items": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"}, "minItems": 1, "uniqueItems": true},
+        "raw_exclusions": {"type": "array", "items": {"$ref": "#/$defs/rawExclusion"}}
+      }
+    },
+    "rawExclusion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["key", "owner", "rationale", "approved_by", "reviewed_on", "expires_on"],
+      "properties": {
+        "key": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"}, "owner": {"type": "string", "minLength": 2}, "rationale": {"type": "string", "minLength": 10}, "approved_by": {"type": "string", "minLength": 2}, "reviewed_on": {"type": "string", "format": "date"}, "expires_on": {"type": "string", "format": "date"}
+      }
+    },
+    "exclusion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["combination", "owner", "rationale", "approved_by", "reviewed_on", "expires_on"],
+      "properties": {
+        "combination": {"type": "object", "minProperties": 1},
+        "owner": {"type": "string", "minLength": 2},
+        "rationale": {"type": "string", "minLength": 10},
+        "approved_by": {"type": "string", "minLength": 2},
+        "reviewed_on": {"type": "string", "format": "date"},
+        "expires_on": {"type": "string", "format": "date"}
+      }
+    }
+  }
+}

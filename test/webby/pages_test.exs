@@ -168,12 +168,30 @@ defmodule Webby.PagesTest do
     observed =
       Map.merge(context.observation, %{"tab_id" => 42, "document_id" => "document-one"})
 
-    assert {:ok, _session} = Discovery.observe(context.browser.id, observed)
+    assert {:ok, session} = Discovery.observe(context.browser.id, observed)
+    assert :ok = Webby.BrowserConnections.register(context.browser.id, self())
+
+    call =
+      Task.async(fn ->
+        Webby.BrowserConnections.call(context.browser.id, %{
+          "tab_id" => session.tab_id,
+          "document_id" => session.document_id,
+          "catalog_revision" => session.catalog_revision
+        })
+      end)
+
+    assert_receive {:tool_call, %{"call_id" => call_id}}
 
     assert {:ok, %{scanning_paused: true}} =
              Webby.Browsers.update_scanning(context.browser.id, "granted_sites", true)
 
     assert Pages.list_active_sessions() == []
+
+    assert Task.await(call) ==
+             {:error, "stale_document",
+              "The browser document changed before the tool call completed"}
+
+    assert_receive {:tool_cancel, %{"call_id" => ^call_id}}
   end
 
   test "page.call binds the exact document and records a metadata-only audit", context do

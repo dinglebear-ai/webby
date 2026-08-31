@@ -2,6 +2,7 @@ defmodule WebbyWeb.MCPControllerTest do
   use WebbyWeb.ConnCase, async: false
 
   alias Webby.MCP.Credentials
+  alias Webby.Repo
 
   setup do
     {:ok, _credential, token} = Credentials.create("Test MCP client")
@@ -68,7 +69,7 @@ defmodule WebbyWeb.MCPControllerTest do
     assert response["result"]["instructions"] =~ "catalog_revision"
   end
 
-  test "calls a read-only broker action with structured content", %{conn: conn, token: token} do
+  test "encodes non-object broker results as MCP text content", %{conn: conn, token: token} do
     response =
       conn
       |> mcp_headers(token, "2025-06-18")
@@ -81,7 +82,8 @@ defmodule WebbyWeb.MCPControllerTest do
       |> json_response(200)
 
     assert response["result"]["isError"] == false
-    assert response["result"]["structuredContent"] == []
+    refute Map.has_key?(response["result"], "structuredContent")
+    assert response["result"]["content"] == [%{"type" => "text", "text" => "[]"}]
   end
 
   test "requires an explicit call scope for page invocation", %{conn: conn, token: token} do
@@ -170,6 +172,32 @@ defmodule WebbyWeb.MCPControllerTest do
              }
            })
            |> response(400)
+  end
+
+  test "cancellation validates without touching credentials and rejects revoked tokens", %{
+    conn: conn
+  } do
+    assert {:ok, credential, token} = Credentials.create("Cancellation client", ["call"])
+    assert is_nil(credential.last_used_at)
+
+    request = %{
+      "jsonrpc" => "2.0",
+      "method" => "notifications/cancelled",
+      "params" => %{"requestId" => "cancelled-call"}
+    }
+
+    assert conn
+           |> mcp_headers(token, "2025-06-18")
+           |> post("/mcp", request)
+           |> response(202)
+
+    assert is_nil(Repo.reload!(credential).last_used_at)
+    assert {:ok, _revoked} = Credentials.revoke(credential.id)
+
+    assert build_conn()
+           |> mcp_headers(token, "2025-06-18")
+           |> post("/mcp", request)
+           |> response(401)
   end
 
   defp mcp_headers(conn, token, version \\ nil) do

@@ -2,7 +2,7 @@ defmodule Webby.BrowsersTest do
   use Webby.DataCase, async: false
 
   alias Webby.Browsers
-  alias Webby.Browsers.{AuthChallenge, PairingRequest}
+  alias Webby.Browsers.{AuthChallenge, Browser, PairingRequest}
 
   test "approval persists a browser and authentication challenges are single-use" do
     {public_key, private_key} = :crypto.generate_key(:eddsa, :ed25519)
@@ -23,6 +23,48 @@ defmodule Webby.BrowsersTest do
 
     assert {:error, :authentication_failed} =
              Browsers.authenticate(browser.id, challenge.challenge_id, signature)
+  end
+
+  test "malformed authentication signatures and stored public keys fail closed" do
+    {public_key, private_key} = :crypto.generate_key(:eddsa, :ed25519)
+    {:ok, browser} = public_key |> pairing_request() |> then(&Browsers.approve_pairing(&1.id))
+
+    assert {:ok, malformed_signature_challenge} =
+             Browsers.issue_challenge(browser.id, browser.extension_id)
+
+    malformed_signature = :crypto.strong_rand_bytes(63) |> Base.url_encode64(padding: false)
+
+    assert {:error, :authentication_failed} =
+             Browsers.authenticate(
+               browser.id,
+               malformed_signature_challenge.challenge_id,
+               malformed_signature
+             )
+
+    assert Repo.get(AuthChallenge, malformed_signature_challenge.challenge_id)
+
+    valid_signature =
+      :crypto.sign(
+        :eddsa,
+        :none,
+        malformed_signature_challenge.signed_message,
+        [private_key, :ed25519]
+      )
+      |> Base.url_encode64(padding: false)
+
+    Repo.update_all(
+      from(b in Browser, where: b.id == ^browser.id),
+      set: [public_key: <<0>>]
+    )
+
+    assert {:error, :authentication_failed} =
+             Browsers.authenticate(
+               browser.id,
+               malformed_signature_challenge.challenge_id,
+               valid_signature
+             )
+
+    assert Repo.get(AuthChallenge, malformed_signature_challenge.challenge_id)
   end
 
   test "revoked browsers cannot receive challenges" do
@@ -145,6 +187,45 @@ defmodule Webby.BrowsersTest do
     assert {:ok, second} = Browsers.issue_challenge(browser.id, browser.extension_id)
     assert second.challenge_id == first.challenge_id
     assert Repo.aggregate(AuthChallenge, :count) == 1
+  end
+
+  test "instance rollover rejects and deletes the old challenge before issuing a new one" do
+    previous = Application.get_env(:webby, :instance_id_provider)
+    instance = start_supervised!({Agent, fn -> "instance-a" end})
+    Application.put_env(:webby, :instance_id_provider, fn -> Agent.get(instance, & &1) end)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:webby, :instance_id_provider, previous),
+        else: Application.delete_env(:webby, :instance_id_provider)
+    end)
+
+    {public_key, private_key} = :crypto.generate_key(:eddsa, :ed25519)
+    {:ok, browser} = public_key |> pairing_request() |> then(&Browsers.approve_pairing(&1.id))
+    assert {:ok, old_challenge} = Browsers.issue_challenge(browser.id, browser.extension_id)
+
+    old_signature =
+      :crypto.sign(:eddsa, :none, old_challenge.signed_message, [private_key, :ed25519])
+      |> Base.url_encode64(padding: false)
+
+    Agent.update(instance, fn _ -> "instance-b" end)
+
+    assert {:error, :authentication_failed} =
+             Browsers.authenticate(browser.id, old_challenge.challenge_id, old_signature)
+
+    refute Repo.get(AuthChallenge, old_challenge.challenge_id)
+    assert {:ok, new_challenge} = Browsers.issue_challenge(browser.id, browser.extension_id)
+    assert new_challenge.instance_id == "instance-b"
+    assert new_challenge.challenge_id != old_challenge.challenge_id
+
+    new_signature =
+      :crypto.sign(:eddsa, :none, new_challenge.signed_message, [private_key, :ed25519])
+      |> Base.url_encode64(padding: false)
+
+    assert {:ok, %{id: browser_id}} =
+             Browsers.authenticate(browser.id, new_challenge.challenge_id, new_signature)
+
+    assert browser_id == browser.id
   end
 
   test "pairing admission is bounded" do

@@ -1,0 +1,20 @@
+{
+  "contract_version": 1,
+  "owner": "webby-ihb.15",
+  "reviewed_exclusions": [
+    {"id": "probe:retention-drain", "operation": "retention.drain", "owner": "webby-ihb.15", "rationale": "Retention maintenance has no public request surface; the isolated probe invokes the production transaction against only the world database.", "reviewed_on": "2026-08-27"},
+    {"id": "probe:audit-reconcile", "operation": "audit.reconcile", "owner": "webby-ihb.15", "rationale": "Abandoned-audit reconciliation is scheduled maintenance with no public request surface.", "reviewed_on": "2026-08-27"},
+    {"id": "probe:browser-erase", "operation": "browser.erase", "owner": "webby-ihb.15", "rationale": "Explicit erasure policy is a production context operation not currently exposed by HTTP or LiveView.", "reviewed_on": "2026-08-27"},
+    {"id": "probe:schema-validate", "operation": "schema.validate", "owner": "webby-ihb.15", "rationale": "Unsupported-generation validation occurs during application startup and requires an isolated pre-start probe for exact failure evidence.", "reviewed_on": "2026-08-27"},
+    {"id": "probe:audit-retry", "operation": "audit.complete.retry", "owner": "webby-ihb.15", "rationale": "Deterministic SQLite terminal-write failure injection has no safe public trigger and is limited to the isolated world.", "reviewed_on": "2026-08-27"}
+    ,{"id": "probe:audit-exhausted", "operation": "audit.complete.exhausted", "owner": "webby-ihb.15", "rationale": "Exhausted terminal-write failure requires deterministic isolated SQLite fault injection and verifies the production retry boundary.", "reviewed_on": "2026-08-27"}
+  ],
+  "inventory": [
+    "fresh-migration", "preserved-restart", "fresh-restart", "startup-session-reconcile",
+    "identity-durability", "abandoned-audit", "terminal-audit-retry", "terminal-audit-exhaustion",
+    "schema-current", "schema-unsupported", "retention-multi-batch", "retention-active-preserved",
+    "retention-pending-preserved", "retention-started-preserved", "erasure-anonymize",
+    "erasure-delete", "erasure-browser-isolation", "resync-write-contention", "page-list-constant-query",
+    "checkpointed-attested-diagnostics", "strict-cleanup", "restart-combinations"
+  ]
+}

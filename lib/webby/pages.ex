@@ -229,16 +229,21 @@ defmodule Webby.Pages do
   end
 
   def close_browser_sessions(browser_id, event \\ "page.session.browser_unavailable") do
-    ids =
+    sessions =
       Repo.all(
         from s in DocumentSession,
           where: s.browser_id == ^browser_id and s.status == "active",
-          select: s.id
+          select: {s.id, s.tab_id, s.document_id}
       )
 
-    case close_sessions(ids) do
+    case close_sessions(Enum.map(sessions, &elem(&1, 0))) do
       {:ok, count} = result ->
         log_closed(browser_id, count, event)
+
+        Enum.each(sessions, fn {_id, tab_id, document_id} ->
+          BrowserConnections.cancel_document(browser_id, tab_id, document_id)
+        end)
+
         result
     end
   end

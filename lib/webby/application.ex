@@ -33,7 +33,11 @@ defmodule Webby.Application do
 
     children =
       if Application.get_env(:webby, :runtime_discovery, true) do
-        children ++ [{Webby.RuntimeDiscovery, []}, Webby.RuntimeStatusCache]
+        runtime_discovery_options =
+          Application.get_env(:webby, Webby.RuntimeDiscovery, [])
+
+        children ++
+          [{Webby.RuntimeDiscovery, runtime_discovery_options}, Webby.RuntimeStatusCache]
       else
         children ++ [Webby.RuntimeStatusCache]
       end

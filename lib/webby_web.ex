@@ -32,7 +32,9 @@ defmodule WebbyWeb do
 
   def channel do
     quote do
-      use Phoenix.Channel
+      # Browser protocol payloads may contain tool arguments, results, and credentials.
+      # Phoenix's default debug logger prints the complete inbound payload.
+      use Phoenix.Channel, log_handle_in: false
     end
   end
 

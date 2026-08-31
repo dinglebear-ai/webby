@@ -3,9 +3,9 @@ defmodule Webby.Invocations do
 
   import Ecto.Query
   alias Webby.{BrowserConnections, InvocationAudit, Repo}
+  alias Webby.MCP.Credentials
   require Logger
 
-  @timeout 15_000
   @completion_attempts 3
 
   def call(registration, session, tool_name, arguments, context) do
@@ -30,7 +30,11 @@ defmodule Webby.Invocations do
         )
 
         external_key = {context[:credential_id], context[:request_id]}
-        result = BrowserConnections.call(session.browser_id, payload, @timeout, external_key)
+
+        timeout = Application.get_env(:webby, :invocation_timeout_ms, 15_000)
+
+        result = call_browser(session, payload, timeout, external_key, audit.id, context)
+
         duration = elapsed_ms(started)
         finish_audit(audit, result, duration)
         log_finish(registration, session, result, duration)
@@ -86,6 +90,14 @@ defmodule Webby.Invocations do
 
   def prune_before(cutoff, batch_size \\ 500)
       when is_struct(cutoff, DateTime) and batch_size in 1..5_000 do
+    {examined, deleted} = prune_before_diagnostics(cutoff, batch_size)
+    _ = examined
+    {:ok, deleted}
+  end
+
+  @doc false
+  def prune_before_diagnostics(cutoff, batch_size)
+      when is_struct(cutoff, DateTime) and batch_size in 1..5_000 do
     ids =
       Repo.all(
         from a in InvocationAudit,
@@ -95,8 +107,13 @@ defmodule Webby.Invocations do
           select: a.id
       )
 
-    {count, _} = Repo.delete_all(from a in InvocationAudit, where: a.id in ^ids)
-    {:ok, count}
+    {count, _} =
+      case ids do
+        [] -> {0, nil}
+        ids -> Repo.delete_all(from a in InvocationAudit, where: a.id in ^ids)
+      end
+
+    {length(ids), count}
   end
 
   defp finish_audit(audit, result, duration) do
@@ -143,6 +160,7 @@ defmodule Webby.Invocations do
   def complete_audit(id, outcome, error_kind, duration, opts \\ []) do
     attempts = Keyword.get(opts, :attempts, @completion_attempts)
     update_fun = Keyword.get(opts, :update_fun, &update_audit/4)
+
     complete_with_retry(id, outcome, error_kind, duration, attempts, update_fun)
   end
 
@@ -183,6 +201,31 @@ defmodule Webby.Invocations do
 
   defp elapsed_ms(started),
     do: System.convert_time_unit(System.monotonic_time() - started, :native, :millisecond)
+
+  defp call_browser(session, payload, timeout, external_key, audit_id, context) do
+    credential_id = context[:credential_id]
+
+    case admit_credential(credential_id) do
+      :ok ->
+        BrowserConnections.call(
+          session.browser_id,
+          payload,
+          timeout,
+          external_key,
+          audit_id,
+          credential_id
+        )
+
+      {:error, :revoked} ->
+        {:error, "revoked", "The MCP credential was revoked"}
+
+      {:error, :credential_unavailable} ->
+        {:error, "credential_unavailable", "The MCP credential could not be validated"}
+    end
+  end
+
+  defp admit_credential(nil), do: :ok
+  defp admit_credential(credential_id), do: Credentials.active?(credential_id)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 end

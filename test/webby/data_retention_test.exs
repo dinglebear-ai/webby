@@ -1,6 +1,7 @@
 defmodule Webby.DataRetentionTest do
   use Webby.DataCase, async: false
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias Webby.Browsers.{Browser, PairingRequest}
   alias Webby.DataRetention
   alias Webby.Discovery.Discovery
@@ -42,6 +43,235 @@ defmodule Webby.DataRetentionTest do
     assert Enum.any?(remaining_audits, &(&1.outcome == "succeeded" and &1.inserted_at == recent))
     assert Repo.get(DocumentSession, active_session_id)
     assert Repo.get(PairingRequest, pending_pairing_id)
+  end
+
+  test "drain exhausts eligible rows and reports independently measured batches" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    old = DateTime.add(now, -30, :day)
+    browser = insert_browser()
+    insert_discoveries(browser, [old, old, old])
+    parent = self()
+
+    :telemetry.attach_many(
+      "retention-drain-#{System.unique_integer([:positive])}",
+      [[:webby, :retention, :batch], [:webby, :retention, :drain]],
+      fn event, measurements, metadata, _ -> send(parent, {event, measurements, metadata}) end,
+      nil
+    )
+
+    cutoffs = %{discoveries: now, sessions: now, pairings: now, invocations: now}
+    assert {:ok, %{batch_count: 2, counts: %{discoveries: 3}}} = DataRetention.drain(cutoffs, 2)
+
+    assert_receive {[:webby, :retention, :batch], %{rows_examined: 2, rows_deleted: 2},
+                    %{diagnostics: %{discoveries: %{examined: 2, deleted: 2}}}}
+
+    assert_receive {[:webby, :retention, :batch], %{rows_examined: 1, rows_deleted: 1}, _}
+    assert_receive {[:webby, :retention, :drain], %{batch_count: 2, rows_deleted: 3}, _}
+    refute_receive {[:webby, :retention, :batch], %{rows_examined: 0}, _}
+  end
+
+  test "maintenance never abandons an invocation inside the configured maximum lifetime" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    browser = insert_browser()
+    registration = insert_registration(browser)
+    session_id = insert_session(browser, registration, now, 1, "active")
+
+    live = insert_started_audit(browser, registration, session_id, DateTime.add(now, -2, :second))
+
+    orphan =
+      insert_started_audit(browser, registration, session_id, DateTime.add(now, -20, :second))
+
+    state = [
+      abandoned_after_seconds: 1,
+      discovery_days: 365,
+      session_days: 365,
+      pairing_days: 365,
+      invocation_days: 365,
+      batch_size: 100
+    ]
+
+    assert {:ok, _diagnostics} = DataRetention.maintain(state)
+    assert %{outcome: "started"} = Repo.reload!(live)
+    assert %{outcome: "abandoned", error_kind: "interrupted"} = Repo.reload!(orphan)
+
+    assert {:ok, _diagnostics} = DataRetention.maintain(state)
+    assert %{outcome: "abandoned"} = Repo.reload!(orphan)
+  end
+
+  test "browser erasure tombstone rejects challenge authentication and replacement registration" do
+    {public_key, private_key} = :crypto.generate_key(:eddsa, :ed25519)
+
+    browser =
+      %Browser{}
+      |> Browser.changeset(%{
+        display_name: "Erasure race browser",
+        extension_id: "erasureraceextensionidentifier",
+        public_key: public_key,
+        scanning_mode: "granted_sites",
+        paired_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+      |> Repo.insert!()
+
+    assert {:ok, challenge} = Webby.Browsers.issue_challenge(browser.id, browser.extension_id)
+
+    signature =
+      :crypto.sign(:eddsa, :none, challenge.signed_message, [private_key, :ed25519])
+      |> Base.url_encode64(padding: false)
+
+    parent = self()
+
+    eraser =
+      Task.async(fn ->
+        DataRetention.erase_browser(browser.id,
+          after_tombstone: fn ->
+            send(parent, :tombstone_installed)
+            assert_receive :release_delete
+            :ok
+          end
+        )
+      end)
+
+    assert_receive :tombstone_installed
+
+    assert {:error, :browser_erased} =
+             Webby.Browsers.issue_challenge(browser.id, browser.extension_id)
+
+    assert {:error, :browser_erased} =
+             Webby.Browsers.authenticate(browser.id, challenge.challenge_id, signature)
+
+    assert {:error, :browser_erased} = Webby.BrowserConnections.register(browser.id, self())
+
+    send(eraser.pid, :release_delete)
+    assert {:ok, %{browser_id: browser_id}} = Task.await(eraser)
+    assert browser_id == browser.id
+    refute Repo.get(Browser, browser.id)
+    assert {:error, :browser_erased} = Webby.BrowserConnections.register(browser.id, self())
+  end
+
+  test "browser erasure removes resolved pairing material for the same extension identity" do
+    browser = insert_browser()
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    matching =
+      %PairingRequest{}
+      |> PairingRequest.changeset(%{
+        display_name: "Rejected matching identity",
+        extension_id: browser.extension_id,
+        public_key: browser.public_key,
+        scanning_mode: browser.scanning_mode,
+        status: "rejected",
+        expires_at: now,
+        resolved_at: now
+      })
+      |> Repo.insert!()
+
+    unrelated_id = insert_pairing(now, 555, "rejected")
+
+    assert {:ok, %{deleted_pairings: 1}} = DataRetention.erase_browser(browser.id)
+    refute Repo.get(PairingRequest, matching.id)
+    assert Repo.get(PairingRequest, unrelated_id)
+  end
+
+  test "browser erasure removes its tombstone and preserves durable data when callback rejects" do
+    browser = insert_browser()
+
+    assert_raise MatchError, fn ->
+      DataRetention.erase_browser(browser.id,
+        after_tombstone: fn -> {:error, :forced_rollback} end
+      )
+    end
+
+    assert Repo.get(Browser, browser.id)
+    assert :ok = Webby.BrowserConnections.browser_admissible?(browser.id)
+  end
+
+  test "browser erasure removes its tombstone and preserves durable data when callback raises" do
+    browser = insert_browser()
+
+    assert_raise RuntimeError, "forced callback failure", fn ->
+      DataRetention.erase_browser(browser.id,
+        after_tombstone: fn -> raise "forced callback failure" end
+      )
+    end
+
+    assert Repo.get(Browser, browser.id)
+    assert :ok = Webby.BrowserConnections.browser_admissible?(browser.id)
+  end
+
+  test "browser erasure removes its tombstone when callback throws or exits" do
+    browser = insert_browser()
+
+    for {kind, callback} <- [
+          {:throw, fn -> throw(:forced_callback_throw) end},
+          {:exit, fn -> exit(:forced_callback_exit) end}
+        ] do
+      case kind do
+        :throw ->
+          assert catch_throw(DataRetention.erase_browser(browser.id, after_tombstone: callback)) ==
+                   :forced_callback_throw
+
+        :exit ->
+          assert catch_exit(DataRetention.erase_browser(browser.id, after_tombstone: callback)) ==
+                   :forced_callback_exit
+      end
+
+      assert Repo.get(Browser, browser.id)
+      assert :ok = Webby.BrowserConnections.browser_admissible?(browser.id)
+    end
+  end
+
+  test "owner death after erasure commit reconciles fail closed and disconnects existing work" do
+    browser = insert_browser()
+    parent = self()
+
+    Sandbox.allow(
+      Webby.Repo,
+      self(),
+      Process.whereis(Webby.BrowserConnections)
+    )
+
+    assert :ok = Webby.BrowserConnections.register(browser.id, self())
+
+    call = Task.async(fn -> Webby.BrowserConnections.call(browser.id, %{}, 5_000) end)
+    assert_receive {:tool_call, %{"call_id" => call_id}}
+
+    owner =
+      spawn(fn ->
+        DataRetention.erase_browser(browser.id,
+          after_persist: fn ->
+            send(parent, :erasure_committed)
+            receive do: (:never -> :ok)
+          end
+        )
+      end)
+
+    death_monitor = Process.monitor(owner)
+    assert_receive :erasure_committed
+    Application.delete_env(:webby, :browser_erasure_reconciler)
+    assert DataRetention.erased?(browser.id)
+
+    owner_token =
+      :sys.get_state(Webby.BrowserConnections).browser_erasures[browser.id].owners
+      |> Map.keys()
+      |> List.first()
+
+    assert :ok =
+             Webby.BrowserConnections.reconcile_owner_down(
+               :browser,
+               browser.id,
+               owner_token
+             )
+
+    assert :erased =
+             :sys.get_state(Webby.BrowserConnections).browser_erasures[browser.id].status
+
+    Process.exit(owner, :kill)
+    assert_receive {:DOWN, ^death_monitor, :process, ^owner, :killed}
+
+    assert_receive :browser_erased
+    assert_receive {:tool_cancel, %{"call_id" => ^call_id}}
+    assert {:error, "browser_erased", _message} = Task.await(call)
+    assert {:error, :browser_erased} = Webby.BrowserConnections.register(browser.id, self())
   end
 
   defp insert_browser do
@@ -169,6 +399,20 @@ defmodule Webby.DataRetentionTest do
       |> Repo.insert!()
       |> Map.fetch!(:id)
     end)
+  end
+
+  defp insert_started_audit(browser, registration, session_id, timestamp) do
+    %InvocationAudit{inserted_at: timestamp}
+    |> InvocationAudit.changeset(%{
+      registration_id: registration.id,
+      session_id: session_id,
+      browser_id: browser.id,
+      tool_name: "retention-tool",
+      catalog_revision: 1,
+      outcome: "started",
+      duration_ms: 0
+    })
+    |> Repo.insert!()
   end
 
   defp set_updated_at(schema, id, timestamp) do
