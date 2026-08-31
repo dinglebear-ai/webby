@@ -11,6 +11,7 @@ export function classifyBrowserError({kind, text, expectedNetworkOutage = false,
   if (expectedBrowserShutdown && kind === "network_error" && message === "net::ERR_ABORTED") return {severity: "expected", code: "expected_browser_shutdown_abort"}
   const exactShutdownWorker = expectedExtensionId && url === `chrome-extension://${expectedExtensionId}/src/service_worker.js`
   if (expectedBrowserShutdown && kind === "worker_console" && exactShutdownWorker && message === "Webby E2E binding failed Error: The browser is shutting down.") return {severity: "expected", code: "expected_browser_shutdown_console"}
+  if (expectedBrowserShutdown && kind === "worker_console" && exactShutdownWorker && message === "Webby updated tab scan failed Error: The browser is shutting down.") return {severity: "expected", code: "expected_browser_shutdown_scan_console"}
   if (expectedFixtureCapacityDenial && kind === "console" && text.level === "error" && message === "Failed to load resource: the server responded with a status of 400 (Bad Request)") {
     try {
       const parsed = new URL(url)
@@ -22,6 +23,7 @@ export function classifyBrowserError({kind, text, expectedNetworkOutage = false,
   const exactWorkerIdentity = /(?:^|\/)service_worker\.js(?:\?|$)/.test(url) || (expectedExtensionId && /^[a-p]{32}$/.test(expectedExtensionId))
   const intentionalRevokedWorker = expectedBrowserRevocation && kind === "worker_console" && exactWorkerIdentity
   if (intentionalRevokedWorker && /^Webby removed tab close failed Error: channel_(?:not_ready|disconnected)(?:\n|$)/.test(message)) return {severity: "expected", code: "expected_revoked_tab_close"}
+  if (intentionalRevokedWorker && /^Webby removed tab close failed \{kind: browser_unavailable\}(?:\n|$)/.test(message)) return {severity: "expected", code: "expected_revoked_browser_unavailable"}
   if (intentionalRevokedWorker && /^Webby observation close failed; resync required(?:\s|$)/.test(message)) return {severity: "expected", code: "expected_revoked_observation_close"}
   if (intentionalRevokedWorker && /^Webby channel event failed \{(?:callId: [0-9a-f-]{36}, )?error: Error: channel_disconnected(?:\n|\}|$)/.test(message)) return {severity: "expected", code: "expected_revoked_channel_disconnect"}
   if (intentionalRevokedWorker && /^Webby channel event failed \{callId: [0-9a-f-]{36}, error: Error: channel_not_ready(?:\n|\}|$)/.test(message)) return {severity: "expected", code: "expected_revoked_channel_not_ready"}

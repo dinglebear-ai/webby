@@ -3,7 +3,7 @@ import {readFile} from "node:fs/promises"
 import {spawn} from "node:child_process"
 import {once} from "node:events"
 import test from "node:test"
-import {emitLiveTestReceipt} from "../../support/live-test-receipt.js"
+import {emitBoundLiveTestReceipt as emitLiveTestReceipt, producerRecord} from "../../support/live-producer-evidence.js"
 import {auditState, eventBarrier, measuredState, openCapacityFixture, rawMcpCancel, toolOutcome} from "./protocol-capacity-fixture.js"
 
 const contractPath = new URL("../../contracts/scenarios/capacity-concurrency.json", import.meta.url)
@@ -28,7 +28,7 @@ test("authoritative terminal-event by order by late-result matrix executes live 
   assert.deepEqual(outcomes.map(item => item.row), rows)
   assert.equal(outcomes.every(item => item.pending_calls === 0 && item.audit_delta === 1 && item.started_audits === 0), true)
   await fixture.recorder.producers.world.event("capacity.matrix.measured", {seed: fixture.world.seed, rows: outcomes})
-  await emitLiveTestReceipt({scenarioId: "e2e-capacity-concurrency", adapter: "protocol", receiptId: "capacity-matrix-live", assertions: {rows_executed: outcomes.length, pending_calls: 0, audit_delta_per_row: 1}})
+  await emitLiveTestReceipt({scenarioId: "e2e-capacity-concurrency", adapter: "protocol", receiptId: "capacity-matrix-live", assertions: {rows_executed: outcomes.length, pending_calls: 0, audit_delta_per_row: 1}, producerRecords: [producerRecord("sqlite_result", "webby-sqlite", "capacity-matrix", {rows: outcomes})]})
 })
 
 async function executeRow(fixture, row, index) {

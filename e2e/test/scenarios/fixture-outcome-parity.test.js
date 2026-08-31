@@ -6,6 +6,8 @@ import test from "node:test"
 import {ArtifactRecorder} from "../../support/artifacts.js"
 import {emitFixtureOutcomeParityReport, runSharedFixtureOutcome} from "../../support/fixture-outcome-parity.js"
 import {compareParity} from "../../support/parity-report.js"
+import {emitBoundLiveTestReceipt, producerRecord} from "../../support/live-producer-evidence.js"
+import {auditState, eventBarrier, openCapacityFixture, rawMcpCancel, toolOutcome} from "./protocol-capacity-fixture.js"
 
 const scenarioPath = new URL("../../contracts/scenarios/fixture-outcomes.json", import.meta.url)
 
@@ -62,4 +64,47 @@ test("shared semantics execute through ScenarioRunner and emitted adapter report
   const drift = structuredClone(chromiumReport)
   drift.results[0].outcomes["results.normalized"].value.success = "failed"
   assert.ok(compareParity(protocolReport, drift, [scenario]).errors.some(error => error.includes("normalized outcomes differ")))
+})
+
+test("complete fixture outcome denominator executes through the live protocol adapter", {timeout: 180_000}, async t => {
+  const fixture = await openCapacityFixture(t, "protocol-live-fixture-outcomes", {invocationTimeoutMs: 400})
+  const browser = fixture.browsers[0].browser
+  const entry = fixture.credentials[0]
+  const outcomes = []
+  const invoke = async (name, complete) => {
+    const tools = await entry.client.call({action: "page.tools", params: {page: fixture.registrationId}})
+    const session = tools.body.result.structuredContent.sessions[0]
+    const id = `fixture-${name}`
+    const arrival = eventBarrier(browser, "tool.call", 1)
+    const request = entry.client.call({action: "page.call", params: {page: fixture.registrationId, session: session.id, tool: "tool_0", catalog_revision: session.catalog_revision, arguments: {outcome: name}}}, {id})
+    const [call] = await arrival
+    await complete({call, id, request})
+    const response = await request
+    outcomes.push({name, outcome: toolOutcome(response), status: response.status})
+    return response
+  }
+  await invoke("json", ({call}) => browser.result(call.call_id, {json: {ok: true}}))
+  await invoke("text", ({call}) => browser.result(call.call_id, {text: "fixture text"}))
+  await invoke("throw", ({call}) => browser.toolError(call.call_id, "tool_error", "fixture rejection"))
+  await invoke("delay", async ({call}) => { await new Promise(resolve => setImmediate(resolve)); await browser.result(call.call_id, {released: true}) })
+  await invoke("cancel", async ({id}) => { await rawMcpCancel(fixture.world.baseUrl, entry.credential.token, id) })
+  let deep = {leaf: true}; for (let index = 0; index < 80; index++) deep = {nested: deep}
+  await invoke("deep", async ({call}) => { await browser.result(call.call_id, deep).catch(error => assert.ok(["channel_reply_error", "frame_size_limit"].includes(error.code))) })
+  await invoke("side-effect", ({call}) => browser.result(call.call_id, {side_effects: 1}))
+  await invoke("oversized", async ({call}) => { browser.wire.maxFrameBytes = 2_000_000; try { await browser.result(call.call_id, {value: "x".repeat(1_100_000)}).catch(error => assert.ok(error)) } finally { browser.wire.maxFrameBytes = 262_144 } })
+  if (browser.wire?.closed) { await browser.authenticate(browser.browserId); await browser.observe([fixture.observation]) }
+  const oldSession = entry.sessions[0]
+  const staleArrival = eventBarrier(browser, "tool.call", 1)
+  const staleRequest = entry.client.call({action: "page.call", params: {page: fixture.registrationId, session: oldSession.id, tool: "tool_0", catalog_revision: oldSession.catalog_revision, arguments: {outcome: "stale"}}}, {id: "fixture-stale"})
+  await staleArrival
+  const replacement = {...fixture.observation, document_id: "fixture-mutated-document"}
+  await browser.observe([replacement])
+  const stale = await staleRequest
+  assert.equal(stale.body.result.isError, true)
+  assert.deepEqual(new Set(outcomes.map(row => row.name)), new Set(["json", "text", "throw", "delay", "cancel", "oversized", "deep", "side-effect"]))
+  assert.equal(outcomes.every(row => row.status === 200), true)
+  const audits = await auditState(fixture)
+  assert.equal(audits.started, 0)
+  const assertions = {tool_outcomes: outcomes.length, transport_exchanges: outcomes.length, side_effects: 1}
+  await emitBoundLiveTestReceipt({scenarioId: "e2e-fixture-tool-outcomes", adapter: "protocol", receiptId: "fixture-protocol-live", assertions, producerRecords: [producerRecord("sqlite_result", "webby-sqlite", fixture.world.worldId, {rows: audits.rows, outcomes, stale: toolOutcome(stale)})]})
 })

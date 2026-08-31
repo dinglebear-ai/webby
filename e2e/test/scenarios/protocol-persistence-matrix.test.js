@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import {readFile} from "node:fs/promises"
 import test from "node:test"
-import {emitLiveTestReceipt} from "../../support/live-test-receipt.js"
+import {emitBoundLiveTestReceipt as emitLiveTestReceipt, producerRecord} from "../../support/live-producer-evidence.js"
 import {executeSql, sqlite, strictCleanup} from "../../support/persistence-driver.js"
 import {selectCombinations} from "../../support/validate-contracts.js"
 import {WebbyWorld} from "../../support/world.js"
@@ -40,7 +40,7 @@ test("authoritative restart selector executes every database/shutdown/backlog co
     }
   }
   assert.equal(new Set(executed).size, rows.length)
-  await emitLiveTestReceipt({scenarioId: "e2e-persistence-retention", adapter: "protocol", receiptId: "persistence-matrix-live", assertions: {restart_combinations: executed.length, schema_generation: 7}})
+  await emitLiveTestReceipt({scenarioId: "e2e-persistence-retention", adapter: "protocol", receiptId: "persistence-matrix-live", assertions: {restart_combinations: executed.length, schema_generation: 7}, producerRecords: [producerRecord("sqlite_result", "webby-sqlite", "persistence-matrix", {rows: executed.map(combination => ({combination}))})]})
 })
 
 test("persistence execution set covers every inventoried behavior and every direct seam is reviewed", async () => {

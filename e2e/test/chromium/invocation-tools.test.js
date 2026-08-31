@@ -16,12 +16,13 @@ import {
   fixtureOutcomeParityResult,
   runSharedFixtureOutcome,
 } from "../../support/fixture-outcome-parity.js";
-import { observeSystemOutputSurfaces } from "../../support/boundary-surfaces.js";
+import { surfaceProof } from "../../support/boundary-surfaces.js";
 import { MCPClient, MCPClientError } from "../../support/mcp-client.js";
 import { compareParity } from "../../support/parity-report.js";
 import { ScenarioRunner } from "../../support/scenario-runner.js";
 import { WebbyWorld } from "../../support/world.js";
 import { startFixtureServer } from "../../fixture/server.js";
+import { emitBoundLiveTestReceipt as emitLiveTestReceipt, producerRecord } from "../../support/live-producer-evidence.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -1004,17 +1005,13 @@ test(
         recorder: chromiumRecorder,
         actions: {
           "fixture.discover": async ({ boundary }) => {
-            observeSystemOutputSurfaces(
-              boundary,
-              {catalog_names: initialCatalogNames},
-              [
+            const surfaceIds = [
                 "in:discovery-observed",
                 "capability:fixture",
                 "world-field:fixture-url",
-              ],
-              "extension-fixture-catalog",
-              fixtureContract.id,
-            );
+              ];
+            const event = await chromiumRecorder.producers.fixture.event("fixture.catalog.observed", {surface_ids: surfaceIds, outcomes: {catalog_names: initialCatalogNames}, correlation: {scenario_id: fixtureContract.id, operation: "fixture.discover"}});
+            for (const surfaceId of surfaceIds) boundary.observe(surfaceId, surfaceProof.fixtureOutcome(event, surfaceId));
             boundary.complete();
             return {
               observations: {
@@ -1024,10 +1021,7 @@ test(
             };
           },
           "fixture.invoke-matrix": async ({ boundary }) => {
-            observeSystemOutputSurfaces(
-              boundary,
-              {results: chromiumResults.value, abort: chromiumAbort, stale: chromiumStale},
-              [
+            const surfaceIds = [
                 "in:tool-result",
                 "in:tool-error",
                 "out:tool-call",
@@ -1043,10 +1037,9 @@ test(
                 "fixture:oversized",
                 "fixture:deep",
                 "fixture:side-effect",
-              ],
-              "extension-fixture-outcome-matrix",
-              fixtureContract.id,
-            );
+              ];
+            const event = await chromiumRecorder.producers.fixture.event("fixture.matrix.completed", {surface_ids: surfaceIds, outcomes: {results: chromiumResults.value, abort: chromiumAbort, stale: chromiumStale}, correlation: {scenario_id: fixtureContract.id, operation: "fixture.invoke-matrix"}});
+            for (const surfaceId of surfaceIds) boundary.observe(surfaceId, surfaceProof.fixtureOutcome(event, surfaceId));
             boundary.complete();
             return {
               observations: {
@@ -1105,8 +1098,17 @@ test(
     });
     await lease.revoke();
 
+    const observedChromeEvents = await driver.chromeEvents();
+    assert.ok(dashboard.lastOperation, "live dashboard operation evidence is required")
     await chromium.close();
     chromium = undefined;
+    await emitLiveTestReceipt({
+      scenarioId: "e2e-extension-controls",
+      adapter: "chromium",
+      receiptId: "extension-controls-live",
+      assertions: {commands_executed: liveRows.size, chrome_events_observed: observedChromeEvents.length, dashboard_operations_observed: 1},
+      producerRecords: observedChromeEvents.filter(event => Number.isInteger(event.sequence)).map(event => producerRecord("chrome_event", "chromium-extension", String(event.identity ?? event.sequence), {sequence: event.sequence, event_name: event.event_name ?? event.type, event})),
+    });
     await recorder.finalize({ status: "passed", coverage });
     finalized = true;
     await fixture.close();

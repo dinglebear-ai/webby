@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import {emitLiveTestReceipt} from "../../support/live-test-receipt.js"
+import {emitBoundLiveTestReceipt as emitLiveTestReceipt, producerRecord} from "../../support/live-producer-evidence.js"
 import {ArtifactRecorder} from "../../support/artifacts.js"
 import {checkpointedDiagnostics, executeSql, persistenceOperation, sqlite, strictCleanup} from "../../support/persistence-driver.js"
 import {WebbyWorld} from "../../support/world.js"
@@ -49,5 +49,5 @@ test("multi-batch retention preserves active state and erasure is browser-isolat
   assert.equal(diagnostics.wal_bytes, 0)
   const artifact = await recorder.finalize({cleanup: {database: "checkpointed", secrets: "redacted"}})
   assert.ok(artifact.uploadCandidates.some(path => path.endsWith("persistence-diagnostics.json")))
-  await emitLiveTestReceipt({scenarioId: "e2e-persistence-retention", adapter: "protocol", receiptId: "retention-erasure-live", assertions: {retention_batches: 3, rows_deleted: 6, anonymized_browser: "browser-a", deleted_browser: "browser-b"}})
+  await emitLiveTestReceipt({scenarioId: "e2e-persistence-retention", adapter: "protocol", receiptId: "retention-erasure-live", assertions: {retention_batches: 3, rows_deleted: 6, anonymized_browser: "browser-a", deleted_browser: "browser-b"}, producerRecords: [producerRecord("artifact_attestation", "artifact-recorder", "retention-erasure", {attestation_sha256: artifact.attestation.attestation_sha256, diagnostics})]})
 })

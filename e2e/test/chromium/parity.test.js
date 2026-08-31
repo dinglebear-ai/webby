@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import {mkdtemp, readFile} from "node:fs/promises"
+import {mkdtemp, readFile, rm} from "node:fs/promises"
 import {tmpdir} from "node:os"
 import {join} from "node:path"
 import test from "node:test"
@@ -53,8 +53,9 @@ test("strict normalization mutation guards reject deletion addition drift and ra
   assert.ok(validateStrictResult(unknownField, scenario, "chromium").some(error => error.includes("fields are invalid")))
 })
 
-test("executor runs every side once, reuses valid records, and reruns only missing or stale sides", async () => {
+test("executor runs every side once, reuses valid records, and reruns only missing or stale sides", async t => {
   const root = await mkdtemp(join(tmpdir(), "webby-parity-executor-"))
+  t.after(() => rm(root, {recursive: true, force: true}))
   const calls = []
   const execute = () => new ParityExecutor({scenarios: [scenario], sourceRevision, toolchainFingerprints, seed, signingKey, cacheDirectory: join(root, "cache"), outputDirectory: join(root, "artifacts"), runScenario: async ({scenario: selected, adapter, staleErrors}) => {
     calls.push({scenario: selected.id, adapter, staleErrors})
@@ -73,8 +74,9 @@ test("executor runs every side once, reuses valid records, and reruns only missi
   assert.equal(calls.length, 3); assert.deepEqual(third.report.execution.map(row => row.disposition), ["reused", "rerun-stale"])
 })
 
-test("executor fails closed for missing adapter execution and normalized terminal drift", async () => {
+test("executor fails closed for missing adapter execution and normalized terminal drift", async t => {
   const root = await mkdtemp(join(tmpdir(), "webby-parity-fail-"))
+  t.after(() => rm(root, {recursive: true, force: true}))
   let omitChromium = true
   await assert.rejects(new ParityExecutor({scenarios: [scenario], sourceRevision, toolchainFingerprints, seed, signingKey, cacheDirectory: root, runScenario: async ({adapter}) => {
     if (adapter === "chromium" && omitChromium) return {world_nonce: "w".repeat(32), result: undefined}
@@ -82,6 +84,7 @@ test("executor fails closed for missing adapter execution and normalized termina
   }}).execute(), /fresh chromium.*invalid/)
   omitChromium = false
   const driftRoot = await mkdtemp(join(tmpdir(), "webby-parity-drift-"))
+  t.after(() => rm(driftRoot, {recursive: true, force: true}))
   await assert.rejects(new ParityExecutor({scenarios: [scenario], sourceRevision, toolchainFingerprints, seed, signingKey, cacheDirectory: driftRoot, runScenario: async ({adapter}) => ({world_nonce: "w".repeat(32), result: result(adapter, value => {
     if (adapter === "chromium") { value.outcomes["caller.terminal"] = {state: "failed", terminal: true, field: "caller.terminal"}; value.raw_observables[0].value = value.outcomes["caller.terminal"] }
     return value

@@ -68,7 +68,8 @@ export function fixtureOutcomeActions({model = new SharedFixtureOutcomeModel(), 
     "fixture.discover": async ({boundary}) => {
       const catalog = terminal("succeeded", {names: ["deep", "delay", "json", "oversized", "side_effect", "text", "throw"], sanitized: true})
       const surfaceIds = ["in:discovery-observed", "capability:fixture", "world-field:fixture-url"]
-      observeSurfaceProofs(boundary, Object.fromEntries(surfaceIds.map(surfaceId => [surfaceId, surfaceProof.systemOutput({catalog}, {source: "fixture-catalog-model-result", identity: scenario.id})])))
+      const event = await recorder.producers.fixture.event("fixture.catalog.observed", {surface_ids: surfaceIds, outcomes: catalog, correlation: {scenario_id: scenario.id, operation: "fixture.discover"}})
+      observeSurfaceProofs(boundary, Object.fromEntries(surfaceIds.map(surfaceId => [surfaceId, surfaceProof.fixtureOutcome(event, surfaceId)])))
       boundary.complete()
       return {observations: {"catalog.sanitized": catalog, "wait.fixture-tool-outcomes.catalog": catalog}}
     },
@@ -88,7 +89,8 @@ export function fixtureOutcomeActions({model = new SharedFixtureOutcomeModel(), 
       })
       const abort = {state: "aborted", terminal: true, value: {caller: cancellation.state, browser_work: cancellation.value.browser_work, late_result: cancellation.value.late_result, lifecycle: cancellation.value.lifecycle}}
       const surfaceIds = ["in:tool-result", "in:tool-error", "out:tool-call", "mcp:tools-call", "action:page-call", "ext-event:call", "ext-event:cancel", "fixture:json", "fixture:text", "fixture:throw", "fixture:delay", "fixture:cancel", "fixture:oversized", "fixture:deep", "fixture:side-effect"]
-      observeSurfaceProofs(boundary, Object.fromEntries(surfaceIds.map(surfaceId => [surfaceId, surfaceProof.systemOutput({results, abort}, {source: "fixture-outcome-model-result", identity: scenario.id})])))
+      const event = await recorder.producers.fixture.event("fixture.matrix.completed", {surface_ids: surfaceIds, outcomes: {results, abort}, correlation: {scenario_id: scenario.id, operation: "fixture.invoke-matrix"}})
+      observeSurfaceProofs(boundary, Object.fromEntries(surfaceIds.map(surfaceId => [surfaceId, surfaceProof.fixtureOutcome(event, surfaceId)])))
       boundary.complete()
       return {observations: {"results.normalized": results, "abort.observed": abort, "wait.fixture-tool-outcomes.outcomes": results}}
     },
@@ -109,6 +111,9 @@ export async function runSharedFixtureOutcome({scenario, driver, world, recorder
     actions: fixtureOutcomeActions({recorder, scenario}),
     observe: async () => ({}),
     cleanup,
+    // This deterministic model is an oracle only. Live protocol/Chromium tests
+    // must emit the suite receipt from retained transport evidence.
+    recordTelemetry: false,
   })
   return runner.run()
 }

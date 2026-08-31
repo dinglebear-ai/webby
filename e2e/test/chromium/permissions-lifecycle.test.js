@@ -193,9 +193,12 @@ test("actual popup and dashboard enforce pause, credential revoke, browser revok
       "cleanup.temporary.world.is.removable": {state: "removable"},
     })
     const parityRecorder = await new ArtifactRecorder({root: join(world.workspace.artifacts, "chromium-lifecycle-parity"), scenarioId: lifecycleContract.id, worldId: world.worldId, seed: world.seed}).open()
-    const proofs = entries => Object.fromEntries(entries.map(([surfaceId, output, source, identity]) => [surfaceId, surfaceProof.systemOutput(output, {source, identity})]))
+    const proofs = async entries => Object.fromEntries(await Promise.all(entries.map(async ([surfaceId, output, source, identity]) => {
+      const event = await parityRecorder.producers.chromium.event("producer.measurement", {surface_id: surfaceId, correlation: String(identity), source, measurement: output})
+      return [surfaceId, surfaceProof.measurement(event, surfaceId)]
+    })))
     const chromiumScenario = await runLifecycleScenario({scenario: lifecycleContract, driver: "chromium", world, recorder: parityRecorder, normalized: chromiumNormalized, cleanup: parityCleanup, runtimeSurfaceEvidence: {
-      "lifecycle.trigger": proofs([
+      "lifecycle.trigger": await proofs([
         ["out:tool-cancel", terminal, "mcp-browser-revoke-terminal", "19019"],
         ["mcp:cancelled", terminal, "mcp-browser-revoke-terminal", "19019"],
         ["dashboard:revoke-browser", {browser_id: browserId, row: await dashboard.row("browser", browserId).textContent()}, "dashboard-rendered-browser-state", browserId],
@@ -205,12 +208,12 @@ test("actual popup and dashboard enforce pause, credential revoke, browser revok
         ["chrome-event:tab-removed", {events: await driver.chromeEvents()}, "extension-chrome-event-log", "tabs.onRemoved"],
         ["chrome-event:permission-removed", {events: await driver.chromeEvents()}, "extension-chrome-event-log", "permissions.onRemoved"],
       ]),
-      "lifecycle.observe-terminal": proofs([
+      "lifecycle.observe-terminal": await proofs([
         ["in:session-closed", {active_sessions: 0, registration_id: registrationId}, "sqlite-session-query", registrationId],
         ["storage:ignored-origins", await driver.storage(["ignoredOrigins"]), "extension-storage-read", "ignoredOrigins"],
         ["behavior:retention", raceAudits[0], "sqlite-invocation-audit", registrationId],
       ]),
-      "lifecycle.recover": proofs([
+      "lifecycle.recover": await proofs([
         ["in:browser-resync", reconciliation, "extension-protocol-log", reconciliation.outbound.sequence],
         ["in:browser-settings", {storage: await driver.storage(["scanningPaused"]), session: await currentSession()}, "extension-settings-and-session", registrationId],
       ]),

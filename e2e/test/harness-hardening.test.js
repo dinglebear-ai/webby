@@ -18,7 +18,7 @@ const proofFor = (surfaceId, sequence) => {
   if (category === "dashboard") return surfaceProof.dashboard({sequence, producer: "dashboard", type: "dashboard.operation.completed", data: {action: "test", entity_id: "entity-1"}})
   if (category === "chrome-event") return surfaceProof.chrome({sequence, producer: "extension", event_name: "chrome.test", identity: "tab-1"}, {eventName: "chrome.test", identity: "tab-1"})
   if (category === "version" || category === "mcp" || category === "action") return surfaceProof.mcp({status: 200, exchange: {id: sequence, transport_method: "POST", rpc_method: "tools/call", action: "status", version: "2025-06-18", path: "/mcp"}}, {method: "tools/call", version: "2025-06-18", action: "status"})
-  return surfaceProof.systemOutput({sequence, result: "test-system-output"}, {source: "test-transport", identity: surfaceId})
+  return surfaceProof.measurement({sequence, producer: "test-producer", type: "producer.measurement", data: {surface_id: surfaceId, correlation: `test-${sequence}`, measurement: {result: "test-producer-output"}}}, surfaceId)
 }
 const proofMap = surfaceIds => Object.fromEntries(surfaceIds.map((surfaceId, index) => [surfaceId, proofFor(surfaceId, index + 1)]))
 
@@ -61,9 +61,10 @@ test("adapter surface evidence must exactly equal declarations and inventory map
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, proofs: wrongKind, inventory}), /not allowed/)
   const forgedJournal = proofMap(scenario.surface_ids); forgedJournal["in:pairing-request"] = {kind: "journal_event", sequence: 1, type: "boundary.observed", producer: "world", surface_id: "in:pairing-request"}
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, proofs: forgedJournal, inventory}), /journal_event is not allowed/)
-  assert.throws(() => surfaceProof.systemOutput({type: "surface.test.observed", data: {surface_id: "in:pairing-request"}}, {source: "harness", identity: "fake"}), /immutable transport/)
-  const mutatedOutput = structuredClone(proofMap(scenario.surface_ids)); mutatedOutput["in:pairing-request"].output.result = "mutated"
-  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, proofs: mutatedOutput, inventory}), /incomplete or fabricated/)
+  const mutatedOutput = structuredClone(proofMap(scenario.surface_ids)); mutatedOutput["in:pairing-request"].surface_id = "out:pairing-pending"
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, proofs: mutatedOutput, inventory}), /incomplete or cross-bound/)
+  const crossBound = proofMap(scenario.surface_ids); crossBound["in:pairing-request"] = crossBound["out:pairing-pending"]
+  assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, proofs: crossBound, inventory}), /cross-bound/)
   const forgedArtifact = proofMap(scenario.surface_ids); forgedArtifact["artifact:manifest"].attestation.attestation_sha256 = "0".repeat(64)
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids, proofs: forgedArtifact, inventory}), /finalized attestation/)
   assert.throws(() => validateObservedSurfaces({scenario, driver: "protocol", observed: scenario.surface_ids.slice(1), proofs: proofMap(scenario.surface_ids.slice(1)), inventory}), /missing=/)

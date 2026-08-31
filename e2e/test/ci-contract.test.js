@@ -6,6 +6,7 @@ import test from "node:test"
 import {cleanupWorlds, consumeLiveTestReceipts, fullSuiteScenarioDenominators, initializeOwnedTempRoot, persistScenarioRunReceipts, stageAttested, writeShardManifest} from "../support/ci-runner.js"
 import {ArtifactRecorder} from "../support/artifacts.js"
 import {emitLiveTestReceipt} from "../support/live-test-receipt.js"
+import {emitBoundLiveTestReceipt, producerRecord} from "../support/live-producer-evidence.js"
 
 const root = resolve(import.meta.dirname, "../..")
 const requiredE2EPaths = ["lib/**", "test/**", "config/**", "priv/**", "assets/**", "e2e/**", "extension/**", "scripts/e2e*", "mix.exs", "mix.lock", ".mise.toml", ".github/workflows/e2e.yml", ".github/workflows/e2e-stress.yml"]
@@ -96,7 +97,8 @@ test("workflows pin actions and enforce failure-only attested uploads plus alway
   assert.equal((primary.match(/hashFiles\('e2e\/artifacts\/upload\/upload-attestation\.json'\) != ''/g) ?? []).length, 4)
   assert.equal((primary.match(new RegExp(cleanupAttestation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length, 4)
   assert.doesNotMatch(primary, /pull_request_target|secrets\./)
-  await emitLiveTestReceipt({scenarioId: "e2e-command-ci-entrypoints", adapter: "protocol", receiptId: "ci-entrypoints-contract", assertions: {workflows_checked: 2, full_suites: 2, cleanup_gates: 4, mutation_guards: true}})
+  const sourceSha256 = (await import("node:crypto")).createHash("sha256").update(primary + stress).digest("hex")
+  await emitBoundLiveTestReceipt({scenarioId: "e2e-command-ci-entrypoints", adapter: "protocol", receiptId: "ci-entrypoints-contract", assertions: {workflows_checked: 2, full_suites: 2, cleanup_gates: 4, mutation_guards: true}, producerRecords: [producerRecord("workflow_source", "github-workflow-files", "e2e-workflows", {source_sha256: sourceSha256})]})
 })
 
 test("explicit live test receipts require the exact nonce-bound assertion denominator", async t => {
@@ -107,16 +109,29 @@ test("explicit live test receipts require the exact nonce-bound assertion denomi
     if (previous.inbox === undefined) delete process.env.WEBBY_E2E_EVIDENCE_INBOX; else process.env.WEBBY_E2E_EVIDENCE_INBOX = previous.inbox
     if (previous.nonce === undefined) delete process.env.WEBBY_E2E_RUN_NONCE; else process.env.WEBBY_E2E_RUN_NONCE = previous.nonce
   })
-  for (const [scenarioId, receiptId] of [
-    ["e2e-capacity-concurrency", "capacity-matrix-live"], ["e2e-capacity-concurrency", "concurrency-live"],
-    ["e2e-command-ci-entrypoints", "ci-entrypoints-contract"],
-    ["e2e-persistence-retention", "persistence-matrix-live"], ["e2e-persistence-retention", "retention-erasure-live"],
-    ["e2e-transport-security", "transport-security-live"],
-  ]) await emitLiveTestReceipt({scenarioId, adapter: "protocol", receiptId, assertions: {assertions_executed: 1}})
+  for (const [scenarioId, receiptId, assertions] of [
+    ["e2e-capacity-concurrency", "capacity-matrix-live", {rows_executed: 1, pending_calls: 0, audit_delta_per_row: 1}],
+    ["e2e-capacity-concurrency", "concurrency-live", {scan_tabs: [10], peak_batch_limit: 128, active_sessions: 10}],
+    ["e2e-command-ci-entrypoints", "ci-entrypoints-contract", {workflows_checked: 2, full_suites: 2, cleanup_gates: 4, mutation_guards: true}],
+    ["e2e-fixture-tool-outcomes", "fixture-protocol-live", {tool_outcomes: 8, transport_exchanges: 8, side_effects: 1}],
+    ["e2e-persistence-retention", "persistence-matrix-live", {restart_combinations: 1, schema_generation: 7}],
+    ["e2e-persistence-retention", "retention-erasure-live", {retention_batches: 3, rows_deleted: 6, anonymized_browser: "a", deleted_browser: "b"}],
+    ["e2e-transport-security", "transport-security-live", {cross_world_replays_rejected: 2, cross_contract_replays_rejected: 2, cleanup_audits: 0}],
+  ]) await emitBoundLiveTestReceipt({scenarioId, adapter: "protocol", receiptId, assertions, producerRecords: [producerRecord("workflow_source", "adversarial-fixture", `${scenarioId}:${receiptId}`, {source_sha256: "a".repeat(64)})]})
   const runs = await consumeLiveTestReceipts("protocol-full", "protocol", [], {runNonce: "receipt-run-nonce", inbox: directory})
   assert.equal(runs.find(run => run.scenario_id === "e2e-command-ci-entrypoints").evidence_kind, "runtime_boundary")
   await assert.rejects(consumeLiveTestReceipts("protocol-full", "protocol", [], {runNonce: "wrong-nonce", inbox: directory}), /invalid or unbound/)
   await assert.rejects(consumeLiveTestReceipts("protocol-full", "chromium", [], {runNonce: "receipt-run-nonce", inbox: directory}), /invalid or unbound/)
+  await assert.rejects(emitLiveTestReceipt({scenarioId: "e2e-capacity-concurrency", adapter: "protocol", receiptId: "capacity-matrix-live", assertions: {rows_executed: 1}}), /assertions do not match schema/)
+  await assert.rejects(emitLiveTestReceipt({scenarioId: "e2e-capacity-concurrency", adapter: "protocol", receiptId: "capacity-matrix-live", assertions: {rows_executed: 1, pending_calls: 0, audit_delta_per_row: 1}}), /pre-existing producer artifact/)
+  const producerName = (await (await import("node:fs/promises")).readdir(directory)).find(name => name.startsWith("producer-e2e-capacity-concurrency-protocol-capacity-matrix-live-"))
+  const producerBytes = await readFile(join(directory, producerName))
+  const producerSha = (await import("node:crypto")).createHash("sha256").update(producerBytes).digest("hex")
+  const crossDirectory = await mkdtemp(join(tmpdir(), "webby-cross-receipt-")); t.after(() => rm(crossDirectory, {recursive: true, force: true}))
+  await writeFile(join(crossDirectory, producerName), producerBytes)
+  const crossReceipt = {schema_version: 1, kind: "live_test_assertion_receipt", scenario_id: "e2e-persistence-retention", adapter: "protocol", receipt_id: "persistence-matrix-live", run_nonce: "receipt-run-nonce", assertions: {restart_combinations: 1, schema_generation: 7}, producer_evidence_sha256: producerSha, producer_evidence_file: producerName}
+  await writeFile(join(crossDirectory, "live-cross-receipt.json"), `${JSON.stringify(crossReceipt)}\n`)
+  await assert.rejects(consumeLiveTestReceipts("protocol-full", "protocol", [], {runNonce: "receipt-run-nonce", inbox: crossDirectory}), /cross-bound/)
 })
 
 test("every E2E trigger path and deterministic, seam, live, and cleanup command is mutation guarded", async () => {
@@ -160,7 +175,7 @@ test("external cleanup refuses arbitrary and unowned roots and removes an empty 
   await assert.rejects(stat(owned), error => error.code === "ENOENT")
 })
 
-test("contracts-only and already-removed recorded roots produce a successful empty cleanup audit", async t => {
+test("contracts-only and already-removed recorded roots produce a successful empty cleanup audit", {skip: process.env.WEBBY_E2E_RUN_NONCE ? "suite owns the live artifact root" : false}, async t => {
   const artifactDirectory = join(root, "e2e", "artifacts"); await rm(artifactDirectory, {recursive: true, force: true})
   await mkdir(join(artifactDirectory, "upload", "cleanup"), {recursive: true})
   await mkdir(join(artifactDirectory, "cleanup-attested"), {recursive: true})

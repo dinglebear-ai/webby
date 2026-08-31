@@ -10,6 +10,8 @@ import {openFileHandles, removeOwnedWorkspace} from "./temp-workspace.js"
 import {reapManifest} from "./world.js"
 import {readScenarioContract} from "./runtime-contracts.js"
 import {parseScenarioTelemetry, readPlannedScenarioIds, writeSuiteTelemetry} from "./suite-telemetry.js"
+import {validateLiveReceiptAssertions} from "./live-test-receipt.js"
+import {validateProducerRecord} from "./live-producer-evidence.js"
 
 const e2eRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repositoryRoot = resolve(e2eRoot, "..")
@@ -143,11 +145,12 @@ const liveTestReceiptRequirements = Object.freeze({
   "protocol-full": Object.freeze({
     "e2e-capacity-concurrency": ["capacity-matrix-live", "concurrency-live"],
     "e2e-command-ci-entrypoints": ["ci-entrypoints-contract"],
+    "e2e-fixture-tool-outcomes": ["fixture-protocol-live"],
     "e2e-persistence-retention": ["persistence-matrix-live", "retention-erasure-live"],
     "e2e-transport-security": ["transport-security-live"],
   }),
   "chromium-full": Object.freeze({
-    "e2e-extension-controls": ["popup-controls-asserted", "chrome-events-asserted", "dashboard-commands-asserted"],
+    "e2e-extension-controls": ["extension-controls-live"],
     "e2e-persistence-retention": ["chromium-persistence-live", "chromium-fresh-profile-live"],
   }),
 })
@@ -163,7 +166,19 @@ export async function consumeLiveTestReceipts(name, adapter, runs, {runNonce, in
     const bytes = await readFile(path)
     let receipt
     try { receipt = JSON.parse(bytes) } catch { throw new Error(`${name}: malformed live test receipt`) }
-    if (receipt.schema_version !== 1 || receipt.kind !== "live_test_assertion_receipt" || receipt.run_nonce !== runNonce || receipt.adapter !== adapter || !required[receipt.scenario_id]?.includes(receipt.receipt_id) || !receipt.assertions || typeof receipt.assertions !== "object" || Array.isArray(receipt.assertions) || Object.keys(receipt.assertions).length === 0) throw new Error(`${name}: invalid or unbound live test receipt ${receipt.receipt_id ?? "unknown"}`)
+    if (receipt.schema_version !== 1 || receipt.kind !== "live_test_assertion_receipt" || receipt.run_nonce !== runNonce || receipt.adapter !== adapter || !required[receipt.scenario_id]?.includes(receipt.receipt_id)) throw new Error(`${name}: invalid or unbound live test receipt ${receipt.receipt_id ?? "unknown"}`)
+    validateLiveReceiptAssertions(receipt.receipt_id, receipt.assertions)
+    if (!/^[a-f0-9]{64}$/.test(receipt.producer_evidence_sha256 ?? "") || !/^producer-[a-z0-9-]+\.json$/.test(receipt.producer_evidence_file ?? "")) throw new Error(`${name}: live receipt lacks producer evidence`)
+    const evidencePath = join(inbox, receipt.producer_evidence_file)
+    const evidenceInfo = await lstat(evidencePath).catch(() => undefined)
+    if (!evidenceInfo?.isFile() || evidenceInfo.isSymbolicLink()) throw new Error(`${name}: live producer evidence is missing or unsafe`)
+    const evidenceBytes = await readFile(evidencePath)
+    if (sha256(evidenceBytes) !== receipt.producer_evidence_sha256) throw new Error(`${name}: live producer evidence hash drifted`)
+    let evidence
+    try { evidence = JSON.parse(evidenceBytes) } catch { throw new Error(`${name}: live producer evidence is malformed`) }
+    const assertionDigest = sha256(Buffer.from(JSON.stringify(receipt.assertions)))
+    if (evidence.schema_version !== 1 || evidence.kind !== "live_test_producer_evidence" || evidence.scenario_id !== receipt.scenario_id || evidence.adapter !== receipt.adapter || evidence.receipt_id !== receipt.receipt_id || evidence.run_nonce !== runNonce || evidence.assertions_sha256 !== assertionDigest || !Array.isArray(evidence.producer_records) || evidence.producer_records.length === 0) throw new Error(`${name}: live producer evidence is cross-bound or incomplete`)
+    for (const record of evidence.producer_records) validateProducerRecord(record)
     receipts.push({receipt, sha256: sha256(bytes)})
   }
   const seenRuns = new Set(runs.map(run => run.scenario_id))
@@ -294,7 +309,7 @@ export async function runSuite(name) {
   // Chromium smoke deliberately includes the main-tier lifecycle-removal
   // contract, so its executable manifest must use the main denominator even
   // though the suite is a required pull-request gate.
-  const lane = name === "protocol-pr" ? "pr" : "main"
+  const lane = name === "protocol-pr" ? "pr" : name.endsWith("-full") ? "nightly" : "main"
   await writeShardManifest({lane, driver, output: manifestPath, selectedIds: suiteScenarioDenominators[name]})
   const logPath = join(artifactRoot, "test-output.log")
   const scenarioTelemetryPath = join(runTemp, "scenario-runs.ndjson")

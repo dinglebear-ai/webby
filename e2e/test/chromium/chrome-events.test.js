@@ -1,6 +1,5 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import {emitLiveTestReceipt} from "../../support/live-test-receipt.js"
 import {chromiumCommandRows} from "../../support/chromium-command-matrix.js"
 
 test("every registered Chrome event has generated-copy instrumentation", async () => {
@@ -10,5 +9,4 @@ test("every registered Chrome event has generated-copy instrumentation", async (
     "chrome.tabs.onRemoved", "chrome.alarms.onAlarm", "chrome.permissions.onAdded", "chrome.permissions.onRemoved",
     "chrome.storage.onChanged", "chrome.runtime.onMessage",
   ])
-  await emitLiveTestReceipt({scenarioId: "e2e-extension-controls", adapter: "chromium", receiptId: "chrome-events-asserted", assertions: {instrumented_event_registrations: 10}})
 })

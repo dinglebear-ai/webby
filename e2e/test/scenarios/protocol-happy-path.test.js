@@ -18,7 +18,7 @@ import {
 import { SimulatedBrowser } from "../../support/simulated-browser.js";
 import { WebbyWorld } from "../../support/world.js";
 import {
-  observeSystemOutputSurfaces,
+  observeWireSurfaces,
   surfaceProof,
 } from "../../support/boundary-surfaces.js";
 
@@ -543,7 +543,7 @@ test(
       },
       "browser.pair": async ({ boundary }) => {
         const pairingJoin = await browser.connect();
-        observeSystemOutputSurfaces(
+        observeWireSurfaces(
           boundary,
           pairingJoin,
           ["topic:pairing"],
@@ -554,7 +554,7 @@ test(
         const pending = await browser.pair({
           displayName: "Scenario Simulator",
         });
-        observeSystemOutputSurfaces(
+        observeWireSurfaces(
           boundary,
           pending,
           ["in:pairing-request", "out:pairing-pending"],
@@ -563,7 +563,7 @@ test(
         );
         const pendingStatus = await browser.pairingStatus();
         assert.equal(pendingStatus.payload.status, "pending");
-        observeSystemOutputSurfaces(
+        observeWireSurfaces(
           boundary,
           pendingStatus,
           ["in:pairing-status", "out:pairing-status"],
@@ -578,17 +578,17 @@ test(
         const pushed = await approvedPush;
         assert.equal(pushed.browser_id, browserId);
         boundary.observe("dashboard:approve", surfaceProof.dashboard(dashboard.lastOperation));
-        observeSystemOutputSurfaces(boundary, pushed, ["out:pairing-approved"], "pairing-approved-push", browserId);
+        observeWireSurfaces(boundary, pushed, ["out:pairing-approved"], "pairing-approved-push", browserId);
         const welcome = await browser.authenticate(browserId);
         assert.equal(browser.topic, "browser:auth");
-        observeSystemOutputSurfaces(
+        observeWireSurfaces(
           boundary,
           welcome,
           ["topic:auth"],
           "authenticated-channel",
           browserId,
         );
-        observeSystemOutputSurfaces(
+        observeWireSurfaces(
           boundary,
           welcome,
           [
@@ -622,7 +622,7 @@ test(
         });
         const resync = await browser.resync([observation]);
         assert.equal(resync.payload.observation_count, 1);
-        observeSystemOutputSurfaces(
+        observeWireSurfaces(
           boundary,
           resync,
           ["in:browser-resync", "out:ack"],
@@ -631,7 +631,7 @@ test(
         );
         const observed = await browser.observe([observation]);
         assert.equal(observed.payload.observation_count, 1);
-        observeSystemOutputSurfaces(
+        observeWireSurfaces(
           boundary,
           observed,
           ["in:discovery-observed"],
@@ -686,6 +686,7 @@ test(
         credentialLease.use(async (secret) => {
           assert.equal(handles.get("browser", "browser"), browserId);
           assert.equal(handles.get("credential", "credential"), credentialId);
+          const versionInitializations = [];
           for (const version of [
             "2026-07-28",
             "2025-11-25",
@@ -698,7 +699,9 @@ test(
               version,
             });
             try {
-              assert.equal((await client.initialize()).status, 200);
+              const response = await client.initialize();
+              assert.equal(response.status, 200);
+              versionInitializations.push({version, response});
             } finally {
               client.close();
             }
@@ -709,26 +712,12 @@ test(
             version: "2025-06-18",
             recorder: { record: recorder.producers.mcp.event },
           });
-          assert.equal((await mcp.initialize()).status, 200);
-          assert.equal((await mcp.listTools()).status, 200);
-          assert.equal((await mcp.call({ action: "status" })).status, 200);
-          assert.equal(
-            (await mcp.call({ action: "browser.list" })).status,
-            200,
-          );
-          assert.equal(
-            (await mcp.call({ action: "discovery.list" })).status,
-            200,
-          );
-          assert.equal(
-            (
-              await mcp.call({
-                action: "discovery.get",
-                params: { discovery: discoveryId },
-              })
-            ).status,
-            200,
-          );
+          const initialized = await mcp.initialize(); assert.equal(initialized.status, 200);
+          const listedTools = await mcp.listTools(); assert.equal(listedTools.status, 200);
+          const statusResponse = await mcp.call({ action: "status" }); assert.equal(statusResponse.status, 200);
+          const browserListResponse = await mcp.call({ action: "browser.list" }); assert.equal(browserListResponse.status, 200);
+          const discoveryListResponse = await mcp.call({ action: "discovery.list" }); assert.equal(discoveryListResponse.status, 200);
+          const discoveryGetResponse = await mcp.call({action: "discovery.get", params: { discovery: discoveryId }}); assert.equal(discoveryGetResponse.status, 200);
           const pages = await mcp.call({ action: "page.list" });
           const pageList =
             pages.body.result.structuredContent ??
@@ -737,15 +726,7 @@ test(
             (item) => item.id === registrationId,
           );
           assert.equal(registered.available, true);
-          assert.equal(
-            (
-              await mcp.call({
-                action: "page.get",
-                params: { page: registrationId },
-              })
-            ).status,
-            200,
-          );
+          const pageGetResponse = await mcp.call({action: "page.get", params: { page: registrationId }}); assert.equal(pageGetResponse.status, 200);
           const tools = await mcp.call({
             action: "page.tools",
             params: { page: registrationId },
@@ -766,7 +747,7 @@ test(
           const call = await toolCall;
           assert.deepEqual(call.arguments, effect);
           assert.equal(call.tool_name, "tool_0");
-          await browser.result(call.call_id, expectedResult);
+          const resultAck = await browser.result(call.call_id, expectedResult);
           callResponse = await pending;
           mcp.close();
           mcp.token = undefined;
@@ -774,34 +755,25 @@ test(
             callResponse.body.result.structuredContent,
             expectedResult,
           );
-          observeSystemOutputSurfaces(
-            boundary,
-            callResponse,
-            [
-              "http:post-mcp",
-              "in:tool-result",
-              "out:tool-call",
-              "mcp:initialize",
-              "mcp:tools-list",
-              "mcp:tools-call",
-              "mcp:initialized",
-              "action:status",
-              "action:browser-list",
-              "action:discovery-list",
-              "action:discovery-get",
-              "action:page-list",
-              "action:page-get",
-              "action:page-tools",
-              "action:page-call",
-              "version:2026",
-              "version:2025-11",
-              "version:2025-06",
-              "version:2025-03",
-              "fixture:side-effect",
-            ],
-            "mcp-live-response-matrix",
-            call.call_id,
-          );
+          boundary.observe("http:post-mcp", surfaceProof.http(callResponse, {method: "POST", path: "/mcp"}));
+          boundary.observe("mcp:initialize", surfaceProof.mcp(initialized, {method: "initialize"}));
+          boundary.observe("mcp:tools-list", surfaceProof.mcp(listedTools, {method: "tools/list"}));
+          boundary.observe("mcp:tools-call", surfaceProof.mcp(callResponse, {method: "tools/call", action: "page.call"}));
+          const measurements = [
+            ["mcp:initialized", initialized, "initialize-notification"], ["action:status", statusResponse, "status"], ["action:browser-list", browserListResponse, "browser.list"],
+            ["action:discovery-list", discoveryListResponse, "discovery.list"], ["action:discovery-get", discoveryGetResponse, "discovery.get"], ["action:page-list", pages, "page.list"],
+            ["action:page-get", pageGetResponse, "page.get"], ["action:page-tools", tools, "page.tools"], ["action:page-call", callResponse, "page.call"],
+            ["in:tool-result", resultAck, call.call_id], ["out:tool-call", call, call.call_id], ["fixture:side-effect", callResponse.body.result.structuredContent, call.call_id],
+          ];
+          for (const [surfaceId, measurement, correlation] of measurements) {
+            const event = await recorder.producers.mcp.event("producer.measurement", {surface_id: surfaceId, correlation: String(correlation), measurement});
+            boundary.observe(surfaceId, surfaceProof.measurement(event, surfaceId));
+          }
+          const versionSurfaces = ["version:2026", "version:2025-11", "version:2025-06", "version:2025-03"];
+          for (const [index, {version, response}] of versionInitializations.entries()) {
+            const event = await recorder.producers.mcp.event("producer.measurement", {surface_id: versionSurfaces[index], correlation: version, measurement: response});
+            boundary.observe(versionSurfaces[index], surfaceProof.measurement(event, versionSurfaces[index]));
+          }
           boundary.complete();
           return {
             handles: { call: call.call_id },
