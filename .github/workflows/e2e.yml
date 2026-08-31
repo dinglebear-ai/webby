@@ -135,8 +135,12 @@ jobs:
             _build
           key: e2e-${{ runner.os }}-otp29.0.5-elixir1.20.3-node22.18.0-pw1.62.1-${{ hashFiles('mix.lock', 'e2e/package-lock.json') }}
       - run: mix deps.get && npm ci --prefix e2e
-      - if: matrix.suite == 'chromium:full'
-        run: npx --prefix e2e playwright install --with-deps chromium
+      - name: Restore Playwright Chromium 1.62.1
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-1.62.1-${{ hashFiles('e2e/package-lock.json') }}
+      - run: npx --prefix e2e playwright install --with-deps chromium
       - run: npm --prefix e2e run toolchains
       - run: npm --prefix e2e run ${{ matrix.suite }}
       - name: External reaper and leak audit

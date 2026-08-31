@@ -13,6 +13,7 @@ const requiredE2EPaths = ["lib/**", "test/**", "config/**", "priv/**", "assets/*
 const requiredStressEntries = ["schedule:", "workflow_dispatch:", "npm --prefix e2e run typecheck:stress", "npm --prefix e2e run test:stress", "npm --prefix e2e run test:stress:live", "./scripts/e2e-repeat", "if: always()", "npm --prefix e2e run cleanup"]
 const contractsJobBeamSetup = "erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236"
 const compatibilityBrowserSetup = "npx --prefix e2e playwright install --with-deps chromium"
+const fullBrowserCache = "key: playwright-chromium-${{ runner.os }}-1.62.1-${{ hashFiles('e2e/package-lock.json') }}"
 const fullPullRequestCondition = "github.event_name == 'push' || github.event_name == 'pull_request'"
 const fullSuites = '["protocol:full", "chromium:full"]'
 const telemetryUpload = "Upload non-secret suite cost and stability telemetry"
@@ -29,7 +30,9 @@ function assertTriggerAndStressContracts(primary, stress) {
   const fullJob = primary.slice(primary.indexOf("  full:"), primary.indexOf("  compatibility:"))
   assert.ok(fullJob.includes(fullPullRequestCondition), "full job must run on pull requests")
   assert.ok(fullJob.includes(fullSuites), "full job must run protocol and Chromium suites")
-  assert.ok(fullJob.includes(compatibilityBrowserSetup), "full Chromium suite must install Chromium")
+  assert.ok(fullJob.includes(fullBrowserCache) && fullJob.includes("path: ~/.cache/ms-playwright"), "full job must cache the pinned Playwright Chromium")
+  assert.equal(fullJob.match(new RegExp(compatibilityBrowserSetup, "g"))?.length, 1, "every full matrix suite must install Chromium exactly once")
+  assert.doesNotMatch(fullJob, /if: matrix\.suite == 'chromium:full'\s*\n\s*run: npx --prefix e2e playwright install/, "protocol full must not skip Chromium installation")
   assert.match(fullJob, /- name: External reaper and leak audit\n\s+if: always\(\)\n\s+run: npm --prefix e2e run cleanup/, "full job must always run cleanup")
   assert.ok(fullJob.includes(telemetryUpload) && fullJob.includes("suite-telemetry.json") && fullJob.includes("retention-days: 30"), "full job must publish telemetry")
   const compatibilityJob = primary.slice(primary.indexOf("  compatibility:"))
@@ -145,7 +148,9 @@ test("every E2E trigger path and deterministic, seam, live, and cleanup command 
   const fullJob = primary.slice(primary.indexOf("  full:"), primary.indexOf("  compatibility:"))
   assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace(fullPullRequestCondition, "github.event_name == 'push'")), stress), /full job must run on pull requests/)
   assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace(fullSuites, '["protocol:full"]')), stress), /full job must run protocol and Chromium suites/)
-  assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace(compatibilityBrowserSetup, "removed browser setup")), stress), /full Chromium suite must install Chromium/)
+  assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace(fullBrowserCache, "removed browser cache")), stress), /full job must cache the pinned Playwright Chromium/)
+  assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace(compatibilityBrowserSetup, "removed browser setup")), stress), /every full matrix suite must install Chromium/)
+  assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace(`- run: ${compatibilityBrowserSetup}`, `- if: matrix.suite == 'chromium:full'\n        run: ${compatibilityBrowserSetup}`)), stress), /protocol full must not skip Chromium installation/)
   assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace("if: always()", "if: success()")), stress), /full job must always run cleanup/)
   assert.throws(() => assertTriggerAndStressContracts(primary.replace(fullJob, fullJob.replace(telemetryUpload, "removed telemetry")), stress), /full job must publish telemetry/)
   const harnessJob = stress.slice(stress.indexOf("  harness-self-test:"), stress.indexOf("  nightly:"))

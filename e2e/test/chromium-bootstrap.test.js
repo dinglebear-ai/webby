@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import {EventEmitter} from "node:events"
-import {lstat, mkdtemp, readFile, readdir, rm} from "node:fs/promises"
+import {lstat, mkdir, mkdtemp, readFile, readdir, rm, stat} from "node:fs/promises"
 import {tmpdir} from "node:os"
 import {join, resolve} from "node:path"
 import test from "node:test"
@@ -86,6 +86,15 @@ test("failed Chromium launch cleanup records timeout and force-closes the browse
   context.newCDPSession = async () => ({async send() { throw new Error("forced close failed") }, async detach() {}})
   const failedForce = await cleanupFailedChromiumLaunch(context, artifacts, 5)
   assert.deepEqual(failedForce.map(error => error.code ?? error.message), ["chromium_launch_close_timeout", "forced close failed"])
+
+  const launchRoot = await mkdtemp(join(tmpdir(), "webby-chromium-launch-failure-"))
+  const profile = join(launchRoot, "profile")
+  const generatedExtension = join(launchRoot, "generated-extension")
+  await Promise.all([mkdir(profile), mkdir(generatedExtension)])
+  assert.deepEqual(await cleanupFailedChromiumLaunch(undefined, undefined, 5, [profile, generatedExtension]), [])
+  await assert.rejects(stat(profile), error => error.code === "ENOENT")
+  await assert.rejects(stat(generatedExtension), error => error.code === "ENOENT")
+  await rm(launchRoot, {recursive: true, force: true})
 })
 
 test("binding rejects wrong worlds, stale copies, remote/developer/default endpoints, and authority collapse", () => {

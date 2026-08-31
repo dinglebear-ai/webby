@@ -34,9 +34,13 @@ async function forceCloseBrowser(context, timeoutMs) {
   }
 }
 
-export async function cleanupFailedChromiumLaunch(context, artifacts, timeoutMs) {
-  if (!context) return []
+export async function cleanupFailedChromiumLaunch(context, artifacts, timeoutMs, ownedPaths = []) {
   const failures = []
+  let stopped = !context
+  if (!context) {
+    for (const path of ownedPaths) await rm(path, {recursive: true, force: true}).catch(error => failures.push(error))
+    return failures
+  }
   let timeout
   const operation = () => context.close()
   const shutdown = artifacts ? artifacts.duringExpectedBrowserShutdown(operation) : operation()
@@ -47,13 +51,16 @@ export async function cleanupFailedChromiumLaunch(context, artifacts, timeoutMs)
       resolveClose(false)
     }, timeoutMs) }),
   ]).catch(error => { failures.push(error); return false }).finally(() => clearTimeout(timeout))
-  if (!closed) {
+  if (closed) stopped = true
+  else {
     try {
       const force = () => forceCloseBrowser(context, timeoutMs)
       if (artifacts) await artifacts.duringExpectedBrowserShutdown(force)
       else await force()
+      stopped = true
     } catch (error) { failures.push(error) }
   }
+  if (stopped) for (const path of ownedPaths) await rm(path, {recursive: true, force: true}).catch(error => failures.push(error))
   return failures
 }
 
@@ -114,7 +121,7 @@ export class ChromiumWorld {
       await recorder.producers.chromium.event("browser.launched", {extension_id: generated.binding.expected_extension_id, profile: "isolated", channel: "chromium"})
       return instance
     } catch (error) {
-      const cleanupFailures = await cleanupFailedChromiumLaunch(context, artifacts, closeTimeoutMs)
+      const cleanupFailures = await cleanupFailedChromiumLaunch(context, artifacts, closeTimeoutMs, [manifest.browser_profile_path, extensionPath])
       if (cleanupFailures.length) throw new AggregateError([error, ...cleanupFailures], "Chromium launch and cleanup failed", {cause: error})
       throw error
     }
