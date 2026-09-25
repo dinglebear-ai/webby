@@ -1,0 +1,12 @@
+Workspace cleanup archive for dinglebear-ai/webby
+Date: 2026-09-25
+Default: main
+
+STALE_BRANCHES 1
+STALE	codex/comprehensive-webby-e2e	756c99892f50b658f28ee3fec4092af3eb3082f5
+
+LOCAL_ONLY_BRANCHES 0
+
+STALE_WORKTREES 0
+
+WIP_SNAPSHOTS 0
